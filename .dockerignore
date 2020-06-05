@@ -1,0 +1,9 @@
+bin/
+config/
+.git/
+hack/
+.gitignore
+LICENSE
+Makefile
+PROJECT
+README.md
