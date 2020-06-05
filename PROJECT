@@ -1,0 +1,7 @@
+version: "2"
+domain: mercari.com
+repo: github.com/mercari/spanner-autoscaler
+resources:
+- group: spanner
+  version: v1alpha1
+  kind: SpannerAutoscaler
