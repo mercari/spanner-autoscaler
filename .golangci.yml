@@ -1,0 +1,80 @@
+---
+service:
+  golangci-lint-version: 1.21.x
+run:
+  deadline: 5m
+
+  skip-dirs:
+    - vendor$
+
+  skip-files:
+    - ".*\\.pb\\.go"
+    - ".*\\.mock\\.go"
+    - ".*(.|_)gen\\.go"
+
+linters:
+  enable-all: true
+  disable:
+    - depguard
+    - dupl
+    - gochecknoglobals
+    - gochecknoinits
+    - goconst
+    - gocyclo
+    - gomnd
+    - gosec
+    - nakedret
+    - maligned
+    - prealloc
+    - scopelint
+    - funlen
+    - wsl
+    - godox
+    - stylecheck
+  fast: false
+
+linters-settings:
+  errcheck:
+    check-type-assertions: false
+    check-blank: true
+    exclude: .errcheckignore
+  govet:
+    check-shadowing: false
+  golint:
+    min-confidence: 0.8
+  gofmt:
+    simplify: true
+  goimports:
+    local-prefixes: github.com/mercari/spanner-autoscaler
+  maligned:
+    suggest-new: true
+  misspell:
+    locale: US
+  lll:
+    line-length: 160
+    tab-width: 1
+  unused:
+    check-exported: false
+  unparam:
+    algo: cha
+    check-exported: false
+  gocritic:
+    disabled-checks:
+      - regexpMust
+    enabled-tags:
+      - performance
+    settings:
+      captLocal:
+        paramsOnly: true
+      hugeParam:
+        sizeThreshold: 80
+      rangeExprCopy:
+        sizeThreshold: 512
+      rangeValCopy:
+        sizeThreshold: 128
+issues:
+  exclude-rules:
+    - path: _test\.go$
+      linters:
+        - errcheck
+        - maligned
