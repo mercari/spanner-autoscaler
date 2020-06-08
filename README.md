@@ -6,6 +6,14 @@
 
 Spanner Autoscaler is a [Kubernetes Operator](https://coreos.com/operators/) to scale [Google Cloud Spanner](https://cloud.google.com/spanner/) automatically based on Cloud Spanner Instance CPU utilization like [Horizontal Pod Autoscaler](https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/).
 
+## Status
+
+**This is an experimental project. DO NOT use this in production.**
+
+1. Spanner Autoscaler is not tested on our production yet.
+2. Spanner Autoscaler watches `High Priority` CPU utilization only. It doesn't watch `Low Priority` CPU utilization and Rolling average 24 hour utilization.
+It doesn't check the storage size as well. You must take care of these metrics by yourself.
+
 ## Overview
 
 [Cloud Spanner](https://cloud.google.com/spanner) is scalable.
@@ -31,14 +39,6 @@ After CPU Utilization gets low, Spanner Autoscaler *doesn't* decrease nodes coun
 Spanner Autoscaler has `Scale Down Interval`(default: 55min) and `Max Scale Down Nodes`(default: 2) to scale down nodes.
 The [pricing of Cloud Spanner](https://cloud.google.com/spanner/pricing) says any nodes that you provision will be billed for a minimum of one hour, so it keep nodes up around 1 hour.
 And if Spanner Autoscaler reduces a lot of nodes at once like 10 -> 1, it will cause a latency increase. It reduces nodes with `maxScaleDownNodes`.
-
-## Status
-
-**This is an experimental project. DO NOT use this in production.**
-
-1. Spanner Autoscaler watches `High Priority` CPU utilization only. It doesn't watch `Low Priority` CPU utilization and Rolling average 24 hour utilization.
-It doesn't checks storage size as well. You must take care of these metrics by yourself.
-2. Spanner Autoscaler hasn't been tested on multi-region instances.
 
 ## Prerequisite
 
