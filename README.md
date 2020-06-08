@@ -15,6 +15,20 @@ Spanner Autoscaler is created to reconcile Cloud Spanner nodes like [Horizontal 
 
 ![spanner autoscaler overview diagram](./docs/assets/overview.jpg)
 
+
+When CPU Utilization(High Priority) is above `taregetCPUUtilization`, Spanner Autoscaler calcurates desired nodes count and increase nodes.
+![spanner cpu utilization](./docs/assets/cpu_utilization.png)
+![spanner node scale up](./docs/assets/node_scaleup.png)
+
+
+After CPU Utilization gets low, Spanner Autoscaler *doesn't* decrease nodes count immediately.
+
+![spanner node scale down](./docs/assets/node_scaledown.png)
+
+Spanner Autoscaler has `Scale Down Interval`(default: 55min) and `Max Scale Down Nodes`(default: 2) to scale down nodes.
+The [pricing of Cloud Spanner](https://cloud.google.com/spanner/pricing) says any nodes that you provision will be billed for a minimum of one hour, so it keep nodes up around 1 hour.
+And if Spanner Autoscaler reduces a lot of nodes at once like 10 -> 1, it will cause a latency increase. It reduces nodes with `maxScaleDownNodes`.
+
 ## Status
 
 **This is an experimental project. DO NOT use this in production.**
@@ -55,7 +69,7 @@ $ kubectl apply -f config/samples/spanner_v1alpha1_spannerautoscaler.yaml
 
 ### KPT
 
-Spanner Autoscaler can be installed using [KPT](https://github.com/GoogleContainerTools/kpt).  
+Spanner Autoscaler can be installed using [KPT](https://github.com/GoogleContainerTools/kpt).
 The installation has 2 steps:
 
 1. Fetch package
@@ -163,7 +177,7 @@ You need to configure following items
 * `serviceAccountSecretRef`: Secret which you created on 1. Step
 * `minNodes`: Minimum number of Cloud Spanner nodes.
 * `maxNodes`: Maximum number of Cloud Spanner nodes. It should be higher than `minNodes` and not over [quota](https://cloud.google.com/spanner/quotas).
-* `maxScaleDownNodes`(optional): Maximum number of nodes scale down at once. If Spanner Autoscaler reduces a lot of nodes at once, it will cause a latency increase. We recommend to set it 1 or 2, default is 2. The current default scale down interval is 55 minutes.
+* `maxScaleDownNodes`(optional): Maximum number of nodes scale down at once. Default is 2.
 * `targetCPUUtilization`: Spanner Autoscaler watches `High Priority` CPU utilization for now. Please read [CPU utilization metrics  \|  Cloud Spanner](https://cloud.google.com/spanner/docs/cpu-utilization) and configure target CPU utilization.
 
 Example yaml:
