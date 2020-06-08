@@ -3,7 +3,11 @@ package controllers
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
+	"path"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -11,13 +15,15 @@ import (
 	"github.com/go-logr/zapr"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
+	k8sRuntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/clock"
+	"k8s.io/client-go/kubernetes/scheme"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -31,37 +37,32 @@ import (
 	fakesyncer "github.com/mercari/spanner-autoscaler/pkg/syncer/fake"
 )
 
-var scheme = runtime.NewScheme()
+var cli client.Client
 
-func init() {
-	spannerv1alpha1.SchemeBuilder.Register(&spannerv1alpha1.SpannerAutoscaler{}, &spannerv1alpha1.SpannerAutoscalerList{})
-	//nolint:errcheck
-	clientgoscheme.AddToScheme(scheme)
-	//nolint:errcheck
-	spannerv1alpha1.AddToScheme(scheme)
-	//nolint:errcheck
-	apiextensionsv1.AddToScheme(scheme)
+func TestMain(m *testing.M) {
+	os.Exit(func() int {
+		k8scli, done, err := testK8SClient()
+		if err != nil {
+			fmt.Fprintf(os.Stdout, fmt.Sprintf("failed to create k8s client: %s", err))
+			os.Exit(1)
+		}
+		defer done()
+
+		cli = k8scli
+
+		return m.Run()
+	}())
 }
 
 func TestSpannerAutoscalerReconciler_Reconcile(t *testing.T) {
-	cli := setupEnvtest(t)
+	t.Parallel()
 
 	fakeTime := time.Date(2020, 4, 1, 0, 0, 0, 0, time.Local)
-	name := "test-spanner-autoscaler"
-	namespace := "test-namespace"
-
-	ns := &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: namespace,
-		},
-	}
 
 	ctx := context.Background()
+	namespace := newNamespace(t, ctx, cli)
 
-	if err := cli.Create(ctx, ns); err != nil {
-		t.Fatalf("failed to create namespace: %s", err)
-	}
-
+	name := "test-spanner-autoscaler"
 	namespacedName := types.NamespacedName{
 		Namespace: namespace,
 		Name:      name,
@@ -161,7 +162,7 @@ func TestSpannerAutoscalerReconciler_Reconcile(t *testing.T) {
 			r := NewSpannerAutoscalerReconciler(
 				cli,
 				cli,
-				scheme,
+				s,
 				record.NewFakeRecorder(10),
 				WithSyncers(tt.fields.syncers),
 				WithLog(func() logr.Logger {
@@ -414,20 +415,10 @@ func Test_calcDesiredNodes(t *testing.T) {
 }
 
 func TestSpannerAutoscalerReconciler_fetchServiceAccountJSON(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
-	cli := setupEnvtest(t)
-
-	namespace := "test-namespace"
-	ns := &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: namespace,
-		},
-	}
-
-	if err := cli.Create(ctx, ns); err != nil {
-		t.Fatalf("failed to create namespace: %s", err)
-	}
+	namespace := newNamespace(t, ctx, cli)
 
 	tests := []struct {
 		name        string
@@ -610,36 +601,64 @@ func TestSpannerAutoscalerReconciler_fetchServiceAccountJSON(t *testing.T) {
 	}
 }
 
-func setupEnvtest(t *testing.T) client.Client {
-	t.Helper()
+var s = k8sRuntime.NewScheme()
 
+func testK8SClient() (client.Client, func(), error) {
+	if err := scheme.AddToScheme(s); err != nil {
+		return nil, nil, fmt.Errorf("failed to create new scheme: %w", err)
+	}
+
+	spannerv1alpha1.SchemeBuilder.Register(&spannerv1alpha1.SpannerAutoscaler{}, &spannerv1alpha1.SpannerAutoscalerList{})
+	//nolint:errcheck
+	clientgoscheme.AddToScheme(s)
+	//nolint:errcheck
+	spannerv1alpha1.AddToScheme(s)
+	//nolint:errcheck
+	apiextensionsv1.AddToScheme(s)
+
+	_, file, _, _ := runtime.Caller(0)
 	testEnv := envtest.Environment{
-		CRDDirectoryPaths: []string{filepath.Join("..", "..", "config", "crd", "bases")},
+		CRDDirectoryPaths: []string{filepath.Join(filepath.Join(path.Dir(file)), "..", "..", "config", "crd", "bases")},
 	}
 
 	cfg, err := testEnv.Start()
 	if err != nil {
-		t.Fatalf("faileld to start test env: %s", err)
+		return nil, nil, fmt.Errorf("faileld to start test env: %w", err)
 	}
 
-	c, err := client.New(cfg, client.Options{
-		Scheme: scheme,
+	cli, err := client.New(cfg, client.Options{
+		Scheme: s,
 	})
 	if err != nil {
-		t.Errorf("faileld to create controller-runtime client: %s", err)
+		err = fmt.Errorf("faileld to create controller-runtime client: %w", err)
 
-		if err := testEnv.Stop(); err != nil {
-			t.Errorf("failed to stop test env: %s", err)
+		if nerr := testEnv.Stop(); err != nil {
+			err = fmt.Errorf("failed to stop test env: %w", nerr)
 		}
 
-		t.FailNow()
+		return nil, nil, err
 	}
 
-	t.Cleanup(func() {
+	return cli, func() {
 		if err := testEnv.Stop(); err != nil {
-			t.Fatalf("failed to stop test env: %s", err)
+			panic(fmt.Sprintf("failed to stop envtest instance: %s", err))
 		}
-	})
+	}, nil
+}
 
-	return c
+func newNamespace(t *testing.T, ctx context.Context, cli client.Client) string {
+	t.Helper()
+
+	name := uuid.New().String()
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+		},
+	}
+
+	if err := cli.Create(ctx, ns); err != nil {
+		t.Fatalf("failed to create namespace: %s", err)
+	}
+
+	return name
 }

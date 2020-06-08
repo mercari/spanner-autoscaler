@@ -10,6 +10,7 @@ require (
 	github.com/go-logr/zapr v0.1.1
 	github.com/golang/protobuf v1.4.2
 	github.com/google/go-cmp v0.4.1
+	github.com/google/uuid v1.1.1
 	go.uber.org/zap v1.15.0
 	golang.org/x/sync v0.0.0-20200317015054-43a5402ce75a
 	google.golang.org/api v0.26.0
