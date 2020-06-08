@@ -40,14 +40,6 @@ Spanner Autoscaler has `Scale Down Interval`(default: 55min) and `Max Scale Down
 The [pricing of Cloud Spanner](https://cloud.google.com/spanner/pricing) says any nodes that you provision will be billed for a minimum of one hour, so it keep nodes up around 1 hour.
 And if Spanner Autoscaler reduces a lot of nodes at once like 10 -> 1, it will cause a latency increase. It reduces nodes with `maxScaleDownNodes`.
 
-## Status
-
-**This is an experimental project. DO NOT use this in production.**
-
-1. Spanner Autoscaler watches `High Priority` CPU utilization only. It doesn't watch `Low Priority` CPU utilization and Rolling average 24 hour utilization.
-It doesn't checks storage size as well. You must take care of these metrics by yourself.
-2. Spanner Autoscaler hasn't been tested on multi-region instances.
-
 ## Prerequisite
 
 Enable APIs `spanner.googleapis.com` and `serviceusage.googleapis.com` on your GCP project.
