@@ -12,7 +12,7 @@ Spanner Autoscaler is a [Kubernetes Operator](https://coreos.com/operators/) to 
 
 1. Spanner Autoscaler is not tested on our production yet.
 2. Spanner Autoscaler watches `High Priority` CPU utilization only. It doesn't watch `Low Priority` CPU utilization and Rolling average 24 hour utilization.
-It doesn't checks storage size as well. You must take care of these metrics by yourself.
+It doesn't check the storage size as well. You must take care of these metrics by yourself.
 
 ## Overview
 
