@@ -23,14 +23,11 @@ Spanner Autoscaler is created to reconcile Cloud Spanner nodes like [Horizontal 
 
 ![spanner autoscaler overview diagram](./docs/assets/overview.jpg)
 
-
 When CPU Utilization(High Priority) is above `taregetCPUUtilization`, Spanner Autoscaler calcurates desired nodes count and increase nodes.
 
 ![spanner cpu utilization](./docs/assets/cpu_utilization.png)
 
 ![spanner node scale up](./docs/assets/node_scaleup.png)
-
-
 
 After CPU Utilization gets low, Spanner Autoscaler *doesn't* decrease nodes count immediately.
 
