@@ -288,6 +288,14 @@ func (r *SpannerAutoscalerReconciler) needUpdateNodes(sa *spannerv1alpha1.Spanne
 		log.V(0).Info("the desired number of nodes is equal to that of the current; no need to scale nodes")
 		return false
 
+	case desiredNodes > *sa.Status.CurrentNodes && r.clock.Now().Before(sa.Status.LastScaleTime.Time.Add(10*time.Second)):
+		log.Info("too short to scale up since instance scaled nodes last",
+			"now", r.clock.Now().String(),
+			"last scale time", sa.Status.LastScaleTime,
+		)
+
+		return false
+
 	case desiredNodes < *sa.Status.CurrentNodes && r.clock.Now().Before(sa.Status.LastScaleTime.Time.Add(r.scaleDownInterval)):
 		log.Info("too short to scale down since instance scaled nodes last",
 			"now", r.clock.Now().String(),
