@@ -6,8 +6,8 @@ require (
 	cloud.google.com/go v0.57.0
 	cloud.google.com/go/spanner v1.6.0
 	github.com/GoogleContainerTools/kpt v0.26.0
-	github.com/go-logr/logr v0.1.0
-	github.com/go-logr/zapr v0.1.1
+	github.com/go-logr/logr v0.2.0
+	github.com/go-logr/zapr v0.2.0
 	github.com/golang/protobuf v1.4.2
 	github.com/google/go-cmp v0.4.1
 	github.com/google/uuid v1.1.1
