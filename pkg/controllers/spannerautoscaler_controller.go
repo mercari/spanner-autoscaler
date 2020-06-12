@@ -207,7 +207,9 @@ func (r *SpannerAutoscalerReconciler) Reconcile(req ctrlreconcile.Request) (ctrl
 		*sa.Spec.MaxScaleDownNodes,
 	)
 
-	if !r.needUpdateNodes(&sa, desiredNodes) {
+	now := r.clock.Now()
+
+	if !r.needUpdateNodes(&sa, desiredNodes, now) {
 		return ctrlreconcile.Result{}, nil
 	}
 
@@ -223,7 +225,7 @@ func (r *SpannerAutoscalerReconciler) Reconcile(req ctrlreconcile.Request) (ctrl
 
 	saCopy := sa.DeepCopy()
 	saCopy.Status.DesiredNodes = &desiredNodes
-	saCopy.Status.LastScaleTime = &metav1.Time{Time: r.clock.Now()}
+	saCopy.Status.LastScaleTime = &metav1.Time{Time: now}
 
 	if err = r.ctrlClient.Status().Update(ctx, saCopy); err != nil {
 		r.recoder.Event(&sa, corev1.EventTypeWarning, "FailedUpdateStatus", err.Error())
@@ -280,7 +282,7 @@ func (r *SpannerAutoscalerReconciler) needCalcNodes(sa *spannerv1alpha1.SpannerA
 	}
 }
 
-func (r *SpannerAutoscalerReconciler) needUpdateNodes(sa *spannerv1alpha1.SpannerAutoscaler, desiredNodes int32) bool {
+func (r *SpannerAutoscalerReconciler) needUpdateNodes(sa *spannerv1alpha1.SpannerAutoscaler, desiredNodes int32, now time.Time) bool {
 	log := r.log
 
 	switch {
@@ -288,9 +290,17 @@ func (r *SpannerAutoscalerReconciler) needUpdateNodes(sa *spannerv1alpha1.Spanne
 		log.V(0).Info("the desired number of nodes is equal to that of the current; no need to scale nodes")
 		return false
 
+	case desiredNodes > *sa.Status.CurrentNodes && r.clock.Now().Before(sa.Status.LastScaleTime.Time.Add(10*time.Second)):
+		log.Info("too short to scale up since instance scaled nodes last",
+			"now", now.String(),
+			"last scale time", sa.Status.LastScaleTime,
+		)
+
+		return false
+
 	case desiredNodes < *sa.Status.CurrentNodes && r.clock.Now().Before(sa.Status.LastScaleTime.Time.Add(r.scaleDownInterval)):
 		log.Info("too short to scale down since instance scaled nodes last",
-			"now", r.clock.Now().String(),
+			"now", now.String(),
 			"last scale time", sa.Status.LastScaleTime,
 		)
 
