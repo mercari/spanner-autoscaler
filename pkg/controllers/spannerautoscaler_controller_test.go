@@ -309,7 +309,7 @@ func TestSpannerAutoscalerReconciler_needUpdateNodes(t *testing.T) {
 				clock:             clock.NewFakeClock(fakeTime),
 				log:               zapr.NewLogger(zap.NewNop()),
 			}
-			got := r.needUpdateNodes(tt.args.sa, *tt.args.sa.Status.DesiredNodes)
+			got := r.needUpdateNodes(tt.args.sa, *tt.args.sa.Status.DesiredNodes, fakeTime)
 			if got != tt.want {
 				t.Errorf("needUpdateNodes() got = %v, want %v", got, tt.want)
 			}
