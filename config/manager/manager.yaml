@@ -28,8 +28,6 @@ spec:
         # imagePullPolicy: IfNotPresent
         command:
         - /manager
-        args:
-        - --enable-leader-election=false
         resources:
           limits:
             cpu: 100m
