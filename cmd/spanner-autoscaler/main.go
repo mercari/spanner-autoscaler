@@ -53,15 +53,15 @@ func init() {
 }
 
 var (
-	metricsAddr          = flag.String("metrics-addr", "localhost:8090", "The address the metric endpoint binds to.")
-	enableLeaderElection = flag.Bool("enable-leader-election", false, "Enable leader election for controller manager. Enabling this will ensure there is only one active controller manager.")
-	healthzAddr          = flag.String("healthz-addr", "localhost:8091", "The address the healthz endpoint binds to.")
-	scaleDownInterval    = flag.Duration("scale-down-interval", 55*time.Minute, "The scale down interval.")
+	metricsAddr       = flag.String("metrics-addr", "localhost:8090", "The address the metric endpoint binds to.")
+	healthzAddr       = flag.String("healthz-addr", "localhost:8091", "The address the healthz endpoint binds to.")
+	scaleDownInterval = flag.Duration("scale-down-interval", 55*time.Minute, "The scale down interval.")
 )
 
 const (
-	exitCode         = 1
-	leaderElectionID = "spanner-autoscaler-leader-election"
+	exitCode             = 1
+	enableLeaderElection = true
+	leaderElectionID     = "spanner-autoscaler-leader-election"
 
 	healthzEndpoint = "/healthz"
 	readyzEndpoint  = "/readyz"
@@ -87,7 +87,8 @@ func run() error {
 	log.V(1).Info(
 		"flags",
 		"metricsAddr", metricsAddr,
-		"enableLeaderElection", enableLeaderElection,
+		"helthzAddr", healthzAddr,
+		"scaleDownInterval", scaleDownInterval,
 	)
 
 	cfg, err := config.GetConfig()
@@ -97,7 +98,7 @@ func run() error {
 
 	mgr, err := ctrlmanager.New(cfg, ctrlmanager.Options{
 		Scheme:                 scheme,
-		LeaderElection:         *enableLeaderElection,
+		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       leaderElectionID,
 		MetricsBindAddress:     *metricsAddr,
 		HealthProbeBindAddress: *healthzAddr,
