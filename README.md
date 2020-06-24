@@ -39,7 +39,7 @@ And if Spanner Autoscaler reduces a lot of nodes at once like 10 -> 1, it will c
 
 ## Prerequisite
 
-Enable APIs `spanner.googleapis.com` and `serviceusage.googleapis.com` on your GCP project.
+Enable APIs `spanner.googleapis.com` and `monitoring.googleapis.com` on your GCP project.
 
 ## Installation
 
