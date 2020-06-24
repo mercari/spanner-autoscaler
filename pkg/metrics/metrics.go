@@ -123,7 +123,7 @@ func NewClient(ctx context.Context, projectID string, opts ...Option) (Client, e
 }
 
 // GetInstanceMetrics implements Client.
-// https://cloud.google.com/monitoring/custom-metrics/reading-metrics?hl=ja#monitoring_read_timeseries_fields-go
+// https://cloud.google.com/monitoring/custom-metrics/reading-metrics#monitoring_read_timeseries_fields-go
 func (c *client) GetInstanceMetrics(ctx context.Context, instanceID string) (*InstanceMetrics, error) {
 	log := c.log.WithValues("instance id", instanceID)
 
