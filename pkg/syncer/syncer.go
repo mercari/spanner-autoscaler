@@ -4,6 +4,10 @@ import (
 	"context"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+
+	"k8s.io/client-go/tools/record"
+
 	"github.com/go-logr/logr"
 	"github.com/go-logr/zapr"
 	"go.uber.org/zap"
@@ -47,6 +51,8 @@ type syncer struct {
 
 	clock clock.Clock
 	log   logr.Logger
+
+	recorder record.EventRecorder
 }
 
 var _ Syncer = (*syncer)(nil)
@@ -79,6 +85,7 @@ func New(
 	projectID string,
 	instanceID string,
 	serviceAccountJSON []byte,
+	recorder record.EventRecorder,
 	opts ...Option,
 ) (Syncer, error) {
 	spannerClient, err := spanner.NewClient(
@@ -112,6 +119,7 @@ func New(
 		stopCh:         make(chan struct{}),
 		log:            zapr.NewLogger(zap.NewNop()),
 		clock:          clock.RealClock{},
+		recorder:       recorder,
 	}
 
 	for _, opt := range opts {
@@ -195,6 +203,7 @@ func (s *syncer) syncResource(ctx context.Context) error {
 	if err := s.ctrlClient.Get(ctx, s.namespacedName, &sa); err != nil {
 		err = ctrlclient.IgnoreNotFound(err)
 		if err != nil {
+			s.recorder.Eventf(&sa, corev1.EventTypeWarning, "FailedGetClient", err.Error())
 			log.Error(err, "unable to get spanner-autoscaler")
 			return err
 		}
@@ -208,6 +217,7 @@ func (s *syncer) syncResource(ctx context.Context) error {
 
 	instance, instanceMetrics, err := s.getInstanceInfo(ctx, *sa.Spec.ScaleTargetRef.InstanceID)
 	if err != nil {
+		s.recorder.Eventf(&sa, corev1.EventTypeWarning, "FailedSpannerAPICall", err.Error())
 		log.Error(err, "unable to get instance info")
 		return err
 	}
@@ -225,6 +235,7 @@ func (s *syncer) syncResource(ctx context.Context) error {
 	saCopy.Status.LastSyncTime = &metav1.Time{Time: s.clock.Now()}
 
 	if err := s.ctrlClient.Status().Update(ctx, saCopy); err != nil {
+		s.recorder.Event(&sa, corev1.EventTypeWarning, "FailedUpdateStatus", err.Error())
 		log.Error(err, "unable to update spanner status")
 		return err
 	}
