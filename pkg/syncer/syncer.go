@@ -4,17 +4,15 @@ import (
 	"context"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
-
-	"k8s.io/client-go/tools/record"
-
 	"github.com/go-logr/logr"
 	"github.com/go-logr/zapr"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/clock"
+	"k8s.io/client-go/tools/record"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	spannerv1alpha1 "github.com/mercari/spanner-autoscaler/pkg/api/v1alpha1"
