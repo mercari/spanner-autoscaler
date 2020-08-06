@@ -58,8 +58,8 @@ type SpannerAutoscalerReconciler struct {
 	ctrlClient ctrlclient.Client
 	apiReader  ctrlclient.Reader
 
-	scheme  *runtime.Scheme
-	recoder record.EventRecorder
+	scheme   *runtime.Scheme
+	recorder record.EventRecorder
 
 	syncers map[types.NamespacedName]syncer.Syncer
 
@@ -110,7 +110,7 @@ func NewSpannerAutoscalerReconciler(
 		ctrlClient:        ctrlClient,
 		apiReader:         apiReader,
 		scheme:            scheme,
-		recoder:           recorder,
+		recorder:          recorder,
 		syncers:           make(map[types.NamespacedName]syncer.Syncer),
 		scaleDownInterval: 55 * time.Minute,
 		clock:             clock.RealClock{},
@@ -166,7 +166,7 @@ func (r *SpannerAutoscalerReconciler) Reconcile(req ctrlreconcile.Request) (ctrl
 
 	saj, err := r.fetchServiceAccountJSON(ctx, &sa)
 	if err != nil {
-		r.recoder.Event(&sa, corev1.EventTypeWarning, "ServiceAccountRequired", err.Error())
+		r.recorder.Event(&sa, corev1.EventTypeWarning, "ServiceAccountRequired", err.Error())
 		log.Error(err, "failed to fetch service account")
 		return ctrlreconcile.Result{}, err
 	}
@@ -176,7 +176,7 @@ func (r *SpannerAutoscalerReconciler) Reconcile(req ctrlreconcile.Request) (ctrl
 		ctx = logging.WithContext(ctx, log)
 
 		if err := r.startSyncer(ctx, nn, *sa.Spec.ScaleTargetRef.ProjectID, *sa.Spec.ScaleTargetRef.InstanceID, saj); err != nil {
-			r.recoder.Event(&sa, corev1.EventTypeWarning, "FailedStartSyncer", err.Error())
+			r.recorder.Event(&sa, corev1.EventTypeWarning, "FailedStartSyncer", err.Error())
 			log.Error(err, "failed to start syncer")
 			return ctrlreconcile.Result{}, err
 		}
@@ -214,12 +214,12 @@ func (r *SpannerAutoscalerReconciler) Reconcile(req ctrlreconcile.Request) (ctrl
 	}
 
 	if err := s.UpdateInstance(ctx, desiredNodes); err != nil {
-		r.recoder.Event(&sa, corev1.EventTypeWarning, "FailedUpdateInstance", err.Error())
+		r.recorder.Event(&sa, corev1.EventTypeWarning, "FailedUpdateInstance", err.Error())
 		log.Error(err, "failed to update spanner instance status")
 		return ctrlreconcile.Result{}, err
 	}
 
-	r.recoder.Eventf(&sa, corev1.EventTypeNormal, "Updated", "Updated number of nodes from %d to %d", *sa.Status.CurrentNodes, desiredNodes)
+	r.recorder.Eventf(&sa, corev1.EventTypeNormal, "Updated", "Updated number of nodes from %d to %d", *sa.Status.CurrentNodes, desiredNodes)
 
 	log.Info("updated nodes via google cloud api", "before", *sa.Status.CurrentNodes, "after", desiredNodes)
 
@@ -228,7 +228,7 @@ func (r *SpannerAutoscalerReconciler) Reconcile(req ctrlreconcile.Request) (ctrl
 	saCopy.Status.LastScaleTime = &metav1.Time{Time: now}
 
 	if err = r.ctrlClient.Status().Update(ctx, saCopy); err != nil {
-		r.recoder.Event(&sa, corev1.EventTypeWarning, "FailedUpdateStatus", err.Error())
+		r.recorder.Event(&sa, corev1.EventTypeWarning, "FailedUpdateStatus", err.Error())
 		log.Error(err, "failed to update spanner autoscaler status")
 		return ctrlreconcile.Result{}, err
 	}
@@ -251,7 +251,7 @@ func (r *SpannerAutoscalerReconciler) SetupWithManager(mgr ctrlmanager.Manager) 
 func (r *SpannerAutoscalerReconciler) startSyncer(ctx context.Context, nn types.NamespacedName, projectID, instanceID string, serviceAccountJSON []byte) error {
 	log := logging.FromContext(ctx)
 
-	s, err := syncer.New(ctx, r.ctrlClient, nn, projectID, instanceID, serviceAccountJSON, r.recoder, syncer.WithLog(log))
+	s, err := syncer.New(ctx, r.ctrlClient, nn, projectID, instanceID, serviceAccountJSON, r.recorder, syncer.WithLog(log))
 	if err != nil {
 		return err
 	}
