@@ -251,7 +251,7 @@ func (r *SpannerAutoscalerReconciler) SetupWithManager(mgr ctrlmanager.Manager) 
 func (r *SpannerAutoscalerReconciler) startSyncer(ctx context.Context, nn types.NamespacedName, projectID, instanceID string, serviceAccountJSON []byte) error {
 	log := logging.FromContext(ctx)
 
-	s, err := syncer.New(ctx, r.ctrlClient, nn, projectID, instanceID, serviceAccountJSON, syncer.WithLog(log))
+	s, err := syncer.New(ctx, r.ctrlClient, nn, projectID, instanceID, serviceAccountJSON, r.recoder, syncer.WithLog(log))
 	if err != nil {
 		return err
 	}
