@@ -219,7 +219,7 @@ func (r *SpannerAutoscalerReconciler) Reconcile(req ctrlreconcile.Request) (ctrl
 		return ctrlreconcile.Result{}, err
 	}
 
-	r.recorder.Eventf(&sa, corev1.EventTypeNormal, "Updated", "Updated number of nodes from %d to %d", *sa.Status.CurrentNodes, desiredNodes)
+	r.recorder.Eventf(&sa, corev1.EventTypeNormal, "Updated", "Updated number of %s/%s nodes from %d to %d", *sa.Spec.ScaleTargetRef.ProjectID, *sa.Spec.ScaleTargetRef.InstanceID, *sa.Status.CurrentNodes, desiredNodes)
 
 	log.Info("updated nodes via google cloud api", "before", *sa.Status.CurrentNodes, "after", desiredNodes)
 
