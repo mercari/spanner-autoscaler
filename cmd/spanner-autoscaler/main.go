@@ -117,7 +117,7 @@ func run() error {
 		return fmt.Errorf("failed to register readyz checker: %w", err)
 	}
 
-	r := controllers.NewSpannerAutoscalerReconciler(
+	r, err := controllers.NewSpannerAutoscalerReconciler(
 		mgr.GetClient(),
 		mgr.GetAPIReader(),
 		mgr.GetScheme(),
@@ -125,6 +125,10 @@ func run() error {
 		controllers.WithLog(log.WithName("controllers")),
 		controllers.WithScaleDownInterval(*scaleDownInterval),
 	)
+	if err != nil {
+		return err
+	}
+
 	if err = r.SetupWithManager(mgr); err != nil {
 		return err
 	}
