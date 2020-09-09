@@ -105,7 +105,14 @@ func NewSpannerAutoscalerReconciler(
 	scheme *runtime.Scheme,
 	recorder record.EventRecorder,
 	opts ...Option,
-) *SpannerAutoscalerReconciler {
+) (*SpannerAutoscalerReconciler, error) {
+	config := zap.NewProductionConfig()
+	config.OutputPaths = []string{"stdout"}
+	zapLogger, err := config.Build()
+	if err != nil {
+		return nil, err
+	}
+
 	r := &SpannerAutoscalerReconciler{
 		ctrlClient:        ctrlClient,
 		apiReader:         apiReader,
@@ -114,14 +121,14 @@ func NewSpannerAutoscalerReconciler(
 		syncers:           make(map[types.NamespacedName]syncer.Syncer),
 		scaleDownInterval: 55 * time.Minute,
 		clock:             clock.RealClock{},
-		log:               zapr.NewLogger(zap.NewNop()),
+		log:               zapr.NewLogger(zapLogger),
 	}
 
 	for _, opt := range opts {
 		opt(r)
 	}
 
-	return r
+	return r, nil
 }
 
 // +kubebuilder:rbac:groups=spanner.mercari.com,resources=spannerautoscalers,verbs=get;list;watch;create;update;patch;delete
