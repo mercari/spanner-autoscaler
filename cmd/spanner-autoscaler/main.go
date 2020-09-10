@@ -21,13 +21,15 @@ import (
 	"os"
 	"time"
 
+	"github.com/go-logr/zapr"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
-	ctrlzap "sigs.k8s.io/controller-runtime/pkg/log/zap"
 	ctrlmanager "sigs.k8s.io/controller-runtime/pkg/manager"
 	ctrlsignals "sigs.k8s.io/controller-runtime/pkg/manager/signals"
 
@@ -79,9 +81,32 @@ func main() {
 }
 
 func run() error {
-	log := ctrlzap.New(func(o *ctrlzap.Options) {
-		o.Development = true
-	})
+	zapConfig := zap.Config{
+		Level:             zap.NewAtomicLevelAt(zap.InfoLevel),
+		Development:       false,
+		Encoding:          "json",
+		DisableCaller:     true,
+		DisableStacktrace: true,
+		EncoderConfig: zapcore.EncoderConfig{
+			TimeKey:        "timestamp",
+			LevelKey:       "level",
+			NameKey:        "logger",
+			MessageKey:     "message",
+			LineEnding:     zapcore.DefaultLineEnding,
+			EncodeLevel:    zapcore.LowercaseLevelEncoder,
+			EncodeTime:     zapcore.EpochMillisTimeEncoder,
+			EncodeDuration: zapcore.SecondsDurationEncoder,
+		},
+		OutputPaths:      []string{"stdout"},
+		ErrorOutputPaths: []string{"stderr"},
+	}
+	zapLogger, err := zapConfig.Build()
+	if err != nil {
+		return err
+	}
+
+	log := zapr.NewLogger(zapLogger)
+
 	ctrllog.SetLogger(log)
 
 	log.V(1).Info(
@@ -117,17 +142,15 @@ func run() error {
 		return fmt.Errorf("failed to register readyz checker: %w", err)
 	}
 
-	r, err := controllers.NewSpannerAutoscalerReconciler(
+	r := controllers.NewSpannerAutoscalerReconciler(
 		mgr.GetClient(),
 		mgr.GetAPIReader(),
 		mgr.GetScheme(),
 		mgr.GetEventRecorderFor("spannerautoscaler-controller"),
+		log,
 		controllers.WithLog(log.WithName("controllers")),
 		controllers.WithScaleDownInterval(*scaleDownInterval),
 	)
-	if err != nil {
-		return err
-	}
 
 	if err = r.SetupWithManager(mgr); err != nil {
 		return err

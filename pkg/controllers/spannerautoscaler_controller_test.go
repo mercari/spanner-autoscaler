@@ -159,11 +159,12 @@ func TestSpannerAutoscalerReconciler_Reconcile(t *testing.T) {
 				t.Fatalf("unable to update SpannerAutoscaler status: %v", err)
 			}
 
-			r, err := NewSpannerAutoscalerReconciler(
+			r := NewSpannerAutoscalerReconciler(
 				cli,
 				cli,
 				s,
 				record.NewFakeRecorder(10),
+				zapr.NewLogger(zap.NewNop()),
 				WithSyncers(tt.fields.syncers),
 				WithLog(func() logr.Logger {
 					l := zap.NewAtomicLevelAt(zap.DebugLevel)
@@ -172,9 +173,6 @@ func TestSpannerAutoscalerReconciler_Reconcile(t *testing.T) {
 				WithScaleDownInterval(time.Hour),
 				WithClock(clock.NewFakeClock(fakeTime)),
 			)
-			if err != nil {
-				t.Fatalf("unable to create SpannerAutoscalerReconciler: %v", err)
-			}
 
 			res, err := r.Reconcile(ctrlreconcile.Request{
 				NamespacedName: namespacedName,
