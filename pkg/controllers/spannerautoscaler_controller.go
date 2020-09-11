@@ -22,9 +22,6 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
-	"github.com/go-logr/zapr"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -105,32 +102,9 @@ func NewSpannerAutoscalerReconciler(
 	apiReader ctrlclient.Reader,
 	scheme *runtime.Scheme,
 	recorder record.EventRecorder,
+	logger logr.Logger,
 	opts ...Option,
-) (*SpannerAutoscalerReconciler, error) {
-	config := zap.Config{
-		Level:             zap.NewAtomicLevelAt(zap.InfoLevel),
-		Development:       false,
-		Encoding:          "json",
-		DisableCaller:     true,
-		DisableStacktrace: true,
-		EncoderConfig: zapcore.EncoderConfig{
-			TimeKey:        "timestamp",
-			LevelKey:       "level",
-			NameKey:        "logger",
-			MessageKey:     "message",
-			LineEnding:     zapcore.DefaultLineEnding,
-			EncodeLevel:    zapcore.LowercaseLevelEncoder,
-			EncodeTime:     zapcore.EpochMillisTimeEncoder,
-			EncodeDuration: zapcore.SecondsDurationEncoder,
-		},
-		OutputPaths:      []string{"stdout"},
-		ErrorOutputPaths: []string{"stderr"},
-	}
-	zapLogger, err := config.Build()
-	if err != nil {
-		return nil, err
-	}
-
+) *SpannerAutoscalerReconciler {
 	r := &SpannerAutoscalerReconciler{
 		ctrlClient:        ctrlClient,
 		apiReader:         apiReader,
@@ -139,14 +113,14 @@ func NewSpannerAutoscalerReconciler(
 		syncers:           make(map[types.NamespacedName]syncer.Syncer),
 		scaleDownInterval: 55 * time.Minute,
 		clock:             clock.RealClock{},
-		log:               zapr.NewLogger(zapLogger),
+		log:               logger,
 	}
 
 	for _, opt := range opts {
 		opt(r)
 	}
 
-	return r, nil
+	return r
 }
 
 // +kubebuilder:rbac:groups=spanner.mercari.com,resources=spannerautoscalers,verbs=get;list;watch;create;update;patch;delete
