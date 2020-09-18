@@ -36,27 +36,19 @@ jobs:
           current_version: ${{ steps.get-latest-tag.outputs.tag }}
           level: ${{ steps.release-label.outputs.level }}
 
-      - uses: actions-ecosystem/action-regex-match@v2
-        id: regex-match
-        if: ${{ steps.bump-semver.outputs.new_version != null }}
-        with:
-          text: ${{ steps.get-merged-pull-request.outputs.body }}
-          regex: '```release_note([\s\S]*)```'
-
       - uses: actions-ecosystem/action-push-tag@v1
         if: ${{ steps.bump-semver.outputs.new_version != null }}
         with:
           tag: ${{ steps.bump-semver.outputs.new_version }}
           message: "${{ steps.bump-semver.outputs.new_version }}: PR #${{ steps.get-merged-pull-request.outputs.number }} ${{ steps.get-merged-pull-request.outputs.title }}"
 
-      - uses: actions/create-release@v1
+      - uses: goreleaser/goreleaser-action@v2
         if: ${{ steps.release-label.outputs.level == 'major' || steps.release-label.outputs.level == 'minor' || steps.release-label.outputs.level == 'patch' }}
+        with:
+          version: v0.143.0
+          args: release --rm-dist
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ steps.bump-semver.outputs.new_version }}
-          release_name: ${{ steps.bump-semver.outputs.new_version }}
-          body: ${{ steps.regex-match.outputs.group1 }}
 
       - uses: docker/build-push-action@v1
         if: ${{ steps.bump-semver.outputs.new_version != null }}

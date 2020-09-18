@@ -1,0 +1,6 @@
+builds:
+- main: ./cmd/spanner-autoscaler/main.go
+  goos:
+  - linux
+  - darwin
+  - windows
