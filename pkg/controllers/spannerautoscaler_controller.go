@@ -337,12 +337,12 @@ func (r *SpannerAutoscalerReconciler) fetchCredentials(ctx context.Context, sa *
 		return syncer.NewADCCredentials(), nil
 	}
 
-	if secretRef.Key == nil || *secretRef.Key == "" {
-		return nil, errFetchServiceAccountJSONNoKeySpecified
-	}
-
 	if secretRef.Name == nil || *secretRef.Name == "" {
 		return nil, errFetchServiceAccountJSONNoNameSpecified
+	}
+
+	if secretRef.Key == nil || *secretRef.Key == "" {
+		return nil, errFetchServiceAccountJSONNoKeySpecified
 	}
 
 	var namespace string
