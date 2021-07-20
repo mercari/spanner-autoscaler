@@ -82,7 +82,7 @@ func TestSpannerAutoscalerReconciler_Reconcile(t *testing.T) {
 				ProjectID:  pointer.String("test-project-id"),
 				InstanceID: pointer.String("test-instance-id"),
 			},
-			ServiceAccountSecretRef: spannerv1alpha1.ServiceAccountSecretRef{
+			ServiceAccountSecretRef: &spannerv1alpha1.ServiceAccountSecretRef{
 				Name:      pointer.String("test-service-account-secret"),
 				Namespace: pointer.String(""),
 				Key:       pointer.String("secret"),
@@ -415,7 +415,7 @@ func Test_calcDesiredNodes(t *testing.T) {
 	}
 }
 
-func TestSpannerAutoscalerReconciler_fetchServiceAccountJSON(t *testing.T) {
+func TestSpannerAutoscalerReconciler_fetchCredentials(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
@@ -425,7 +425,7 @@ func TestSpannerAutoscalerReconciler_fetchServiceAccountJSON(t *testing.T) {
 		name        string
 		secret      *corev1.Secret
 		resource    spannerv1alpha1.SpannerAutoscaler
-		expected    []byte
+		expected    *syncer.Credentials
 		expectedErr error
 	}{
 		{
@@ -443,14 +443,14 @@ func TestSpannerAutoscalerReconciler_fetchServiceAccountJSON(t *testing.T) {
 					Namespace: namespace,
 				},
 				Spec: spannerv1alpha1.SpannerAutoscalerSpec{
-					ServiceAccountSecretRef: spannerv1alpha1.ServiceAccountSecretRef{
+					ServiceAccountSecretRef: &spannerv1alpha1.ServiceAccountSecretRef{
 						Namespace: pointer.String(namespace),
 						Name:      pointer.String("secret-1"),
 						Key:       pointer.String("service-account"),
 					},
 				},
 			},
-			expected:    []byte(`{"foo":"bar"}`),
+			expected:    syncer.NewServiceAccountJSONCredentials([]byte(`{"foo":"bar"}`)),
 			expectedErr: nil,
 		},
 		{
@@ -468,13 +468,13 @@ func TestSpannerAutoscalerReconciler_fetchServiceAccountJSON(t *testing.T) {
 					Namespace: namespace,
 				},
 				Spec: spannerv1alpha1.SpannerAutoscalerSpec{
-					ServiceAccountSecretRef: spannerv1alpha1.ServiceAccountSecretRef{
+					ServiceAccountSecretRef: &spannerv1alpha1.ServiceAccountSecretRef{
 						Name: pointer.String("secret-2"),
 						Key:  pointer.String("service-account"),
 					},
 				},
 			},
-			expected:    []byte(`{"foo":"bar"}`),
+			expected:    syncer.NewServiceAccountJSONCredentials([]byte(`{"foo":"bar"}`)),
 			expectedErr: nil,
 		},
 		{
@@ -492,7 +492,7 @@ func TestSpannerAutoscalerReconciler_fetchServiceAccountJSON(t *testing.T) {
 					Namespace: namespace,
 				},
 				Spec: spannerv1alpha1.SpannerAutoscalerSpec{
-					ServiceAccountSecretRef: spannerv1alpha1.ServiceAccountSecretRef{
+					ServiceAccountSecretRef: &spannerv1alpha1.ServiceAccountSecretRef{
 						Namespace: pointer.String(namespace),
 						Name:      pointer.String("secret-3"),
 						Key:       pointer.String("invalid-key"),
@@ -517,7 +517,7 @@ func TestSpannerAutoscalerReconciler_fetchServiceAccountJSON(t *testing.T) {
 					Namespace: namespace,
 				},
 				Spec: spannerv1alpha1.SpannerAutoscalerSpec{
-					ServiceAccountSecretRef: spannerv1alpha1.ServiceAccountSecretRef{
+					ServiceAccountSecretRef: &spannerv1alpha1.ServiceAccountSecretRef{
 						Namespace: pointer.String(namespace),
 						Key:       pointer.String("service-account"),
 					},
@@ -541,7 +541,7 @@ func TestSpannerAutoscalerReconciler_fetchServiceAccountJSON(t *testing.T) {
 					Namespace: namespace,
 				},
 				Spec: spannerv1alpha1.SpannerAutoscalerSpec{
-					ServiceAccountSecretRef: spannerv1alpha1.ServiceAccountSecretRef{
+					ServiceAccountSecretRef: &spannerv1alpha1.ServiceAccountSecretRef{
 						Namespace: pointer.String(namespace),
 						Name:      pointer.String("secret-5"),
 					},
@@ -559,7 +559,7 @@ func TestSpannerAutoscalerReconciler_fetchServiceAccountJSON(t *testing.T) {
 					Namespace: namespace,
 				},
 				Spec: spannerv1alpha1.SpannerAutoscalerSpec{
-					ServiceAccountSecretRef: spannerv1alpha1.ServiceAccountSecretRef{
+					ServiceAccountSecretRef: &spannerv1alpha1.ServiceAccountSecretRef{
 						Name: pointer.String("no-secret-found"),
 						Key:  pointer.String("service-account"),
 					},
@@ -567,6 +567,21 @@ func TestSpannerAutoscalerReconciler_fetchServiceAccountJSON(t *testing.T) {
 			},
 			expected:    nil,
 			expectedErr: errFetchServiceAccountJSONNoSecretFound,
+		},
+		{
+			name:   "return ADC credentials when ServiceAccountSecretRef is not specified",
+			secret: nil,
+			resource: spannerv1alpha1.SpannerAutoscaler{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "spanner-autoscaler",
+					Namespace: namespace,
+				},
+				Spec: spannerv1alpha1.SpannerAutoscalerSpec{
+					ServiceAccountSecretRef: nil,
+				},
+			},
+			expected:    syncer.NewADCCredentials(),
+			expectedErr: nil,
 		},
 	}
 
@@ -585,7 +600,7 @@ func TestSpannerAutoscalerReconciler_fetchServiceAccountJSON(t *testing.T) {
 				apiReader:  cli,
 			}
 
-			saj, err := reconciler.fetchServiceAccountJSON(ctx, &tt.resource)
+			cred, err := reconciler.fetchCredentials(ctx, &tt.resource)
 
 			if tt.expectedErr == nil && err != nil {
 				t.Fatalf("caught an unexpected error: %s", err)
@@ -595,8 +610,8 @@ func TestSpannerAutoscalerReconciler_fetchServiceAccountJSON(t *testing.T) {
 				t.Errorf("want error: `%s`, but got `%s`", tt.expectedErr, err)
 			}
 
-			if want, got := string(tt.expected), string(saj); want != got {
-				t.Errorf("want: `%s`, but got `%s`", want, got)
+			if !cmp.Equal(tt.expected, cred) {
+				t.Errorf("differ: %v", cmp.Diff(tt.expected, cred))
 			}
 		})
 	}

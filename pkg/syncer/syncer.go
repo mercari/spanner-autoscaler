@@ -2,11 +2,14 @@ package syncer
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/go-logr/logr"
 	"github.com/go-logr/zapr"
 	"go.uber.org/zap"
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/google"
 	"golang.org/x/sync/errgroup"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -27,16 +30,56 @@ type Syncer interface {
 	// Stop stops synchronization of resource status.
 	Stop()
 
-	UpdateTarget(projectID, instanceID string, serviceAccountJSON []byte) bool
+	UpdateTarget(projectID, instanceID string, credentials *Credentials) bool
 
 	UpdateInstance(ctx context.Context, desiredNodes int32) error
 }
 
+type CredentialsType int
+
+const (
+	CredentialsTypeADC CredentialsType = iota
+	CredentialsTypeServiceAccountJSON
+)
+
+type Credentials struct {
+	Type               CredentialsType
+	ServiceAccountJSON []byte
+}
+
+func NewADCCredentials() *Credentials {
+	return &Credentials{Type: CredentialsTypeADC}
+}
+
+func NewServiceAccountJSONCredentials(json []byte) *Credentials {
+	return &Credentials{Type: CredentialsTypeServiceAccountJSON, ServiceAccountJSON: json}
+}
+
+const cloudPlatformScope = "https://www.googleapis.com/auth/cloud-platform"
+
+// TokenSource create oauth2.TokenSource for Credentials.
+// Note: We can specify scopes needed for spanner-autoscaler but it does increase maintenance cost.
+// We should already use least privileged Google Service Accounts so it use cloudPlatformScope.
+func (c *Credentials) TokenSource(ctx context.Context) (oauth2.TokenSource, error) {
+	switch c.Type {
+	case CredentialsTypeADC:
+		return google.DefaultTokenSource(ctx, cloudPlatformScope)
+	case CredentialsTypeServiceAccountJSON:
+		cred, err := google.CredentialsFromJSON(ctx, c.ServiceAccountJSON, cloudPlatformScope)
+		if err != nil {
+			return nil, err
+		}
+		return cred.TokenSource, nil
+	default:
+		return nil, fmt.Errorf("credentials type unknown: %v", c.Type)
+	}
+}
+
 // syncer synchronizes SpannerAutoscalerStatus.
 type syncer struct {
-	projectID          string
-	instanceID         string
-	serviceAccountJSON []byte
+	projectID   string
+	instanceID  string
+	credentials *Credentials
 
 	ctrlClient    ctrlclient.Client
 	spannerClient spanner.Client
@@ -82,14 +125,19 @@ func New(
 	namespacedName types.NamespacedName,
 	projectID string,
 	instanceID string,
-	serviceAccountJSON []byte,
+	credentials *Credentials,
 	recorder record.EventRecorder,
 	opts ...Option,
 ) (Syncer, error) {
+	ts, err := credentials.TokenSource(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	spannerClient, err := spanner.NewClient(
 		ctx,
 		projectID,
-		spanner.WithCredentialsJSON(serviceAccountJSON),
+		spanner.WithTokenSource(ts),
 	)
 	if err != nil {
 		return nil, err
@@ -98,16 +146,16 @@ func New(
 	metricsClient, err := metrics.NewClient(
 		ctx,
 		projectID,
-		metrics.WithCredentialsJSON(serviceAccountJSON),
+		metrics.WithTokenSource(ts),
 	)
 	if err != nil {
 		return nil, err
 	}
 
 	s := &syncer{
-		projectID:          projectID,
-		instanceID:         instanceID,
-		serviceAccountJSON: serviceAccountJSON,
+		projectID:   projectID,
+		instanceID:  instanceID,
+		credentials: credentials,
 
 		ctrlClient:     ctrlClient,
 		spannerClient:  spannerClient,
@@ -159,7 +207,7 @@ func (s *syncer) Stop() {
 }
 
 // UpdateTarget updates target and returns wether did update or not.
-func (s *syncer) UpdateTarget(projectID, instanceID string, serviceAccountJSON []byte) bool {
+func (s *syncer) UpdateTarget(projectID, instanceID string, credentials *Credentials) bool {
 	updated := false
 
 	if s.projectID != projectID {
@@ -172,9 +220,12 @@ func (s *syncer) UpdateTarget(projectID, instanceID string, serviceAccountJSON [
 		s.instanceID = instanceID
 	}
 
-	if string(s.serviceAccountJSON) != string(serviceAccountJSON) {
+	if (s.credentials == nil && credentials != nil) ||
+		(s.credentials != nil && credentials == nil) ||
+		s.credentials.Type != credentials.Type ||
+		string(s.credentials.ServiceAccountJSON) != string(s.credentials.ServiceAccountJSON) {
 		updated = true
-		s.serviceAccountJSON = serviceAccountJSON
+		s.credentials = credentials
 	}
 
 	return updated

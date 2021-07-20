@@ -21,7 +21,7 @@ func (s *Syncer) Stop() {
 	s.FakeStop()
 }
 
-func (s *Syncer) UpdateTarget(projectID, instanceID string, serviceAccountJSON []byte) bool {
+func (s *Syncer) UpdateTarget(projectID, instanceID string, credentials *syncer.Credentials) bool {
 	return false
 }
 

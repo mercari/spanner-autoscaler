@@ -53,7 +53,8 @@ type SpannerAutoscalerSpec struct {
 	ScaleTargetRef ScaleTargetRef `json:"scaleTargetRef"`
 
 	// reference for service account secret.
-	ServiceAccountSecretRef ServiceAccountSecretRef `json:"serviceAccountSecretRef"`
+	// If not specified, use ADC of the controller.
+	ServiceAccountSecretRef *ServiceAccountSecretRef `json:"serviceAccountSecretRef"`
 
 	// +kubebuilder:validation:Minimum=1
 	// lower limit for the number of nodes that can be set by the autoscaler.

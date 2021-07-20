@@ -141,7 +141,11 @@ func (in *SpannerAutoscalerList) DeepCopyObject() runtime.Object {
 func (in *SpannerAutoscalerSpec) DeepCopyInto(out *SpannerAutoscalerSpec) {
 	*out = *in
 	in.ScaleTargetRef.DeepCopyInto(&out.ScaleTargetRef)
-	in.ServiceAccountSecretRef.DeepCopyInto(&out.ServiceAccountSecretRef)
+	if in.ServiceAccountSecretRef != nil {
+		in, out := &in.ServiceAccountSecretRef, &out.ServiceAccountSecretRef
+		*out = new(ServiceAccountSecretRef)
+		(*in).DeepCopyInto(*out)
+	}
 	if in.MinNodes != nil {
 		in, out := &in.MinNodes, &out.MinNodes
 		*out = new(int32)
@@ -175,6 +179,10 @@ func (in *SpannerAutoscalerStatus) DeepCopyInto(out *SpannerAutoscalerStatus) {
 	*out = *in
 	if in.LastScaleTime != nil {
 		in, out := &in.LastScaleTime, &out.LastScaleTime
+		*out = (*in).DeepCopy()
+	}
+	if in.LastSyncTime != nil {
+		in, out := &in.LastSyncTime, &out.LastSyncTime
 		*out = (*in).DeepCopy()
 	}
 	if in.CurrentNodes != nil {
