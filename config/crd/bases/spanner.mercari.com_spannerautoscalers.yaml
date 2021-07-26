@@ -118,7 +118,6 @@ spec:
           - maxNodes
           - minNodes
           - scaleTargetRef
-          - serviceAccountSecretRef
           - targetCPUUtilization
           type: object
         status:

@@ -52,6 +52,7 @@ type SpannerAutoscalerSpec struct {
 	// target reference for scaling.
 	ScaleTargetRef ScaleTargetRef `json:"scaleTargetRef"`
 
+	// +kubebuilder:validation:Optional
 	// reference for service account secret.
 	// If not specified, use ADC of the controller.
 	ServiceAccountSecretRef *ServiceAccountSecretRef `json:"serviceAccountSecretRef"`
