@@ -583,6 +583,50 @@ func TestSpannerAutoscalerReconciler_fetchCredentials(t *testing.T) {
 			expected:    syncer.NewADCCredentials(),
 			expectedErr: nil,
 		},
+		{
+			name: "return impersonate credentials when both of serviceAccountSecretRef and instanceConfig are specified",
+			secret: &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "secret-6",
+					Namespace: namespace,
+				},
+				StringData: map[string]string{"service-account": `{"foo":"bar"}`},
+			},
+			resource: spannerv1alpha1.SpannerAutoscaler{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "spanner-autoscaler",
+					Namespace: namespace,
+				},
+				Spec: spannerv1alpha1.SpannerAutoscalerSpec{
+					ServiceAccountSecretRef: &spannerv1alpha1.ServiceAccountSecretRef{
+						Namespace: pointer.String(namespace),
+						Name:      pointer.String("secret-6"),
+					},
+					ImpersonateConfig: &spannerv1alpha1.ImpersonateConfig{
+						TargetServiceAccount: "target@example.iam.gserviceaccount.com",
+					},
+				},
+			},
+			expected:    nil,
+			expectedErr: errInvalidExclusiveCredentials,
+		},
+		{
+			name:   "return impersonate credentials when instanceConfig is specified",
+			secret: nil,
+			resource: spannerv1alpha1.SpannerAutoscaler{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "spanner-autoscaler",
+					Namespace: namespace,
+				},
+				Spec: spannerv1alpha1.SpannerAutoscalerSpec{
+					ImpersonateConfig: &spannerv1alpha1.ImpersonateConfig{
+						TargetServiceAccount: "target@example.iam.gserviceaccount.com",
+					},
+				},
+			},
+			expected:    syncer.NewServiceAccountImpersonate("target@example.iam.gserviceaccount.com", nil),
+			expectedErr: nil,
+		},
 	}
 
 	for _, tt := range tests {

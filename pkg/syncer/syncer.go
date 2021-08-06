@@ -3,6 +3,7 @@ package syncer
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -21,6 +22,7 @@ import (
 	spannerv1alpha1 "github.com/mercari/spanner-autoscaler/pkg/api/v1alpha1"
 	"github.com/mercari/spanner-autoscaler/pkg/metrics"
 	"github.com/mercari/spanner-autoscaler/pkg/spanner"
+	"google.golang.org/api/impersonate"
 )
 
 // Syncer represents a worker synchronizing a SpannerAutoscaler object status.
@@ -40,11 +42,18 @@ type CredentialsType int
 const (
 	CredentialsTypeADC CredentialsType = iota
 	CredentialsTypeServiceAccountJSON
+	CredentialsTypeImpersonation
 )
+
+type ImpersonateConfig struct {
+	TargetServiceAccount string
+	Delegates            []string
+}
 
 type Credentials struct {
 	Type               CredentialsType
 	ServiceAccountJSON []byte
+	ImpersonateConfig  *ImpersonateConfig
 }
 
 func NewADCCredentials() *Credentials {
@@ -53,6 +62,10 @@ func NewADCCredentials() *Credentials {
 
 func NewServiceAccountJSONCredentials(json []byte) *Credentials {
 	return &Credentials{Type: CredentialsTypeServiceAccountJSON, ServiceAccountJSON: json}
+}
+
+func NewServiceAccountImpersonate(targetServiceAccount string, delegates []string) *Credentials {
+	return &Credentials{Type: CredentialsTypeImpersonation, ImpersonateConfig: &ImpersonateConfig{TargetServiceAccount: targetServiceAccount, Delegates: delegates}}
 }
 
 const cloudPlatformScope = "https://www.googleapis.com/auth/cloud-platform"
@@ -70,6 +83,15 @@ func (c *Credentials) TokenSource(ctx context.Context) (oauth2.TokenSource, erro
 			return nil, err
 		}
 		return cred.TokenSource, nil
+	case CredentialsTypeImpersonation:
+		ts, err := impersonate.CredentialsTokenSource(ctx, impersonate.CredentialsConfig{
+			TargetPrincipal: c.ImpersonateConfig.TargetServiceAccount,
+			Delegates:       c.ImpersonateConfig.Delegates,
+			Scopes:          []string{cloudPlatformScope}})
+		if err != nil {
+			return nil, err
+		}
+		return ts, nil
 	default:
 		return nil, fmt.Errorf("credentials type unknown: %v", c.Type)
 	}
@@ -220,10 +242,8 @@ func (s *syncer) UpdateTarget(projectID, instanceID string, credentials *Credent
 		s.instanceID = instanceID
 	}
 
-	if (s.credentials == nil && credentials != nil) ||
-		(s.credentials != nil && credentials == nil) ||
-		s.credentials.Type != credentials.Type ||
-		string(s.credentials.ServiceAccountJSON) != string(s.credentials.ServiceAccountJSON) {
+	// TODO: Consider deepCopy
+	if !reflect.DeepEqual(s.credentials, credentials) {
 		updated = true
 		s.credentials = credentials
 	}

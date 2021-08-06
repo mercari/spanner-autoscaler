@@ -47,6 +47,7 @@ var (
 	errFetchServiceAccountJSONNoKeySpecified    = errors.New("No key specified")
 	errFetchServiceAccountJSONNoSecretFound     = errors.New("No secret found by specified name")
 	errFetchServiceAccountJSONNoSecretDataFound = errors.New("No secret found by specified key")
+	errInvalidExclusiveCredentials              = errors.New("impersonateConfig and serviceAccountSecretRef are mutually exclusive")
 )
 
 const defaultMaxScaleDownNodes = 2
@@ -332,42 +333,51 @@ func calcDesiredNodes(currentCPU, currentNodes, targetCPU, minNodes, maxNodes, m
 
 func (r *SpannerAutoscalerReconciler) fetchCredentials(ctx context.Context, sa *spannerv1alpha1.SpannerAutoscaler) (*syncer.Credentials, error) {
 	secretRef := sa.Spec.ServiceAccountSecretRef
+	impersonateConfig := sa.Spec.ImpersonateConfig
 
-	if secretRef == nil {
-		return syncer.NewADCCredentials(), nil
+	if secretRef != nil && impersonateConfig != nil {
+		return nil, errInvalidExclusiveCredentials
 	}
 
-	if secretRef.Name == nil || *secretRef.Name == "" {
-		return nil, errFetchServiceAccountJSONNoNameSpecified
-	}
-
-	if secretRef.Key == nil || *secretRef.Key == "" {
-		return nil, errFetchServiceAccountJSONNoKeySpecified
-	}
-
-	var namespace string
-	if secretRef.Namespace == nil || *secretRef.Namespace == "" {
-		namespace = sa.Namespace
-	} else {
-		namespace = *secretRef.Namespace
-	}
-
-	var secret corev1.Secret
-	key := ctrlclient.ObjectKey{
-		Name:      *secretRef.Name,
-		Namespace: namespace,
-	}
-	if err := r.apiReader.Get(ctx, key, &secret); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil, errFetchServiceAccountJSONNoSecretFound
+	if secretRef != nil {
+		if secretRef.Name == nil || *secretRef.Name == "" {
+			return nil, errFetchServiceAccountJSONNoNameSpecified
 		}
-		return nil, err
+
+		if secretRef.Key == nil || *secretRef.Key == "" {
+			return nil, errFetchServiceAccountJSONNoKeySpecified
+		}
+
+		var namespace string
+		if secretRef.Namespace == nil || *secretRef.Namespace == "" {
+			namespace = sa.Namespace
+		} else {
+			namespace = *secretRef.Namespace
+		}
+
+		var secret corev1.Secret
+		key := ctrlclient.ObjectKey{
+			Name:      *secretRef.Name,
+			Namespace: namespace,
+		}
+		if err := r.apiReader.Get(ctx, key, &secret); err != nil {
+			if apierrors.IsNotFound(err) {
+				return nil, errFetchServiceAccountJSONNoSecretFound
+			}
+			return nil, err
+		}
+
+		serviceAccountJSON, ok := secret.Data[*secretRef.Key]
+		if !ok {
+			return nil, errFetchServiceAccountJSONNoSecretDataFound
+		}
+
+		return syncer.NewServiceAccountJSONCredentials(serviceAccountJSON), nil
 	}
 
-	serviceAccountJSON, ok := secret.Data[*secretRef.Key]
-	if !ok {
-		return nil, errFetchServiceAccountJSONNoSecretDataFound
+	if impersonateConfig != nil {
+		return syncer.NewServiceAccountImpersonate(impersonateConfig.TargetServiceAccount, impersonateConfig.Delegates), nil
 	}
 
-	return syncer.NewServiceAccountJSONCredentials(serviceAccountJSON), nil
+	return syncer.NewADCCredentials(), nil
 }
