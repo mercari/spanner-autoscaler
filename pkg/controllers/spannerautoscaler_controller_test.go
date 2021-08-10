@@ -203,7 +203,7 @@ func TestSpannerAutoscalerReconciler_Reconcile(t *testing.T) {
 	}
 }
 
-func TestSpannerAutoscalerReconciler_needCalcNodes(t *testing.T) {
+func TestSpannerAutoscalerReconciler_needCalcProcessingUnits(t *testing.T) {
 	fakeTime := time.Date(2020, 4, 1, 0, 0, 0, 0, time.Local)
 
 	type args struct {
@@ -410,6 +410,163 @@ func Test_calcDesiredNodes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := calcDesiredNodes(tt.args.currentCPU, tt.args.currentNodes, tt.args.targetCPU, tt.args.minNodes, tt.args.maxNodes, tt.args.maxScaleDownNodes); got != tt.want {
+				t.Errorf("calcDesiredProcessingUnits() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func Test_calcDesiredProcessingUnits(t *testing.T) {
+	type args struct {
+		currentCPU             int32
+		currentProcessingUnits int32
+		targetCPU              int32
+		minProcessingUnits     int32
+		maxProcessingUnits     int32
+		maxScaleDownNodes      int32
+	}
+	tests := []struct {
+		name string
+		args args
+		want int32
+	}{
+		{
+			name: "scale up",
+			args: args{
+				currentCPU:             50,
+				currentProcessingUnits: 300,
+				targetCPU:              30,
+				minProcessingUnits:     100,
+				maxProcessingUnits:     1000,
+				maxScaleDownNodes:      2,
+			},
+			want: 600,
+		},
+		{
+			name: "scale up 2",
+			args: args{
+				currentCPU:             50,
+				currentProcessingUnits: 3000,
+				targetCPU:              30,
+				minProcessingUnits:     1000,
+				maxProcessingUnits:     10000,
+				maxScaleDownNodes:      2,
+			},
+			want: 6000,
+		},
+		{
+			name: "scale up 3",
+			args: args{
+				currentCPU:             50,
+				currentProcessingUnits: 900,
+				targetCPU:              40,
+				minProcessingUnits:     100,
+				maxProcessingUnits:     5000,
+				maxScaleDownNodes:      2,
+			},
+			want: 2000,
+		},
+		{
+			name: "scale down",
+			args: args{
+				currentCPU:             30,
+				currentProcessingUnits: 500,
+				targetCPU:              50,
+				minProcessingUnits:     100,
+				maxProcessingUnits:     1000,
+				maxScaleDownNodes:      2,
+			},
+			want: 400,
+		},
+		{
+			name: "scale down",
+			args: args{
+				currentCPU:             30,
+				currentProcessingUnits: 5000,
+				targetCPU:              50,
+				minProcessingUnits:     1000,
+				maxProcessingUnits:     10000,
+				maxScaleDownNodes:      2,
+			},
+			want: 4000,
+		},
+		{
+			name: "scale up to max PUs",
+			args: args{
+				currentCPU:             50,
+				currentProcessingUnits: 300,
+				targetCPU:              30,
+				minProcessingUnits:     100,
+				maxProcessingUnits:     400,
+				maxScaleDownNodes:      2,
+			},
+			want: 400,
+		},
+		{
+			name: "scale up to max PUs 2",
+			args: args{
+				currentCPU:             50,
+				currentProcessingUnits: 3000,
+				targetCPU:              30,
+				minProcessingUnits:     1000,
+				maxProcessingUnits:     4000,
+				maxScaleDownNodes:      2,
+			},
+			want: 4000,
+		},
+		{
+			name: "scale down to min nodes",
+			args: args{
+				currentCPU:             0,
+				currentProcessingUnits: 500,
+				targetCPU:              50,
+				minProcessingUnits:     100,
+				maxProcessingUnits:     1000,
+				maxScaleDownNodes:      2,
+			},
+			want: 100,
+		},
+		{
+			name: "scale down to min PUs",
+			args: args{
+				currentCPU:             0,
+				currentProcessingUnits: 5000,
+				targetCPU:              50,
+				minProcessingUnits:     1000,
+				maxProcessingUnits:     10000,
+				maxScaleDownNodes:      5,
+			},
+			want: 1000,
+		},
+		{
+			name: "scale down to min PUs 3",
+			args: args{
+				currentCPU:             30,
+				currentProcessingUnits: 500,
+				targetCPU:              50,
+				minProcessingUnits:     500,
+				maxProcessingUnits:     1000,
+				maxScaleDownNodes:      2,
+			},
+			want: 500,
+		},
+		{
+			name: "scale down with max scale down nodes",
+			args: args{
+				currentCPU:             30,
+				currentProcessingUnits: 10000,
+				targetCPU:              50,
+				minProcessingUnits:     5000,
+				maxProcessingUnits:     10000,
+				maxScaleDownNodes:      2,
+			},
+			want: 8000,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := calcDesiredProcessingUnits(tt.args.currentCPU, tt.args.currentProcessingUnits, tt.args.targetCPU, tt.args.minProcessingUnits, tt.args.maxProcessingUnits, tt.args.maxScaleDownNodes); got != tt.want {
 				t.Errorf("calcDesiredProcessingUnits() = %v, want %v", got, tt.want)
 			}
 		})
