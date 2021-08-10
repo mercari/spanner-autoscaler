@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"sync"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -12,6 +13,7 @@ import (
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	"golang.org/x/sync/errgroup"
+	"google.golang.org/api/option"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -70,13 +72,28 @@ func NewServiceAccountImpersonate(targetServiceAccount string, delegates []strin
 
 const cloudPlatformScope = "https://www.googleapis.com/auth/cloud-platform"
 
+var (
+	baseTokenSourceOnce sync.Once
+	baseTokenSource     oauth2.TokenSource
+	baseTokenSourceErr  error
+)
+
+// To reduce request to GKE metadata server, the base token source is reused across syncers.
+// Note: Initialization is deferred because there are possible to use serviceAccountSecretRef with no available default token source.
+func initializedBaseTokenSource() (oauth2.TokenSource, error) {
+	baseTokenSourceOnce.Do(func() {
+		baseTokenSource, baseTokenSourceErr = google.DefaultTokenSource(context.Background(), cloudPlatformScope)
+	})
+	return baseTokenSource, baseTokenSourceErr
+}
+
 // TokenSource create oauth2.TokenSource for Credentials.
 // Note: We can specify scopes needed for spanner-autoscaler but it does increase maintenance cost.
 // We should already use least privileged Google Service Accounts so it use cloudPlatformScope.
 func (c *Credentials) TokenSource(ctx context.Context) (oauth2.TokenSource, error) {
 	switch c.Type {
 	case CredentialsTypeADC:
-		return google.DefaultTokenSource(ctx, cloudPlatformScope)
+		return initializedBaseTokenSource()
 	case CredentialsTypeServiceAccountJSON:
 		cred, err := google.CredentialsFromJSON(ctx, c.ServiceAccountJSON, cloudPlatformScope)
 		if err != nil {
@@ -84,10 +101,16 @@ func (c *Credentials) TokenSource(ctx context.Context) (oauth2.TokenSource, erro
 		}
 		return cred.TokenSource, nil
 	case CredentialsTypeImpersonation:
+		baseTs, err := initializedBaseTokenSource()
+		if err != nil {
+			return nil, err
+		}
 		ts, err := impersonate.CredentialsTokenSource(ctx, impersonate.CredentialsConfig{
 			TargetPrincipal: c.ImpersonateConfig.TargetServiceAccount,
 			Delegates:       c.ImpersonateConfig.Delegates,
-			Scopes:          []string{cloudPlatformScope}})
+			Scopes:          []string{cloudPlatformScope}},
+			option.WithTokenSource(baseTs),
+		)
 		if err != nil {
 			return nil, err
 		}
