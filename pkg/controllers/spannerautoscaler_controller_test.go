@@ -134,6 +134,7 @@ func TestSpannerAutoscalerReconciler_Reconcile(t *testing.T) {
 			want: func() *spannerv1alpha1.SpannerAutoscaler {
 				o := baseObj.DeepCopy()
 				o.Status.DesiredNodes = pointer.Int32(6)
+				o.Status.DesiredProcessingUnits = pointer.Int32(6000)
 				o.Status.InstanceState = spannerv1alpha1.InstanceStateReady
 				o.Status.LastScaleTime = &metav1.Time{Time: fakeTime}
 				return o
@@ -254,9 +255,9 @@ func TestSpannerAutoscalerReconciler_needCalcNodes(t *testing.T) {
 				clock:             clock.NewFakeClock(fakeTime),
 				log:               zapr.NewLogger(zap.NewNop()),
 			}
-			got := r.needCalcNodes(tt.args.sa)
+			got := r.needCalcProcessingUnits(tt.args.sa)
 			if got != tt.want {
-				t.Errorf("needCalcNodes() got = %v, want %v", got, tt.want)
+				t.Errorf("needCalcProcessingUnits() got = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -310,9 +311,9 @@ func TestSpannerAutoscalerReconciler_needUpdateNodes(t *testing.T) {
 				clock:             clock.NewFakeClock(fakeTime),
 				log:               zapr.NewLogger(zap.NewNop()),
 			}
-			got := r.needUpdateNodes(tt.args.sa, *tt.args.sa.Status.DesiredNodes, fakeTime)
+			got := r.needUpdateProcessingUnits(tt.args.sa, normalizeProcessingUnitsOrNodes(tt.args.sa.Status.DesiredProcessingUnits, tt.args.sa.Status.DesiredNodes), fakeTime)
 			if got != tt.want {
-				t.Errorf("needUpdateNodes() got = %v, want %v", got, tt.want)
+				t.Errorf("needUpdateProcessingUnits() got = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -409,7 +410,7 @@ func Test_calcDesiredNodes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := calcDesiredNodes(tt.args.currentCPU, tt.args.currentNodes, tt.args.targetCPU, tt.args.minNodes, tt.args.maxNodes, tt.args.maxScaleDownNodes); got != tt.want {
-				t.Errorf("calcDesiredNodes() = %v, want %v", got, tt.want)
+				t.Errorf("calcDesiredProcessingUnits() = %v, want %v", got, tt.want)
 			}
 		})
 	}

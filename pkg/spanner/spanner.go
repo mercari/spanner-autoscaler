@@ -29,8 +29,8 @@ const (
 
 // Instance represents Spanner Instance.
 type Instance struct {
-	NodeCount     *int32
-	InstanceState State
+	ProcessingUnits *int32
+	InstanceState   State
 }
 
 // Client is a client for manipulation of Instance.
@@ -106,8 +106,8 @@ func (c *client) GetInstance(ctx context.Context, instanceID string) (*Instance,
 	}
 
 	return &Instance{
-		NodeCount:     pointer.Int32(i.NodeCount),
-		InstanceState: instanceState(i.State),
+		ProcessingUnits: pointer.Int32(i.ProcessingUnits),
+		InstanceState:   instanceState(i.State),
 	}, nil
 }
 
@@ -123,14 +123,14 @@ func (c *client) UpdateInstance(ctx context.Context, instanceID string, instance
 		return err
 	}
 
-	if instance.NodeCount != nil {
-		i.NodeCount = *instance.NodeCount
+	if instance.ProcessingUnits != nil {
+		i.ProcessingUnits = *instance.ProcessingUnits
 	}
 
 	_, err = c.spannerInstanceAdminClient.UpdateInstance(ctx, &instancepb.UpdateInstanceRequest{
 		Instance: i,
 		FieldMask: &field_mask.FieldMask{
-			Paths: []string{"node_count"},
+			Paths: []string{"processing_units"},
 		},
 	})
 	if err != nil {

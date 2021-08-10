@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/go-logr/zapr"
+	"github.com/mercari/spanner-autoscaler/pkg/pointer"
 	"go.uber.org/zap"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
@@ -36,7 +37,7 @@ type Syncer interface {
 
 	UpdateTarget(projectID, instanceID string, credentials *Credentials) bool
 
-	UpdateInstance(ctx context.Context, desiredNodes int32) error
+	UpdateInstance(ctx context.Context, desiredProcessingUnits int32) error
 }
 
 type CredentialsType int
@@ -271,9 +272,9 @@ func (s *syncer) UpdateTarget(projectID, instanceID string, credentials *Credent
 	return updated
 }
 
-func (s *syncer) UpdateInstance(ctx context.Context, desiredNodes int32) error {
+func (s *syncer) UpdateInstance(ctx context.Context, desiredProcessingUnits int32) error {
 	err := s.spannerClient.UpdateInstance(ctx, s.instanceID, &spanner.Instance{
-		NodeCount: &desiredNodes,
+		ProcessingUnits: &desiredProcessingUnits,
 	})
 	if err != nil {
 		return err
@@ -312,13 +313,14 @@ func (s *syncer) syncResource(ctx context.Context) error {
 	}
 
 	log.V(1).Info("spanner instance status",
-		"current nodes", instance.NodeCount,
+		"current processing untis", instance.ProcessingUnits,
 		"instance state", instance.InstanceState,
 		"high priority cpu utilization", instanceMetrics.CurrentHighPriorityCPUUtilization,
 	)
 
 	saCopy := sa.DeepCopy()
-	saCopy.Status.CurrentNodes = instance.NodeCount
+	saCopy.Status.CurrentProcessingUnits = instance.ProcessingUnits
+	saCopy.Status.CurrentNodes = pointer.Int32(*instance.ProcessingUnits / 1000)
 	saCopy.Status.InstanceState = instance.InstanceState
 	saCopy.Status.CurrentHighPriorityCPUUtilization = instanceMetrics.CurrentHighPriorityCPUUtilization
 	saCopy.Status.LastSyncTime = &metav1.Time{Time: s.clock.Now()}
@@ -351,7 +353,7 @@ func (s *syncer) getInstanceInfo(ctx context.Context, instanceID string) (*spann
 			return err
 		}
 		log.V(1).Info("successfully got spanner instance with spanner client",
-			"current nodes", instance.NodeCount,
+			"current processing units", instance.ProcessingUnits,
 			"instance state", instance.InstanceState,
 		)
 		return nil

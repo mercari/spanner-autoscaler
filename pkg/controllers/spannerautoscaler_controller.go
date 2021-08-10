@@ -205,37 +205,39 @@ func (r *SpannerAutoscalerReconciler) Reconcile(req ctrlreconcile.Request) (ctrl
 		sa.Status.LastScaleTime = &metav1.Time{}
 	}
 
-	if !r.needCalcNodes(&sa) {
+	if !r.needCalcProcessingUnits(&sa) {
 		return ctrlreconcile.Result{}, nil
 	}
 
-	desiredNodes := calcDesiredNodes(
+	desiredProcessingUnits := calcDesiredProcessingUnits(
 		*sa.Status.CurrentHighPriorityCPUUtilization,
-		*sa.Status.CurrentNodes,
+		normalizeProcessingUnitsOrNodes(sa.Status.CurrentProcessingUnits, sa.Status.CurrentNodes),
 		*sa.Spec.TargetCPUUtilization.HighPriority,
-		*sa.Spec.MinNodes,
-		*sa.Spec.MaxNodes,
+		normalizeProcessingUnitsOrNodes(sa.Spec.MinProcessingUnits, sa.Spec.MinNodes),
+		normalizeProcessingUnitsOrNodes(sa.Spec.MaxProcessingUnits, sa.Spec.MaxNodes),
 		*sa.Spec.MaxScaleDownNodes,
 	)
 
 	now := r.clock.Now()
 
-	if !r.needUpdateNodes(&sa, desiredNodes, now) {
+	if !r.needUpdateProcessingUnits(&sa, desiredProcessingUnits, now) {
 		return ctrlreconcile.Result{}, nil
 	}
 
-	if err := s.UpdateInstance(ctx, desiredNodes); err != nil {
+	if err := s.UpdateInstance(ctx, desiredProcessingUnits); err != nil {
 		r.recorder.Event(&sa, corev1.EventTypeWarning, "FailedUpdateInstance", err.Error())
 		log.Error(err, "failed to update spanner instance status")
 		return ctrlreconcile.Result{}, err
 	}
 
-	r.recorder.Eventf(&sa, corev1.EventTypeNormal, "Updated", "Updated number of %s/%s nodes from %d to %d", *sa.Spec.ScaleTargetRef.ProjectID, *sa.Spec.ScaleTargetRef.InstanceID, *sa.Status.CurrentNodes, desiredNodes)
+	r.recorder.Eventf(&sa, corev1.EventTypeNormal, "Updated", "Updated processing units of %s/%s from %d to %d", *sa.Spec.ScaleTargetRef.ProjectID, *sa.Spec.ScaleTargetRef.InstanceID,
+		normalizeProcessingUnitsOrNodes(sa.Status.CurrentProcessingUnits, sa.Status.CurrentNodes), desiredProcessingUnits)
 
-	log.Info("updated nodes via google cloud api", "before", *sa.Status.CurrentNodes, "after", desiredNodes)
+	log.Info("updated nodes via google cloud api", "before", normalizeProcessingUnitsOrNodes(sa.Status.CurrentProcessingUnits, sa.Status.CurrentNodes), "after", desiredProcessingUnits)
 
 	saCopy := sa.DeepCopy()
-	saCopy.Status.DesiredNodes = &desiredNodes
+	saCopy.Status.DesiredProcessingUnits = &desiredProcessingUnits
+	saCopy.Status.DesiredNodes = pointer.Int32(desiredProcessingUnits / 1000)
 	saCopy.Status.LastScaleTime = &metav1.Time{Time: now}
 
 	if err = r.ctrlClient.Status().Update(ctx, saCopy); err != nil {
@@ -245,6 +247,16 @@ func (r *SpannerAutoscalerReconciler) Reconcile(req ctrlreconcile.Request) (ctrl
 	}
 
 	return ctrlreconcile.Result{}, nil
+}
+
+func normalizeProcessingUnitsOrNodes(processingUnits, nodes *int32) int32 {
+	if processingUnits != nil {
+		return *processingUnits
+	}
+	if nodes != nil {
+		return *nodes * 1000
+	}
+	return 0
 }
 
 // SetupWithManager sets up the controller with ctrlmanager.Manager.
@@ -277,11 +289,11 @@ func (r *SpannerAutoscalerReconciler) startSyncer(ctx context.Context, nn types.
 	return nil
 }
 
-func (r *SpannerAutoscalerReconciler) needCalcNodes(sa *spannerv1alpha1.SpannerAutoscaler) bool {
+func (r *SpannerAutoscalerReconciler) needCalcProcessingUnits(sa *spannerv1alpha1.SpannerAutoscaler) bool {
 	log := r.log
 
 	switch {
-	case sa.Status.CurrentNodes == nil:
+	case sa.Status.CurrentProcessingUnits == nil && sa.Status.CurrentNodes == nil:
 		log.Info("current nodes have not fetched yet")
 		return false
 
@@ -293,23 +305,25 @@ func (r *SpannerAutoscalerReconciler) needCalcNodes(sa *spannerv1alpha1.SpannerA
 	}
 }
 
-func (r *SpannerAutoscalerReconciler) needUpdateNodes(sa *spannerv1alpha1.SpannerAutoscaler, desiredNodes int32, now time.Time) bool {
+func (r *SpannerAutoscalerReconciler) needUpdateProcessingUnits(sa *spannerv1alpha1.SpannerAutoscaler, desiredProcessingUnits int32, now time.Time) bool {
 	log := r.log
 
+	currentProcessingUnits := normalizeProcessingUnitsOrNodes(sa.Status.CurrentProcessingUnits, sa.Status.CurrentNodes)
+
 	switch {
-	case desiredNodes == *sa.Status.CurrentNodes:
-		log.V(0).Info("the desired number of nodes is equal to that of the current; no need to scale nodes")
+	case desiredProcessingUnits == currentProcessingUnits:
+		log.V(0).Info("the desired number of processing units is equal to that of the current; no need to scale")
 		return false
 
-	case desiredNodes > *sa.Status.CurrentNodes && r.clock.Now().Before(sa.Status.LastScaleTime.Time.Add(10*time.Second)):
-		log.Info("too short to scale up since instance scaled nodes last",
+	case desiredProcessingUnits > currentProcessingUnits && r.clock.Now().Before(sa.Status.LastScaleTime.Time.Add(10*time.Second)):
+		log.Info("too short to scale up since instance scaled last",
 			"now", now.String(),
 			"last scale time", sa.Status.LastScaleTime,
 		)
 
 		return false
 
-	case desiredNodes < *sa.Status.CurrentNodes && r.clock.Now().Before(sa.Status.LastScaleTime.Time.Add(r.scaleDownInterval)):
+	case desiredProcessingUnits < currentProcessingUnits && r.clock.Now().Before(sa.Status.LastScaleTime.Time.Add(r.scaleDownInterval)):
 		log.Info("too short to scale down since instance scaled nodes last",
 			"now", now.String(),
 			"last scale time", sa.Status.LastScaleTime,
@@ -322,23 +336,36 @@ func (r *SpannerAutoscalerReconciler) needUpdateNodes(sa *spannerv1alpha1.Spanne
 	}
 }
 
+// For testing purpose only
 func calcDesiredNodes(currentCPU, currentNodes, targetCPU, minNodes, maxNodes, maxScaleDownNodes int32) int32 {
-	totalCPU := currentCPU * currentNodes
-	desiredNodes := totalCPU/targetCPU + 1 // roundup
+	return calcDesiredProcessingUnits(currentCPU, currentNodes*1000, targetCPU, minNodes*1000, maxNodes*1000, maxScaleDownNodes) / 1000
+}
 
-	if (currentNodes - desiredNodes) > maxScaleDownNodes {
-		desiredNodes = currentNodes - maxScaleDownNodes
+func roundUpProcessingUnits(processingUnits int32) int32 {
+	if processingUnits >= 1000 {
+		return ((processingUnits / 1000) + 1) * 1000
+	}
+	return ((processingUnits / 100) + 1) * 100
+}
+
+func calcDesiredProcessingUnits(currentCPU, currentProcessingUnits, targetCPU, minProcessingUnits, maxProcessingUnits, maxScaleDownNodes int32) int32 {
+	totalCPUProduct1000 := currentCPU * currentProcessingUnits
+
+	desiredProcessingUnits := roundUpProcessingUnits(totalCPUProduct1000 / targetCPU)
+
+	if (currentProcessingUnits - desiredProcessingUnits) > maxScaleDownNodes*1000 {
+		desiredProcessingUnits = currentProcessingUnits - maxScaleDownNodes*1000
 	}
 
 	switch {
-	case desiredNodes < minNodes:
-		return minNodes
+	case desiredProcessingUnits < minProcessingUnits:
+		return minProcessingUnits
 
-	case desiredNodes > maxNodes:
-		return maxNodes
+	case desiredProcessingUnits > maxProcessingUnits:
+		return maxProcessingUnits
 
 	default:
-		return desiredNodes
+		return desiredProcessingUnits
 	}
 }
 

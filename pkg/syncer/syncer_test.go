@@ -87,8 +87,8 @@ func Test_syncer_syncResource(t *testing.T) {
 			name: "sync and update instance",
 			fakeInstances: map[string]*spanner.Instance{
 				fakeInstanceID: {
-					NodeCount:     pointer.Int32(3),
-					InstanceState: spanner.StateReady,
+					ProcessingUnits: pointer.Int32(3000),
+					InstanceState:   spanner.StateReady,
 				},
 			},
 			fakeMetrics: map[string]*metrics.InstanceMetrics{
@@ -103,6 +103,7 @@ func Test_syncer_syncResource(t *testing.T) {
 			want: func() *spannerv1alpha1.SpannerAutoscaler {
 				o := fakeSpannerAutoscaler.DeepCopy()
 				o.Status.CurrentNodes = pointer.Int32(3)
+				o.Status.CurrentProcessingUnits = pointer.Int32(3000)
 				o.Status.InstanceState = spannerv1alpha1.InstanceStateReady
 				o.Status.CurrentHighPriorityCPUUtilization = pointer.Int32(30)
 				o.Status.LastSyncTime = &metav1.Time{Time: fakeTime}
@@ -194,8 +195,8 @@ func Test_syncer_getInstanceInfo(t *testing.T) {
 			name: "get instance info",
 			fakeInstances: map[string]*spanner.Instance{
 				fakeInstanceID: {
-					NodeCount:     pointer.Int32(1),
-					InstanceState: spanner.StateReady,
+					ProcessingUnits: pointer.Int32(1000),
+					InstanceState:   spanner.StateReady,
 				},
 			},
 			fakeMetrics: map[string]*metrics.InstanceMetrics{
@@ -204,8 +205,8 @@ func Test_syncer_getInstanceInfo(t *testing.T) {
 				},
 			},
 			wantInstance: &spanner.Instance{
-				NodeCount:     pointer.Int32(1),
-				InstanceState: spanner.StateReady,
+				ProcessingUnits: pointer.Int32(1000),
+				InstanceState:   spanner.StateReady,
 			},
 			wantInstanceMetrics: &metrics.InstanceMetrics{
 				CurrentHighPriorityCPUUtilization: pointer.Int32(50),
