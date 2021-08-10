@@ -184,9 +184,20 @@ func (r *SpannerAutoscalerReconciler) Reconcile(req ctrlreconcile.Request) (ctrl
 		return ctrlreconcile.Result{}, nil
 	}
 
-	// If target spanner instance or service account have been changed, then just update syncer.
+	// If target spanner instance or service account have been changed, then just replace syncer.
 	if s.UpdateTarget(*sa.Spec.ScaleTargetRef.ProjectID, *sa.Spec.ScaleTargetRef.InstanceID, credentials) {
-		log.Info("updated syncer", "namespaced name", sa)
+		s.Stop()
+		r.mu.Lock()
+		delete(r.syncers, nn)
+		r.mu.Unlock()
+
+		if err := r.startSyncer(ctx, nn, *sa.Spec.ScaleTargetRef.ProjectID, *sa.Spec.ScaleTargetRef.InstanceID, credentials); err != nil {
+			r.recorder.Event(&sa, corev1.EventTypeWarning, "FailedStartSyncer", err.Error())
+			log.Error(err, "failed to start syncer")
+			return ctrlreconcile.Result{}, err
+		}
+
+		log.Info("replaced syncer", "namespaced name", sa)
 		return ctrlreconcile.Result{}, nil
 	}
 
