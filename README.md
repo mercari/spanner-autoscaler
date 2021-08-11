@@ -93,7 +93,7 @@ $ kubectl apply -R -f tmp/kpt
 You can configure the controller(`spanner-autoscaler-manager`) to use GKE Workload Identity feature for key-less GCP access(see [Configuration section](#configuration)).
 
 1. Make cluster [to use Workload Identity](https://cloud.google.com/kubernetes-engine/docs/how-to/workload-identity?hl=en#enable_on_cluster).
-2. Create GCP Service Account for the controller.
+2. Create a GCP Service Account for the controller.
 3. Configure Workload Identity between Kubernetes service account of the controller(`spanner-autoscaler/default`) and the GCP service account created in step 2.
    1. Allow Kubernetes service account to impersonate the GCP service account by creating an IAM Policy binding
 
