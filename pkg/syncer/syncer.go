@@ -111,10 +111,7 @@ func (c *Credentials) TokenSource(ctx context.Context) (oauth2.TokenSource, erro
 			Scopes:          []string{cloudPlatformScope}},
 			option.WithTokenSource(baseTs),
 		)
-		if err != nil {
-			return nil, err
-		}
-		return ts, nil
+		return ts, err
 	default:
 		return nil, fmt.Errorf("credentials type unknown: %v", c.Type)
 	}
