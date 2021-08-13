@@ -515,7 +515,7 @@ func Test_calcDesiredProcessingUnits(t *testing.T) {
 			want: 4000,
 		},
 		{
-			name: "scale down to min nodes",
+			name: "scale down to min PUs",
 			args: args{
 				currentCPU:             0,
 				currentProcessingUnits: 500,
@@ -527,7 +527,7 @@ func Test_calcDesiredProcessingUnits(t *testing.T) {
 			want: 100,
 		},
 		{
-			name: "scale down to min PUs",
+			name: "scale down to min PUs 2",
 			args: args{
 				currentCPU:             0,
 				currentProcessingUnits: 5000,
@@ -539,16 +539,16 @@ func Test_calcDesiredProcessingUnits(t *testing.T) {
 			want: 1000,
 		},
 		{
-			name: "scale down to min PUs 3",
+			name: "scale down to min PUs",
 			args: args{
-				currentCPU:             30,
-				currentProcessingUnits: 500,
+				currentCPU:             0,
+				currentProcessingUnits: 5000,
 				targetCPU:              50,
-				minProcessingUnits:     500,
-				maxProcessingUnits:     1000,
-				maxScaleDownNodes:      2,
+				minProcessingUnits:     100,
+				maxProcessingUnits:     10000,
+				maxScaleDownNodes:      5,
 			},
-			want: 500,
+			want: 100,
 		},
 		{
 			name: "scale down with max scale down nodes",
