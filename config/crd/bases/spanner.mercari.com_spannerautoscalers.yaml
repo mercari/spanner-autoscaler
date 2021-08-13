@@ -15,6 +15,12 @@ spec:
   - JSONPath: .spec.scaleTargetRef.instanceId
     name: Instance Id
     type: string
+  - JSONPath: .spec.minNodes
+    name: Min Nodes
+    type: integer
+  - JSONPath: .spec.maxNodes
+    name: Max Nodes
+    type: integer
   - JSONPath: .spec.minProcessingUnits
     name: Min PUs
     type: integer

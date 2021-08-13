@@ -144,6 +144,8 @@ type SpannerAutoscalerStatus struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Project Id",type="string",JSONPath=".spec.scaleTargetRef.projectId"
 // +kubebuilder:printcolumn:name="Instance Id",type="string",JSONPath=".spec.scaleTargetRef.instanceId"
+// +kubebuilder:printcolumn:name="Min Nodes",type="integer",JSONPath=".spec.minNodes"
+// +kubebuilder:printcolumn:name="Max Nodes",type="integer",JSONPath=".spec.maxNodes"
 // +kubebuilder:printcolumn:name="Min PUs",type="integer",JSONPath=".spec.minProcessingUnits"
 // +kubebuilder:printcolumn:name="Max PUs",type="integer",JSONPath=".spec.maxProcessingUnits"
 // +kubebuilder:printcolumn:name="Target CPU",type="integer",JSONPath=".spec.targetCPUUtilization.highPriority"
