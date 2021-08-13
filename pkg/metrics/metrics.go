@@ -12,6 +12,7 @@ import (
 	"github.com/golang/protobuf/ptypes/duration"
 	"github.com/golang/protobuf/ptypes/timestamp"
 	"go.uber.org/zap"
+	"golang.org/x/oauth2"
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
 	monitoringpb "google.golang.org/genproto/googleapis/monitoring/v3"
@@ -44,10 +45,7 @@ type client struct {
 	projectID string
 	term      time.Duration
 
-	useCredentialsFile bool
-	credentialsFile    string
-	useCredentialsJSON bool
-	credentialsJSON    []byte
+	tokenSource oauth2.TokenSource
 
 	clock clock.Clock
 	log   logr.Logger
@@ -63,17 +61,9 @@ func WithTerm(term time.Duration) Option {
 	}
 }
 
-func WithCredentialsFile(path string) Option {
+func WithTokenSource(ts oauth2.TokenSource) Option {
 	return func(c *client) {
-		c.useCredentialsFile = true
-		c.credentialsFile = path
-	}
-}
-
-func WithCredentialsJSON(data []byte) Option {
-	return func(c *client) {
-		c.useCredentialsJSON = true
-		c.credentialsJSON = data
+		c.tokenSource = ts
 	}
 }
 
@@ -104,12 +94,8 @@ func NewClient(ctx context.Context, projectID string, opts ...Option) (Client, e
 
 	var options []option.ClientOption
 
-	if c.useCredentialsFile {
-		options = append(options, option.WithCredentialsFile(c.credentialsFile))
-	}
-
-	if c.useCredentialsJSON {
-		options = append(options, option.WithCredentialsJSON(c.credentialsJSON))
+	if c.tokenSource != nil {
+		options = append(options, option.WithTokenSource(c.tokenSource))
 	}
 
 	monitoringMetricClient, err := monitoring.NewMetricClient(ctx, options...)

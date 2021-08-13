@@ -59,7 +59,7 @@ func Test_syncer_syncResource(t *testing.T) {
 					ProjectID:  pointer.String("fake-project-id"),
 					InstanceID: pointer.String(fakeInstanceID),
 				},
-				ServiceAccountSecretRef: spannerv1alpha1.ServiceAccountSecretRef{
+				ServiceAccountSecretRef: &spannerv1alpha1.ServiceAccountSecretRef{
 					Namespace: pointer.String(""),
 					Name:      pointer.String("fake-service-account-secret"),
 					Key:       pointer.String("fake-service-account-key"),

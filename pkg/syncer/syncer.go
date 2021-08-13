@@ -2,12 +2,18 @@ package syncer
 
 import (
 	"context"
+	"fmt"
+	"reflect"
+	"sync"
 	"time"
 
 	"github.com/go-logr/logr"
 	"github.com/go-logr/zapr"
 	"go.uber.org/zap"
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/google"
 	"golang.org/x/sync/errgroup"
+	"google.golang.org/api/option"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -18,6 +24,7 @@ import (
 	spannerv1alpha1 "github.com/mercari/spanner-autoscaler/pkg/api/v1alpha1"
 	"github.com/mercari/spanner-autoscaler/pkg/metrics"
 	"github.com/mercari/spanner-autoscaler/pkg/spanner"
+	"google.golang.org/api/impersonate"
 )
 
 // Syncer represents a worker synchronizing a SpannerAutoscaler object status.
@@ -27,16 +34,94 @@ type Syncer interface {
 	// Stop stops synchronization of resource status.
 	Stop()
 
-	UpdateTarget(projectID, instanceID string, serviceAccountJSON []byte) bool
+	UpdateTarget(projectID, instanceID string, credentials *Credentials) bool
 
 	UpdateInstance(ctx context.Context, desiredNodes int32) error
 }
 
+type CredentialsType int
+
+const (
+	CredentialsTypeADC CredentialsType = iota
+	CredentialsTypeServiceAccountJSON
+	CredentialsTypeImpersonation
+)
+
+type ImpersonateConfig struct {
+	TargetServiceAccount string
+	Delegates            []string
+}
+
+type Credentials struct {
+	Type               CredentialsType
+	ServiceAccountJSON []byte
+	ImpersonateConfig  *ImpersonateConfig
+}
+
+func NewADCCredentials() *Credentials {
+	return &Credentials{Type: CredentialsTypeADC}
+}
+
+func NewServiceAccountJSONCredentials(json []byte) *Credentials {
+	return &Credentials{Type: CredentialsTypeServiceAccountJSON, ServiceAccountJSON: json}
+}
+
+func NewServiceAccountImpersonate(targetServiceAccount string, delegates []string) *Credentials {
+	return &Credentials{Type: CredentialsTypeImpersonation, ImpersonateConfig: &ImpersonateConfig{TargetServiceAccount: targetServiceAccount, Delegates: delegates}}
+}
+
+const cloudPlatformScope = "https://www.googleapis.com/auth/cloud-platform"
+
+var (
+	baseTokenSourceOnce sync.Once
+	baseTokenSource     oauth2.TokenSource
+	baseTokenSourceErr  error
+)
+
+// To reduce request to GKE metadata server, the base token source is reused across syncers.
+// Note: Initialization is deferred because there are possible to use serviceAccountSecretRef with no available default token source.
+func initializedBaseTokenSource() (oauth2.TokenSource, error) {
+	baseTokenSourceOnce.Do(func() {
+		baseTokenSource, baseTokenSourceErr = google.DefaultTokenSource(context.Background(), cloudPlatformScope)
+	})
+	return baseTokenSource, baseTokenSourceErr
+}
+
+// TokenSource create oauth2.TokenSource for Credentials.
+// Note: We can specify scopes needed for spanner-autoscaler but it does increase maintenance cost.
+// We should already use least privileged Google Service Accounts so it use cloudPlatformScope.
+func (c *Credentials) TokenSource(ctx context.Context) (oauth2.TokenSource, error) {
+	switch c.Type {
+	case CredentialsTypeADC:
+		return initializedBaseTokenSource()
+	case CredentialsTypeServiceAccountJSON:
+		cred, err := google.CredentialsFromJSON(ctx, c.ServiceAccountJSON, cloudPlatformScope)
+		if err != nil {
+			return nil, err
+		}
+		return cred.TokenSource, nil
+	case CredentialsTypeImpersonation:
+		baseTs, err := initializedBaseTokenSource()
+		if err != nil {
+			return nil, err
+		}
+		ts, err := impersonate.CredentialsTokenSource(ctx, impersonate.CredentialsConfig{
+			TargetPrincipal: c.ImpersonateConfig.TargetServiceAccount,
+			Delegates:       c.ImpersonateConfig.Delegates,
+			Scopes:          []string{cloudPlatformScope}},
+			option.WithTokenSource(baseTs),
+		)
+		return ts, err
+	default:
+		return nil, fmt.Errorf("credentials type unknown: %v", c.Type)
+	}
+}
+
 // syncer synchronizes SpannerAutoscalerStatus.
 type syncer struct {
-	projectID          string
-	instanceID         string
-	serviceAccountJSON []byte
+	projectID   string
+	instanceID  string
+	credentials *Credentials
 
 	ctrlClient    ctrlclient.Client
 	spannerClient spanner.Client
@@ -82,14 +167,19 @@ func New(
 	namespacedName types.NamespacedName,
 	projectID string,
 	instanceID string,
-	serviceAccountJSON []byte,
+	credentials *Credentials,
 	recorder record.EventRecorder,
 	opts ...Option,
 ) (Syncer, error) {
+	ts, err := credentials.TokenSource(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	spannerClient, err := spanner.NewClient(
 		ctx,
 		projectID,
-		spanner.WithCredentialsJSON(serviceAccountJSON),
+		spanner.WithTokenSource(ts),
 	)
 	if err != nil {
 		return nil, err
@@ -98,16 +188,16 @@ func New(
 	metricsClient, err := metrics.NewClient(
 		ctx,
 		projectID,
-		metrics.WithCredentialsJSON(serviceAccountJSON),
+		metrics.WithTokenSource(ts),
 	)
 	if err != nil {
 		return nil, err
 	}
 
 	s := &syncer{
-		projectID:          projectID,
-		instanceID:         instanceID,
-		serviceAccountJSON: serviceAccountJSON,
+		projectID:   projectID,
+		instanceID:  instanceID,
+		credentials: credentials,
 
 		ctrlClient:     ctrlClient,
 		spannerClient:  spannerClient,
@@ -159,7 +249,7 @@ func (s *syncer) Stop() {
 }
 
 // UpdateTarget updates target and returns wether did update or not.
-func (s *syncer) UpdateTarget(projectID, instanceID string, serviceAccountJSON []byte) bool {
+func (s *syncer) UpdateTarget(projectID, instanceID string, credentials *Credentials) bool {
 	updated := false
 
 	if s.projectID != projectID {
@@ -172,9 +262,10 @@ func (s *syncer) UpdateTarget(projectID, instanceID string, serviceAccountJSON [
 		s.instanceID = instanceID
 	}
 
-	if string(s.serviceAccountJSON) != string(serviceAccountJSON) {
+	// TODO: Consider deepCopy
+	if !reflect.DeepEqual(s.credentials, credentials) {
 		updated = true
-		s.serviceAccountJSON = serviceAccountJSON
+		s.credentials = credentials
 	}
 
 	return updated

@@ -47,13 +47,25 @@ type TargetCPUUtilization struct {
 	HighPriority *int32 `json:"highPriority"`
 }
 
+type ImpersonateConfig struct {
+	TargetServiceAccount string `json:"targetServiceAccount"`
+
+	// +kubebuilder:validation:Optional
+	Delegates []string `json:"delegates,omitempty"`
+}
+
 // SpannerAutoscalerSpec defines the desired state of SpannerAutoscaler
 type SpannerAutoscalerSpec struct {
 	// target reference for scaling.
 	ScaleTargetRef ScaleTargetRef `json:"scaleTargetRef"`
 
+	// +kubebuilder:validation:Optional
 	// reference for service account secret.
-	ServiceAccountSecretRef ServiceAccountSecretRef `json:"serviceAccountSecretRef"`
+	// If not specified, use ADC of the controller.
+	ServiceAccountSecretRef *ServiceAccountSecretRef `json:"serviceAccountSecretRef"`
+
+	// +kubebuilder:validation:Optional
+	ImpersonateConfig *ImpersonateConfig `json:"impersonateConfig,omitempty"`
 
 	// +kubebuilder:validation:Minimum=1
 	// lower limit for the number of nodes that can be set by the autoscaler.

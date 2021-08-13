@@ -47,6 +47,7 @@ var (
 	errFetchServiceAccountJSONNoKeySpecified    = errors.New("No key specified")
 	errFetchServiceAccountJSONNoSecretFound     = errors.New("No secret found by specified name")
 	errFetchServiceAccountJSONNoSecretDataFound = errors.New("No secret found by specified key")
+	errInvalidExclusiveCredentials              = errors.New("impersonateConfig and serviceAccountSecretRef are mutually exclusive")
 )
 
 const defaultMaxScaleDownNodes = 2
@@ -163,7 +164,7 @@ func (r *SpannerAutoscalerReconciler) Reconcile(req ctrlreconcile.Request) (ctrl
 
 	log.V(1).Info("resource status", "spannerautoscaler", sa)
 
-	saj, err := r.fetchServiceAccountJSON(ctx, &sa)
+	credentials, err := r.fetchCredentials(ctx, &sa)
 	if err != nil {
 		r.recorder.Event(&sa, corev1.EventTypeWarning, "ServiceAccountRequired", err.Error())
 		log.Error(err, "failed to fetch service account")
@@ -174,7 +175,7 @@ func (r *SpannerAutoscalerReconciler) Reconcile(req ctrlreconcile.Request) (ctrl
 	if !syncerExists {
 		ctx = logging.WithContext(ctx, log)
 
-		if err := r.startSyncer(ctx, nn, *sa.Spec.ScaleTargetRef.ProjectID, *sa.Spec.ScaleTargetRef.InstanceID, saj); err != nil {
+		if err := r.startSyncer(ctx, nn, *sa.Spec.ScaleTargetRef.ProjectID, *sa.Spec.ScaleTargetRef.InstanceID, credentials); err != nil {
 			r.recorder.Event(&sa, corev1.EventTypeWarning, "FailedStartSyncer", err.Error())
 			log.Error(err, "failed to start syncer")
 			return ctrlreconcile.Result{}, err
@@ -183,9 +184,20 @@ func (r *SpannerAutoscalerReconciler) Reconcile(req ctrlreconcile.Request) (ctrl
 		return ctrlreconcile.Result{}, nil
 	}
 
-	// If target spanner instance or service account have been changed, then just update syncer.
-	if s.UpdateTarget(*sa.Spec.ScaleTargetRef.ProjectID, *sa.Spec.ScaleTargetRef.InstanceID, saj) {
-		log.Info("updated syncer", "namespaced name", sa)
+	// If target spanner instance or service account have been changed, then just replace syncer.
+	if s.UpdateTarget(*sa.Spec.ScaleTargetRef.ProjectID, *sa.Spec.ScaleTargetRef.InstanceID, credentials) {
+		s.Stop()
+		r.mu.Lock()
+		delete(r.syncers, nn)
+		r.mu.Unlock()
+
+		if err := r.startSyncer(ctx, nn, *sa.Spec.ScaleTargetRef.ProjectID, *sa.Spec.ScaleTargetRef.InstanceID, credentials); err != nil {
+			r.recorder.Event(&sa, corev1.EventTypeWarning, "FailedStartSyncer", err.Error())
+			log.Error(err, "failed to start syncer")
+			return ctrlreconcile.Result{}, err
+		}
+
+		log.Info("replaced syncer", "namespaced name", sa)
 		return ctrlreconcile.Result{}, nil
 	}
 
@@ -247,10 +259,10 @@ func (r *SpannerAutoscalerReconciler) SetupWithManager(mgr ctrlmanager.Manager) 
 		Complete(r)
 }
 
-func (r *SpannerAutoscalerReconciler) startSyncer(ctx context.Context, nn types.NamespacedName, projectID, instanceID string, serviceAccountJSON []byte) error {
+func (r *SpannerAutoscalerReconciler) startSyncer(ctx context.Context, nn types.NamespacedName, projectID, instanceID string, credentials *syncer.Credentials) error {
 	log := logging.FromContext(ctx)
 
-	s, err := syncer.New(ctx, r.ctrlClient, nn, projectID, instanceID, serviceAccountJSON, r.recorder, syncer.WithLog(log))
+	s, err := syncer.New(ctx, r.ctrlClient, nn, projectID, instanceID, credentials, r.recorder, syncer.WithLog(log))
 	if err != nil {
 		return err
 	}
@@ -330,40 +342,53 @@ func calcDesiredNodes(currentCPU, currentNodes, targetCPU, minNodes, maxNodes, m
 	}
 }
 
-func (r *SpannerAutoscalerReconciler) fetchServiceAccountJSON(ctx context.Context, sa *spannerv1alpha1.SpannerAutoscaler) ([]byte, error) {
+func (r *SpannerAutoscalerReconciler) fetchCredentials(ctx context.Context, sa *spannerv1alpha1.SpannerAutoscaler) (*syncer.Credentials, error) {
 	secretRef := sa.Spec.ServiceAccountSecretRef
+	impersonateConfig := sa.Spec.ImpersonateConfig
 
-	if secretRef.Name == nil || *secretRef.Name == "" {
-		return nil, errFetchServiceAccountJSONNoNameSpecified
+	if secretRef != nil && impersonateConfig != nil {
+		return nil, errInvalidExclusiveCredentials
 	}
 
-	if secretRef.Key == nil || *secretRef.Key == "" {
-		return nil, errFetchServiceAccountJSONNoKeySpecified
-	}
-
-	var namespace string
-	if secretRef.Namespace == nil || *secretRef.Namespace == "" {
-		namespace = sa.Namespace
-	} else {
-		namespace = *secretRef.Namespace
-	}
-
-	var secret corev1.Secret
-	key := ctrlclient.ObjectKey{
-		Name:      *secretRef.Name,
-		Namespace: namespace,
-	}
-	if err := r.apiReader.Get(ctx, key, &secret); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil, errFetchServiceAccountJSONNoSecretFound
+	if secretRef != nil {
+		if secretRef.Name == nil || *secretRef.Name == "" {
+			return nil, errFetchServiceAccountJSONNoNameSpecified
 		}
-		return nil, err
+
+		if secretRef.Key == nil || *secretRef.Key == "" {
+			return nil, errFetchServiceAccountJSONNoKeySpecified
+		}
+
+		var namespace string
+		if secretRef.Namespace == nil || *secretRef.Namespace == "" {
+			namespace = sa.Namespace
+		} else {
+			namespace = *secretRef.Namespace
+		}
+
+		var secret corev1.Secret
+		key := ctrlclient.ObjectKey{
+			Name:      *secretRef.Name,
+			Namespace: namespace,
+		}
+		if err := r.apiReader.Get(ctx, key, &secret); err != nil {
+			if apierrors.IsNotFound(err) {
+				return nil, errFetchServiceAccountJSONNoSecretFound
+			}
+			return nil, err
+		}
+
+		serviceAccountJSON, ok := secret.Data[*secretRef.Key]
+		if !ok {
+			return nil, errFetchServiceAccountJSONNoSecretDataFound
+		}
+
+		return syncer.NewServiceAccountJSONCredentials(serviceAccountJSON), nil
 	}
 
-	serviceAccountJSON, ok := secret.Data[*secretRef.Key]
-	if !ok {
-		return nil, errFetchServiceAccountJSONNoSecretDataFound
+	if impersonateConfig != nil {
+		return syncer.NewServiceAccountImpersonate(impersonateConfig.TargetServiceAccount, impersonateConfig.Delegates), nil
 	}
 
-	return serviceAccountJSON, nil
+	return syncer.NewADCCredentials(), nil
 }

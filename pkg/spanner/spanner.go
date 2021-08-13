@@ -8,6 +8,7 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/go-logr/zapr"
 	"go.uber.org/zap"
+	"golang.org/x/oauth2"
 	"google.golang.org/api/option"
 	instancepb "google.golang.org/genproto/googleapis/spanner/admin/instance/v1"
 	field_mask "google.golang.org/genproto/protobuf/field_mask"
@@ -45,29 +46,17 @@ type client struct {
 
 	projectID string
 
-	useCredentialsFile bool
-	credentialsFile    string
-	useCredentialsJSON bool
-	credentialsJSON    []byte
-
-	log logr.Logger
+	tokenSource oauth2.TokenSource
+	log         logr.Logger
 }
 
 var _ Client = (*client)(nil)
 
 type Option func(*client)
 
-func WithCredentialsFile(path string) Option {
+func WithTokenSource(ts oauth2.TokenSource) Option {
 	return func(c *client) {
-		c.useCredentialsFile = true
-		c.credentialsFile = path
-	}
-}
-
-func WithCredentialsJSON(data []byte) Option {
-	return func(c *client) {
-		c.useCredentialsJSON = true
-		c.credentialsJSON = data
+		c.tokenSource = ts
 	}
 }
 
@@ -90,12 +79,8 @@ func NewClient(ctx context.Context, projectID string, opts ...Option) (Client, e
 
 	var options []option.ClientOption
 
-	if c.useCredentialsFile {
-		options = append(options, option.WithCredentialsFile(c.credentialsFile))
-	}
-
-	if c.useCredentialsJSON {
-		options = append(options, option.WithCredentialsJSON(c.credentialsJSON))
+	if c.tokenSource != nil {
+		options = append(options, option.WithTokenSource(c.tokenSource))
 	}
 
 	spannerInstanceAdminClient, err := spanneradmin.NewInstanceAdminClient(ctx, options...)
