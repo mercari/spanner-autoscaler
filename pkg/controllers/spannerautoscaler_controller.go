@@ -353,6 +353,7 @@ func nextValidProcessingUnits(processingUnits int32) int32 {
 	return ((processingUnits / 1000) + 1) * 1000
 }
 
+// calcDesiredProcessingUnits calculates the values needed to keep CPU utilization below TargetCPU.
 func calcDesiredProcessingUnits(currentCPU, currentProcessingUnits, targetCPU, minProcessingUnits, maxProcessingUnits, maxScaleDownNodes int32) int32 {
 	totalCPUProduct1000 := currentCPU * currentProcessingUnits
 
