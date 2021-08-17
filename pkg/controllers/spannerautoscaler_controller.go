@@ -353,15 +353,21 @@ func nextValidProcessingUnits(processingUnits int32) int32 {
 	return ((processingUnits / 1000) + 1) * 1000
 }
 
+func maxInt32(first int32, rest ...int32) int32 {
+	result := first
+	for _, v := range rest {
+		if result < v {
+			result = v
+		}
+	}
+	return result
+}
+
 // calcDesiredProcessingUnits calculates the values needed to keep CPU utilization below TargetCPU.
 func calcDesiredProcessingUnits(currentCPU, currentProcessingUnits, targetCPU, minProcessingUnits, maxProcessingUnits, maxScaleDownNodes int32) int32 {
 	totalCPUProduct1000 := currentCPU * currentProcessingUnits
 
-	desiredProcessingUnits := nextValidProcessingUnits(totalCPUProduct1000 / targetCPU)
-
-	if (currentProcessingUnits - desiredProcessingUnits) > maxScaleDownNodes*1000 {
-		desiredProcessingUnits = currentProcessingUnits - maxScaleDownNodes*1000
-	}
+	desiredProcessingUnits := maxInt32(nextValidProcessingUnits(totalCPUProduct1000 / targetCPU), currentProcessingUnits - maxScaleDownNodes*1000)
 
 	switch {
 	case desiredProcessingUnits < minProcessingUnits:
