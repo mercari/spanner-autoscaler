@@ -573,6 +573,27 @@ func Test_calcDesiredProcessingUnits(t *testing.T) {
 	}
 }
 
+func TestNextValidProcessingUnits(t *testing.T) {
+	tests := []struct {
+		input int32
+	    want  int32
+	}{
+		{input: 0, want: 100},
+		{input: 99, want: 100},
+		{input: 100, want: 200},
+		{input: 900, want: 1000},
+		{input: 1000, want: 2000},
+		{input: 1999, want: 2000},
+		{input: 2000, want: 3000},
+	}
+	for _, tt := range tests {
+		got := nextValidProcessingUnits(tt.input)
+		if got != tt.want {
+			t.Errorf("TestNextValidProcessingUnits(%v) = %v, want %v", tt.input, got, tt.want)
+		}
+	}
+}
+
 func TestSpannerAutoscalerReconciler_fetchCredentials(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
