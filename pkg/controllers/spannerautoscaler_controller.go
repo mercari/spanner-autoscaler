@@ -341,17 +341,22 @@ func calcDesiredNodes(currentCPU, currentNodes, targetCPU, minNodes, maxNodes, m
 	return calcDesiredProcessingUnits(currentCPU, currentNodes*1000, targetCPU, minNodes*1000, maxNodes*1000, maxScaleDownNodes) / 1000
 }
 
-func roundUpProcessingUnits(processingUnits int32) int32 {
-	if processingUnits >= 1000 {
-		return ((processingUnits / 1000) + 1) * 1000
+// nextValidProcessingUnits finds next valid value in processing units.
+// https://cloud.google.com/spanner/docs/compute-capacity?hl=en
+// Valid values are
+// If processingUnits < 1000, processing units must be multiples of 100.
+// If processingUnits >= 1000, processing units must be multiples of 1000.
+func nextValidProcessingUnits(processingUnits int32) int32 {
+	if processingUnits < 1000 {
+		return ((processingUnits / 100) + 1) * 100
 	}
-	return ((processingUnits / 100) + 1) * 100
+	return ((processingUnits / 1000) + 1) * 1000
 }
 
 func calcDesiredProcessingUnits(currentCPU, currentProcessingUnits, targetCPU, minProcessingUnits, maxProcessingUnits, maxScaleDownNodes int32) int32 {
 	totalCPUProduct1000 := currentCPU * currentProcessingUnits
 
-	desiredProcessingUnits := roundUpProcessingUnits(totalCPUProduct1000 / targetCPU)
+	desiredProcessingUnits := nextValidProcessingUnits(totalCPUProduct1000 / targetCPU)
 
 	if (currentProcessingUnits - desiredProcessingUnits) > maxScaleDownNodes*1000 {
 		desiredProcessingUnits = currentProcessingUnits - maxScaleDownNodes*1000
