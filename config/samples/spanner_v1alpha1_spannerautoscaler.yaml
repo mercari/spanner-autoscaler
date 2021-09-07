@@ -3,13 +3,11 @@ apiVersion: spanner.mercari.com/v1alpha1
 kind: SpannerAutoscaler
 metadata:
   name: spannerautoscaler-sample
-  namespace: test
 spec:
   scaleTargetRef:
     projectId: test-project
     instanceId: test-instance
   serviceAccountSecretRef:
-    namespace: test
     name: spanner-autoscaler-service-account
     key: service-account
   minNodes: 1

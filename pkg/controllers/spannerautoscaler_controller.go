@@ -126,14 +126,12 @@ func NewSpannerAutoscalerReconciler(
 
 // +kubebuilder:rbac:groups=spanner.mercari.com,resources=spannerautoscalers,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=spanner.mercari.com,resources=spannerautoscalers/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=spanner.mercari.com,resources=spannerautoscalers/finalizers,verbs=update
 
 // Reconcile implements ctrlreconcile.Reconciler.
-func (r *SpannerAutoscalerReconciler) Reconcile(req ctrlreconcile.Request) (ctrlreconcile.Result, error) {
+func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlreconcile.Request) (ctrlreconcile.Result, error) {
 	nn := req.NamespacedName
 	log := r.log.WithValues("namespaced name", nn)
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
 
 	r.mu.RLock()
 	s, syncerExists := r.syncers[nn]
@@ -367,7 +365,7 @@ func maxInt32(first int32, rest ...int32) int32 {
 func calcDesiredProcessingUnits(currentCPU, currentProcessingUnits, targetCPU, minProcessingUnits, maxProcessingUnits, maxScaleDownNodes int32) int32 {
 	totalCPUProduct1000 := currentCPU * currentProcessingUnits
 
-	desiredProcessingUnits := maxInt32(nextValidProcessingUnits(totalCPUProduct1000 / targetCPU), currentProcessingUnits - maxScaleDownNodes*1000)
+	desiredProcessingUnits := maxInt32(nextValidProcessingUnits(totalCPUProduct1000/targetCPU), currentProcessingUnits-maxScaleDownNodes*1000)
 
 	switch {
 	case desiredProcessingUnits < minProcessingUnits:

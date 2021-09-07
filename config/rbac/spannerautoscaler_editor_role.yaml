@@ -1,10 +1,8 @@
-
----
+# permissions for end users to edit spannerautoscalers.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  creationTimestamp: null
-  name: manager-role
+  name: spannerautoscaler-editor-role
 rules:
 - apiGroups:
   - spanner.mercari.com
@@ -21,14 +19,6 @@ rules:
 - apiGroups:
   - spanner.mercari.com
   resources:
-  - spannerautoscalers/finalizers
-  verbs:
-  - update
-- apiGroups:
-  - spanner.mercari.com
-  resources:
   - spannerautoscalers/status
   verbs:
   - get
-  - patch
-  - update
