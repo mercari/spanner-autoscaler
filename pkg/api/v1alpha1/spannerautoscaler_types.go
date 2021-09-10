@@ -68,13 +68,28 @@ type SpannerAutoscalerSpec struct {
 	ImpersonateConfig *ImpersonateConfig `json:"impersonateConfig,omitempty"`
 
 	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Optional
 	// lower limit for the number of nodes that can be set by the autoscaler.
-	MinNodes *int32 `json:"minNodes"`
+	MinNodes *int32 `json:"minNodes,omitempty"`
 
 	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Optional
 	// upper limit for the number of nodes that can be set by the autoscaler.
 	// It cannot be smaller than MinNodes.
-	MaxNodes *int32 `json:"maxNodes"`
+	MaxNodes *int32 `json:"maxNodes,omitempty"`
+
+	// +kubebuilder:validation:Minimum=100
+	// +kubebuilder:validation:MultipleOf=100
+	// +kubebuilder:validation:Optional
+	// lower limit for the number of nodes that can be set by the autoscaler.
+	MinProcessingUnits *int32 `json:"minProcessingUnits,omitempty"`
+
+	// +kubebuilder:validation:Minimum=100
+	// +kubebuilder:validation:MultipleOf=100
+	// +kubebuilder:validation:Optional
+	// upper limit for the number of nodes that can be set by the autoscaler.
+	// It cannot be smaller than minProcessingUnits.
+	MaxProcessingUnits *int32 `json:"maxProcessingUnits,omitempty"`
 
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Optional
@@ -110,8 +125,14 @@ type SpannerAutoscalerStatus struct {
 	// current number of nodes of Spanner managed by this autoscaler.
 	CurrentNodes *int32 `json:"currentNodes,omitempty"`
 
+	// current number of nodes of Spanner managed by this autoscaler.
+	CurrentProcessingUnits *int32 `json:"currentProcessingUnits,omitempty"`
+
 	// desired number of nodes of Spanner managed by this autoscaler.
 	DesiredNodes *int32 `json:"desiredNodes,omitempty"`
+
+	// desired number of nodes of Spanner managed by this autoscaler.
+	DesiredProcessingUnits *int32 `json:"desiredProcessingUnits,omitempty"`
 
 	// +kubebuilder:validation:Type=string
 	InstanceState InstanceState `json:"instanceState"`
@@ -127,6 +148,8 @@ type SpannerAutoscalerStatus struct {
 // +kubebuilder:printcolumn:name="Instance Id",type="string",JSONPath=".spec.scaleTargetRef.instanceId"
 // +kubebuilder:printcolumn:name="Min Nodes",type="integer",JSONPath=".spec.minNodes"
 // +kubebuilder:printcolumn:name="Max Nodes",type="integer",JSONPath=".spec.maxNodes"
+// +kubebuilder:printcolumn:name="Min PUs",type="integer",JSONPath=".spec.minProcessingUnits"
+// +kubebuilder:printcolumn:name="Max PUs",type="integer",JSONPath=".spec.maxProcessingUnits"
 // +kubebuilder:printcolumn:name="Target CPU",type="integer",JSONPath=".spec.targetCPUUtilization.highPriority"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 

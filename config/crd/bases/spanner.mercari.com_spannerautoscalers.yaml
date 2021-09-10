@@ -21,6 +21,12 @@ spec:
   - JSONPath: .spec.maxNodes
     name: Max Nodes
     type: integer
+  - JSONPath: .spec.minProcessingUnits
+    name: Min PUs
+    type: integer
+  - JSONPath: .spec.maxProcessingUnits
+    name: Max PUs
+    type: integer
   - JSONPath: .spec.targetCPUUtilization.highPriority
     name: Target CPU
     type: integer
@@ -72,6 +78,12 @@ spec:
               format: int32
               minimum: 1
               type: integer
+            maxProcessingUnits:
+              description: upper limit for the number of nodes that can be set by
+                the autoscaler. It cannot be smaller than minProcessingUnits.
+              format: int32
+              minimum: 100
+              type: integer
             maxScaleDownNodes:
               description: upper limit for the number of nodes when autoscaler scaledown.
               format: int32
@@ -82,6 +94,12 @@ spec:
                 the autoscaler.
               format: int32
               minimum: 1
+              type: integer
+            minProcessingUnits:
+              description: lower limit for the number of nodes that can be set by
+                the autoscaler.
+              format: int32
+              minimum: 100
               type: integer
             scaleTargetRef:
               description: target reference for scaling.
@@ -126,8 +144,6 @@ spec:
               - highPriority
               type: object
           required:
-          - maxNodes
-          - minNodes
           - scaleTargetRef
           - targetCPUUtilization
           type: object
@@ -143,7 +159,15 @@ spec:
               description: current number of nodes of Spanner managed by this autoscaler.
               format: int32
               type: integer
+            currentProcessingUnits:
+              description: current number of nodes of Spanner managed by this autoscaler.
+              format: int32
+              type: integer
             desiredNodes:
+              description: desired number of nodes of Spanner managed by this autoscaler.
+              format: int32
+              type: integer
+            desiredProcessingUnits:
               description: desired number of nodes of Spanner managed by this autoscaler.
               format: int32
               type: integer

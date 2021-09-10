@@ -12,30 +12,30 @@ Spanner Autoscaler is a [Kubernetes Operator](https://coreos.com/operators/) to 
 
 1. Spanner Autoscaler is not tested on our production yet.
 2. Spanner Autoscaler watches `High Priority` CPU utilization only. It doesn't watch `Low Priority` CPU utilization and Rolling average 24 hour utilization.
-It doesn't check the storage size as well. You must take care of these metrics by yourself.
+It doesn't check [the storage size and the number of databases](https://cloud.google.com/spanner/quotas?hl=en#database_limits) as well. You must take care of these metrics by yourself.
 
 ## Overview
 
 [Cloud Spanner](https://cloud.google.com/spanner) is scalable.
-When CPU utilization gets high, we can [reduce CPU utilization by adding new nodes](https://cloud.google.com/spanner/docs/cpu-utilization#reduce).
+When CPU utilization gets high, we can [reduce CPU utilization by increasing compute capacity](https://cloud.google.com/spanner/docs/cpu-utilization?hl=en#add-compute-capacity).
 
-Spanner Autoscaler is created to reconcile Cloud Spanner nodes like [Horizontal Pod Autoscaler](https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/) by configuring `minNodes`, `maxNodes`, and `targetCPUUtilization`.
+Spanner Autoscaler is created to reconcile Cloud Spanner compute capacity like [Horizontal Pod Autoscaler](https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/) by configuring `minNodes`, `maxNodes`, and `targetCPUUtilization`.
 
 ![spanner autoscaler overview diagram](./docs/assets/overview.jpg)
 
-When CPU Utilization(High Priority) is above `taregetCPUUtilization`, Spanner Autoscaler calcurates desired nodes count and increase nodes.
+When CPU Utilization(High Priority) is above `targetCPUUtilization`, Spanner Autoscaler calculates desired compute capacity and increase compute capacity.
 
 ![spanner cpu utilization](./docs/assets/cpu_utilization.png)
 
-![spanner node scale up](./docs/assets/node_scaleup.png)
+![spanner scale up](./docs/assets/node_scaleup.png)
 
-After CPU Utilization gets low, Spanner Autoscaler *doesn't* decrease nodes count immediately.
+After CPU Utilization gets low, Spanner Autoscaler *doesn't* decrease compute capacity immediately.
 
-![spanner node scale down](./docs/assets/node_scaledown.png)
+![spanner scale down](./docs/assets/node_scaledown.png)
 
-Spanner Autoscaler has `Scale Down Interval`(default: 55min) and `Max Scale Down Nodes`(default: 2) to scale down nodes.
-The [pricing of Cloud Spanner](https://cloud.google.com/spanner/pricing) says any nodes that you provision will be billed for a minimum of one hour, so it keep nodes up around 1 hour.
-And if Spanner Autoscaler reduces a lot of nodes at once like 10 -> 1, it will cause a latency increase. It reduces nodes with `maxScaleDownNodes`.
+Spanner Autoscaler has `Scale Down Interval`(default: 55min) and `Max Scale Down Nodes`(default: 2) to scale down compute capacity.
+The [pricing of Cloud Spanner](https://cloud.google.com/spanner/pricing) says any compute capacity that you provision will be billed for a minimum of one hour, so it keep compute capacity up around 1 hour.
+And if Spanner Autoscaler reduces a lot of compute capacity at once like 10000 PU -> 1000 PU, it will cause a latency increase. It reduces compute capacity with `maxScaleDownNodes`.
 
 ## Prerequisite
 
@@ -232,9 +232,13 @@ You need to configure following items
   * `instanceId`: Cloud Spanner Instance ID
 * `serviceAccountSecretRef`: Secret which you created on step 1b.
 * `instanceConfig.targetServiceAccount`: Target service account email which you created on step 1c.
-* `minNodes`: Minimum number of Cloud Spanner nodes.
-* `maxNodes`: Maximum number of Cloud Spanner nodes. It should be higher than `minNodes` and not over [quota](https://cloud.google.com/spanner/quotas).
-* `maxScaleDownNodes`(optional): Maximum number of nodes scale down at once. Default is 2.
+* `minProcessingUnits`: Minimum number of Cloud Spanner processing units of the instance.
+* `minNodes`: It is interpreted as `minProcessingUnits = maxNodes / 1000`
+* `maxProcessingUnits`: Maximum number of Cloud Spanner processing units of the instance.
+  * It should be higher than `minProcessingUnits` and not over [quota](https://cloud.google.com/spanner/quotas).
+* `maxNodes`: It is interpreted as `maxProcessingUnits = maxNodes / 1000`
+* `maxScaleDownNodes`(optional): Maximum number of compute capacity in nodes(1 node equals 1000 processing units) scale down at once. Default is 2.
+  * Note: `maxScaleDownNodes * 1000` is maximum number of processing units scaled down at once.
 * `targetCPUUtilization`: Spanner Autoscaler watches `High Priority` CPU utilization for now. Please read [CPU utilization metrics  \|  Cloud Spanner](https://cloud.google.com/spanner/docs/cpu-utilization) and configure target CPU utilization.
 
 #### Example yaml of 1a. Prepare single Service Account for the controller:

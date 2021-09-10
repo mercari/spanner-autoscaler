@@ -134,6 +134,7 @@ func TestSpannerAutoscalerReconciler_Reconcile(t *testing.T) {
 			want: func() *spannerv1alpha1.SpannerAutoscaler {
 				o := baseObj.DeepCopy()
 				o.Status.DesiredNodes = pointer.Int32(6)
+				o.Status.DesiredProcessingUnits = pointer.Int32(6000)
 				o.Status.InstanceState = spannerv1alpha1.InstanceStateReady
 				o.Status.LastScaleTime = &metav1.Time{Time: fakeTime}
 				return o
@@ -202,7 +203,7 @@ func TestSpannerAutoscalerReconciler_Reconcile(t *testing.T) {
 	}
 }
 
-func TestSpannerAutoscalerReconciler_needCalcNodes(t *testing.T) {
+func TestSpannerAutoscalerReconciler_needCalcProcessingUnits(t *testing.T) {
 	fakeTime := time.Date(2020, 4, 1, 0, 0, 0, 0, time.Local)
 
 	type args struct {
@@ -254,9 +255,9 @@ func TestSpannerAutoscalerReconciler_needCalcNodes(t *testing.T) {
 				clock:             clock.NewFakeClock(fakeTime),
 				log:               zapr.NewLogger(zap.NewNop()),
 			}
-			got := r.needCalcNodes(tt.args.sa)
+			got := r.needCalcProcessingUnits(tt.args.sa)
 			if got != tt.want {
-				t.Errorf("needCalcNodes() got = %v, want %v", got, tt.want)
+				t.Errorf("needCalcProcessingUnits() got = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -310,9 +311,9 @@ func TestSpannerAutoscalerReconciler_needUpdateNodes(t *testing.T) {
 				clock:             clock.NewFakeClock(fakeTime),
 				log:               zapr.NewLogger(zap.NewNop()),
 			}
-			got := r.needUpdateNodes(tt.args.sa, *tt.args.sa.Status.DesiredNodes, fakeTime)
+			got := r.needUpdateProcessingUnits(tt.args.sa, normalizeProcessingUnitsOrNodes(tt.args.sa.Status.DesiredProcessingUnits, tt.args.sa.Status.DesiredNodes), fakeTime)
 			if got != tt.want {
-				t.Errorf("needUpdateNodes() got = %v, want %v", got, tt.want)
+				t.Errorf("needUpdateProcessingUnits() got = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -409,9 +410,187 @@ func Test_calcDesiredNodes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := calcDesiredNodes(tt.args.currentCPU, tt.args.currentNodes, tt.args.targetCPU, tt.args.minNodes, tt.args.maxNodes, tt.args.maxScaleDownNodes); got != tt.want {
-				t.Errorf("calcDesiredNodes() = %v, want %v", got, tt.want)
+				t.Errorf("calcDesiredProcessingUnits() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func Test_calcDesiredProcessingUnits(t *testing.T) {
+	type args struct {
+		currentCPU             int32
+		currentProcessingUnits int32
+		targetCPU              int32
+		minProcessingUnits     int32
+		maxProcessingUnits     int32
+		maxScaleDownNodes      int32
+	}
+	tests := []struct {
+		name string
+		args args
+		want int32
+	}{
+		{
+			name: "scale up",
+			args: args{
+				currentCPU:             50,
+				currentProcessingUnits: 300,
+				targetCPU:              30,
+				minProcessingUnits:     100,
+				maxProcessingUnits:     1000,
+				maxScaleDownNodes:      2,
+			},
+			want: 600,
+		},
+		{
+			name: "scale up 2",
+			args: args{
+				currentCPU:             50,
+				currentProcessingUnits: 3000,
+				targetCPU:              30,
+				minProcessingUnits:     1000,
+				maxProcessingUnits:     10000,
+				maxScaleDownNodes:      2,
+			},
+			want: 6000,
+		},
+		{
+			name: "scale up 3",
+			args: args{
+				currentCPU:             50,
+				currentProcessingUnits: 900,
+				targetCPU:              40,
+				minProcessingUnits:     100,
+				maxProcessingUnits:     5000,
+				maxScaleDownNodes:      2,
+			},
+			want: 2000,
+		},
+		{
+			name: "scale down",
+			args: args{
+				currentCPU:             30,
+				currentProcessingUnits: 500,
+				targetCPU:              50,
+				minProcessingUnits:     100,
+				maxProcessingUnits:     1000,
+				maxScaleDownNodes:      2,
+			},
+			want: 400,
+		},
+		{
+			name: "scale down",
+			args: args{
+				currentCPU:             30,
+				currentProcessingUnits: 5000,
+				targetCPU:              50,
+				minProcessingUnits:     1000,
+				maxProcessingUnits:     10000,
+				maxScaleDownNodes:      2,
+			},
+			want: 4000,
+		},
+		{
+			name: "scale up to max PUs",
+			args: args{
+				currentCPU:             50,
+				currentProcessingUnits: 300,
+				targetCPU:              30,
+				minProcessingUnits:     100,
+				maxProcessingUnits:     400,
+				maxScaleDownNodes:      2,
+			},
+			want: 400,
+		},
+		{
+			name: "scale up to max PUs 2",
+			args: args{
+				currentCPU:             50,
+				currentProcessingUnits: 3000,
+				targetCPU:              30,
+				minProcessingUnits:     1000,
+				maxProcessingUnits:     4000,
+				maxScaleDownNodes:      2,
+			},
+			want: 4000,
+		},
+		{
+			name: "scale down to min PUs",
+			args: args{
+				currentCPU:             0,
+				currentProcessingUnits: 500,
+				targetCPU:              50,
+				minProcessingUnits:     100,
+				maxProcessingUnits:     1000,
+				maxScaleDownNodes:      2,
+			},
+			want: 100,
+		},
+		{
+			name: "scale down to min PUs 2",
+			args: args{
+				currentCPU:             0,
+				currentProcessingUnits: 5000,
+				targetCPU:              50,
+				minProcessingUnits:     1000,
+				maxProcessingUnits:     10000,
+				maxScaleDownNodes:      5,
+			},
+			want: 1000,
+		},
+		{
+			name: "scale down to min PUs",
+			args: args{
+				currentCPU:             0,
+				currentProcessingUnits: 5000,
+				targetCPU:              50,
+				minProcessingUnits:     100,
+				maxProcessingUnits:     10000,
+				maxScaleDownNodes:      5,
+			},
+			want: 100,
+		},
+		{
+			name: "scale down with max scale down nodes",
+			args: args{
+				currentCPU:             30,
+				currentProcessingUnits: 10000,
+				targetCPU:              50,
+				minProcessingUnits:     5000,
+				maxProcessingUnits:     10000,
+				maxScaleDownNodes:      2,
+			},
+			want: 8000,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := calcDesiredProcessingUnits(tt.args.currentCPU, tt.args.currentProcessingUnits, tt.args.targetCPU, tt.args.minProcessingUnits, tt.args.maxProcessingUnits, tt.args.maxScaleDownNodes); got != tt.want {
+				t.Errorf("calcDesiredProcessingUnits() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNextValidProcessingUnits(t *testing.T) {
+	tests := []struct {
+		input int32
+	    want  int32
+	}{
+		{input: 0, want: 100},
+		{input: 99, want: 100},
+		{input: 100, want: 200},
+		{input: 900, want: 1000},
+		{input: 1000, want: 2000},
+		{input: 1999, want: 2000},
+		{input: 2000, want: 3000},
+	}
+	for _, tt := range tests {
+		got := nextValidProcessingUnits(tt.input)
+		if got != tt.want {
+			t.Errorf("TestNextValidProcessingUnits(%v) = %v, want %v", tt.input, got, tt.want)
+		}
 	}
 }
 
