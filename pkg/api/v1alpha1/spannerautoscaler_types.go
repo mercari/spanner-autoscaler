@@ -88,7 +88,7 @@ type SpannerAutoscalerSpec struct {
 	// +kubebuilder:validation:MultipleOf=100
 	// +kubebuilder:validation:Optional
 	// upper limit for the number of nodes that can be set by the autoscaler.
-	// It cannot be smaller than MinProcessingUnits.
+	// It cannot be smaller than minProcessingUnits.
 	MaxProcessingUnits *int32 `json:"maxProcessingUnits,omitempty"`
 
 	// +kubebuilder:validation:Minimum=1

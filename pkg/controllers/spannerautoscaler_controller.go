@@ -294,7 +294,7 @@ func (r *SpannerAutoscalerReconciler) needCalcProcessingUnits(sa *spannerv1alpha
 
 	switch {
 	case sa.Status.CurrentProcessingUnits == nil && sa.Status.CurrentNodes == nil:
-		log.Info("current nodes have not fetched yet")
+		log.Info("current processing units have not fetched yet")
 		return false
 
 	case sa.Status.InstanceState != spanner.StateReady:
