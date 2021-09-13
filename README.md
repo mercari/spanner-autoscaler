@@ -94,17 +94,17 @@ You can configure the controller(`spanner-autoscaler-manager`) to use GKE Worklo
 
 1. Make cluster [to use Workload Identity](https://cloud.google.com/kubernetes-engine/docs/how-to/workload-identity?hl=en#enable_on_cluster).
 2. Create a GCP Service Account for the controller.
-3. Configure Workload Identity between Kubernetes service account of the controller(`spanner-autoscaler/default`) and the GCP service account created in step 2.
+3. Configure Workload Identity between Kubernetes service account of the controller(`spanner-autoscaler/spanner-autoscaler-controller-manager`) and the GCP service account created in step 2.
    1. Allow Kubernetes service account to impersonate the GCP service account by creating an IAM Policy binding
 
       ```sh
-      $ gcloud iam service-accounts add-iam-policy-binding --role roles/iam.workloadIdentityUser --member "serviceAccount:PROJECT_ID.svc.id.goog[spanner-autoscaler/default]" GSA_NAME@PROJECT_ID.iam.gserviceaccount.com`
+      $ gcloud iam service-accounts add-iam-policy-binding --role roles/iam.workloadIdentityUser --member "serviceAccount:PROJECT_ID.svc.id.goog[spanner-autoscaler/spanner-autoscaler-controller-manager]" GSA_NAME@PROJECT_ID.iam.gserviceaccount.com`
       ```
       
    2. Add annotation
 
       ```sh
-      $ kubectl annotate serviceaccount  --namespace spanner-autoscaler default iam.gke.io/gcp-service-account=GSA_NAME@PROJECT_ID.iam.gserviceaccount.com`
+      $ kubectl annotate serviceaccount  --namespace spanner-autoscaler spanner-autoscaler-controller-manager iam.gke.io/gcp-service-account=GSA_NAME@PROJECT_ID.iam.gserviceaccount.com`
       ```
 
 ## Configuration
@@ -164,7 +164,7 @@ There are possible choices of GCP Service Account configurations.
           name: spanner-autoscaler-service-account-reader
         subjects:
           - kind: ServiceAccount
-            name: default
+            name: spanner-autoscaler-controller-manager
             namespace: spanner-autoscaler
         ```
 
@@ -218,7 +218,7 @@ roleRef:
   name: spanner-autoscaler-event-publisher
 subjects:
   - kind: ServiceAccount
-    name: default
+    name: spanner-autoscaler-controller-manager
     namespace: spanner-autoscaler
 ```
 
