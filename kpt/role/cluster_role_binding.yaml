@@ -1,4 +1,3 @@
----
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
@@ -10,4 +9,4 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: default
-  namespace: spanner-autoscaler # {"$ref":"#/definitions/io.k8s.cli.setters.namespace"}
+  namespace: spanner-autoscaler # kpt-set: ${namespace}

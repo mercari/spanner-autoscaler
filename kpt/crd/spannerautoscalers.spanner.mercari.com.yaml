@@ -39,14 +39,10 @@ spec:
       description: SpannerAutoscaler is the Schema for the spannerautoscalers API
       properties:
         apiVersion:
-          description: 'APIVersion defines the versioned schema of this representation
-            of an object. Servers should convert recognized schemas to the latest
-            internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
+          description: 'APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
           type: string
         kind:
-          description: 'Kind is a string value representing the REST resource this
-            object represents. Servers may infer this from the endpoint the client
-            submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
+          description: 'Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
           type: string
         metadata:
           type: object
@@ -54,8 +50,7 @@ spec:
           description: SpannerAutoscalerSpec defines the desired state of SpannerAutoscaler
           properties:
             maxNodes:
-              description: upper limit for the number of nodes that can be set by
-                the autoscaler. It cannot be smaller than MinNodes.
+              description: upper limit for the number of nodes that can be set by the autoscaler. It cannot be smaller than MinNodes.
               format: int32
               minimum: 1
               type: integer
@@ -65,8 +60,7 @@ spec:
               minimum: 1
               type: integer
             minNodes:
-              description: lower limit for the number of nodes that can be set by
-                the autoscaler.
+              description: lower limit for the number of nodes that can be set by the autoscaler.
               format: int32
               minimum: 1
               type: integer
@@ -102,8 +96,7 @@ spec:
               description: target average CPU utilization for Spanner.
               properties:
                 highPriority:
-                  description: fraction of the requested CPU that should be utilized/used,
-                    e.g. 70 means that 70% of the requested CPU should be in use.
+                  description: fraction of the requested CPU that should be utilized/used, e.g. 70 means that 70% of the requested CPU should be in use.
                   format: int32
                   maximum: 100
                   minimum: 0
@@ -122,8 +115,7 @@ spec:
           description: SpannerAutoscalerStatus defines the observed state of SpannerAutoscaler
           properties:
             currentHighPriorityCPUUtilization:
-              description: current average CPU utilization for high priority task,
-                represented as a percentage.
+              description: current average CPU utilization for high priority task, represented as a percentage.
               format: int32
               type: integer
             currentNodes:
@@ -137,9 +129,7 @@ spec:
             instanceState:
               type: string
             lastScaleTime:
-              description: last time the SpannerAutoscaler scaled the number of Spanner
-                nodes. used by the autoscaler to control how often the number of nodes
-                is changed.
+              description: last time the SpannerAutoscaler scaled the number of Spanner nodes. used by the autoscaler to control how often the number of nodes is changed.
               format: date-time
               type: string
             lastSyncTime:

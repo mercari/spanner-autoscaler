@@ -2,11 +2,11 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: spanner-autoscaler-controller-manager
-  namespace: spanner-autoscaler # {"$ref":"#/definitions/io.k8s.cli.setters.namespace"}
+  namespace: spanner-autoscaler # kpt-set: ${namespace}
   labels:
     control-plane: spanner-autoscaler
 spec:
-  replicas: 2 # {"$ref":"#/definitions/io.k8s.cli.setters.replicas"}
+  replicas: 2 # kpt-set: ${replicas}
   selector:
     matchLabels:
       control-plane: spanner-autoscaler
@@ -30,7 +30,7 @@ spec:
         - --metrics-addr=127.0.0.1:8080
         command:
         - /manager
-        image: mercari/spanner-autoscaler:v0.0.1 # {"$ref":"#/definitions/io.k8s.cli.substitutions.image"}
+        image: mercari/spanner-autoscaler:v0.0.1 # kpt-set: mercari/spanner-autoscaler:${version}
         name: manager
         resources:
           limits:
@@ -51,7 +51,7 @@ metadata:
   labels:
     control-plane: spanner-autoscaler
   name: spanner-autoscaler-metrics-service
-  namespace: spanner-autoscaler # {"$ref":"#/definitions/io.k8s.cli.setters.namespace"}
+  namespace: spanner-autoscaler # kpt-set: ${namespace}
 spec:
   ports:
   - name: https
