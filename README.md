@@ -72,20 +72,33 @@ $ kubectl apply -f config/samples/spanner_v1alpha1_spannerautoscaler.yaml
 Spanner Autoscaler can be installed using [KPT](https://github.com/GoogleContainerTools/kpt).
 The installation has 2 steps:
 
-1. Fetch package
-2. Create Custom Resource
+1. Deploy the operator through `kpt`
+2. Create a Custom Resource for managing a spanner instance
 
-#### 1. Fetch package
-
-```
-$ mkdir tmp
-$ kpt pkg get https://github.com/mercari/spanner-autoscaler tmp/
-```
-
-#### 2. Create Custom Resource
+#### 1. Deploy the operator
 
 ```
-$ kubectl apply -R -f tmp/kpt
+$ kpt pkg get https://github.com/mercari/spanner-autoscaler.git/kpt spanner-autoscaler
+
+$ kpt fn eval --image gcr.io/kpt-fn/list-setters:v0.1 spanner-autoscaler
+[RUNNING] "gcr.io/kpt-fn/list-setters:v0.1"
+[PASS] "gcr.io/kpt-fn/list-setters:v0.1"
+  Results:
+    [INFO] Name: namespace, Value: spanner-autoscaler, Type: str, Count: 8
+    [INFO] Name: replicas, Value: 2, Type: int, Count: 1
+    [INFO] Name: version, Value: v0.1.5, Type: str, Count: 1
+
+## Update `spanner-autoscaler/setters.yaml` if you want to change any of the above values
+
+$ kpt fn render --truncate-output=false spanner-autoscaler
+$ kpt live init spanner-autoscaler
+$ kpt live apply spanner-autoscaler
+```
+
+#### 2. Create a Custom Resource
+
+```
+$ kubectl apply -f https://raw.githubusercontent.com/mercari/spanner-autoscaler/master/config/samples/spanner_v1alpha1_spannerautoscaler.yaml
 ```
 
 ### (Optional) Setting GKE Workload Identity
