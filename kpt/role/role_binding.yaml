@@ -1,7 +1,7 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: spanner-autoscaler-leader-election-role-binding
+  name: spanner-autoscaler-leader-election-rolebinding
   namespace: spanner-autoscaler # kpt-set: ${namespace}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
@@ -9,5 +9,5 @@ roleRef:
   name: spanner-autoscaler-leader-election-role
 subjects:
 - kind: ServiceAccount
-  name: default
+  name: spanner-autoscaler-controller-manager
   namespace: spanner-autoscaler # kpt-set: ${namespace}

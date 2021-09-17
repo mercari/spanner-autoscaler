@@ -1,10 +1,16 @@
 apiVersion: kpt.dev/v1
 kind: Kptfile
 metadata:
-  name: kpt
+  name: spanner-autoscaler
 info:
   description: Autoscaler for Google Cloud Spanner
 pipeline:
   mutators:
-  - image: gcr.io/kpt-fn/apply-setters:v0.1
-    configPath: setters.yaml
+    - image: gcr.io/kpt-fn/apply-setters:v0.1
+      configPath: setters.yaml
+  validators:
+    - image: gcr.io/kpt-fn/kubeval:v0.1
+      configMap:
+        ## TODO: remove RBAC resources from skip list after this bug is fixed
+        ## - https://github.com/GoogleContainerTools/kpt/issues/2511
+        skip_kinds: CustomResourceDefinition,ClusterRole,Role,RoleBinding,ClusterRoleBinding
