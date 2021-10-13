@@ -21,15 +21,13 @@ import (
 	"os"
 	"time"
 
-	"github.com/go-logr/zapr"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	ctrlmanager "sigs.k8s.io/controller-runtime/pkg/manager"
 	ctrlsignals "sigs.k8s.io/controller-runtime/pkg/manager/signals"
 
@@ -72,7 +70,6 @@ const (
 )
 
 func main() {
-	flag.Parse()
 
 	if err := run(); err != nil {
 		setupLog.Error(err, "unable to run controller")
@@ -81,31 +78,16 @@ func main() {
 }
 
 func run() error {
-	zapConfig := zap.Config{
-		Level:             zap.NewAtomicLevelAt(zap.InfoLevel),
-		Development:       false,
-		Encoding:          "json",
-		DisableCaller:     true,
-		DisableStacktrace: true,
-		EncoderConfig: zapcore.EncoderConfig{
-			TimeKey:        "timestamp",
-			LevelKey:       "level",
-			NameKey:        "logger",
-			MessageKey:     "message",
-			LineEnding:     zapcore.DefaultLineEnding,
-			EncodeLevel:    zapcore.LowercaseLevelEncoder,
-			EncodeTime:     zapcore.EpochMillisTimeEncoder,
-			EncodeDuration: zapcore.SecondsDurationEncoder,
-		},
-		OutputPaths:      []string{"stdout"},
-		ErrorOutputPaths: []string{"stderr"},
-	}
-	zapLogger, err := zapConfig.Build()
-	if err != nil {
-		return err
+	zapOptions := zap.Options{
+		//TODO: `DestWritter` is deprecated (because of typo).
+		// Switch to `DestWriter` after controller-runtime or kubebuilder version upgrade
+		DestWritter: os.Stdout, // default is os.Stderr
 	}
 
-	log := zapr.NewLogger(zapLogger)
+	zapOptions.BindFlags(flag.CommandLine)
+
+	flag.Parse()
+	log := zap.New(zap.UseFlagOptions(&zapOptions))
 
 	ctrllog.SetLogger(log)
 
