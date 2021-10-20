@@ -55,6 +55,13 @@ The installation has 3 steps:
 $ make install
 ```
 
+> :warning: **Migration from `v0.1.5`:** Names of some resources (`Deployment`, `serviceAccount`,`Role` etc) have changed since version `0.1.5`. Thus, you must first uninstall the old version before installing the new version. To uninstall the old version:
+> ```console
+> $ git checkout v0.1.5
+> $ kustomize build config/default | kubectl delete -f -
+> ```
+> Specifically, the kubernetes service account used for running the spanner-autoscaler has changed from `default` to `spanner-autoscaler-controller-manager`. Please keep this in mind. It is recommended to follow the below configuration steps and re-create any resources if needed.
+
 ### 2. Deploy operator to cluster
 
 ```
