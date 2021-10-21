@@ -54,6 +54,22 @@ test: manifests generate fmt vet ## Run tests.
 	test -f ${ENVTEST_ASSETS_DIR}/setup-envtest.sh || curl -sSLo ${ENVTEST_ASSETS_DIR}/setup-envtest.sh https://raw.githubusercontent.com/kubernetes-sigs/controller-runtime/v0.8.3/hack/setup-envtest.sh
 	source ${ENVTEST_ASSETS_DIR}/setup-envtest.sh; fetch_envtest_tools $(ENVTEST_ASSETS_DIR); setup_envtest_env $(ENVTEST_ASSETS_DIR); go test ./... -coverprofile cover.out
 
+kind-cluster: kind-cluster-create ## Deploy RBAC resources to kindd cluster for development
+	kubectl apply -f kind
+	kubectl apply -f kind/rbac
+
+KIND_CLUSTER_NAME = spanner-autoscaler
+kind-cluster-create: kind ## Create a kind cluster for development
+	@if [ -z $(shell $(KIND) get clusters | grep $(KIND_CLUSTER_NAME)) ]; then \
+	  $(KIND) create cluster --name $(KIND_CLUSTER_NAME); \
+	fi
+	kubectl config use-context kind-$(KIND_CLUSTER_NAME)
+
+kind-cluster-delete: kind ## Delete the kind cluster created for development
+	@$(KIND) delete cluster --name $(KIND_CLUSTER_NAME)
+
+kind-cluster-reset: kind kind-cluster-delete kind-cluster-create kind-cluster ## Recreate the kind cluster for development
+
 ##@ Build
 
 build: generate fmt vet ## Build manager binary.
@@ -92,6 +108,12 @@ KUSTOMIZE = $(shell pwd)/bin/kustomize
 kustomize: ## Download kustomize locally if necessary.
 	$(call go-get-tool,$(KUSTOMIZE),sigs.k8s.io/kustomize/kustomize/v3@v3.8.7)
 
+KIND = $(shell pwd)/bin/kind
+.PHONY: kind
+kind: ## Downlaod 'kind' locally if necessary
+	$(call go-get-tool,$(KIND),sigs.k8s.io/kind@v0.11.1)
+
+
 # go-get-tool will 'go get' any package $2 and install it to $1.
 PROJECT_DIR := $(shell dirname $(abspath $(lastword $(MAKEFILE_LIST))))
 define go-get-tool
@@ -105,3 +127,4 @@ GOBIN=$(PROJECT_DIR)/bin go get $(2) ;\
 rm -rf $$TMP_DIR ;\
 }
 endef
+

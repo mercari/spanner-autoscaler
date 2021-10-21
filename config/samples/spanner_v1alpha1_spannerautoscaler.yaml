@@ -3,6 +3,7 @@ apiVersion: spanner.mercari.com/v1alpha1
 kind: SpannerAutoscaler
 metadata:
   name: spannerautoscaler-sample
+  namespace: test
 spec:
   scaleTargetRef:
     projectId: test-project
