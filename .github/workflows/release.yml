@@ -1,69 +1,88 @@
 name: Create Release
 
 on:
+  workflow_call:
+    inputs:
+      version:
+        description: The semantic tag version against which the release will be created
+        required: true
+        type: string
   push:
-    branches:
-      - master
+    tags:
+      - v*
 
 jobs:
-  release:
+  create-release:
     runs-on: ubuntu-18.04
     steps:
-      - uses: actions/checkout@v2
+      - name: Checkout
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0 ## Required for goreleaser - https://goreleaser.com/ci/actions/#usage
 
-      - uses: actions-ecosystem/action-get-merged-pull-request@v1
+      - name: Extract Current Tag
+        run: |
+          current=${GITHUB_REF#refs/tags/}
+          if [ -n $CURRENT_TAG ]; then
+            current=$CURRENT_TAG
+          fi
+          echo "::set-output name=tag::${CURRENT_TAG}"
+        id: current-tag
+        env:
+          CURRENT_TAG: ${{ inputs.version }}
+
+      - name: Extract Repository Name
+        run: echo "::set-output name=repository-name::${GITHUB_REPOSITORY#*/}"
+        id: repository-name
+
+      ## Get the automatically generated release notes
+      ## Ref: https://docs.github.com/en/repositories/releasing-projects-on-github/automatically-generated-release-notes#example-configuration
+      - name: Generate Release Notes
+        uses: octokit/request-action@v2.x
+        id: get-release-notes
+        with:
+          route: POST /repos/{owner}/{repo}/releases/generate-notes
+          repo: ${{ steps.repository-name.outputs.repository-name }}
+          owner: ${{ github.repository_owner }}
+          tag_name: ${{ steps.current-tag.outputs.tag }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Save Release Notes To File
+        run: echo "${{ fromJson(steps.get-release-notes.outputs.data).body }}" > $RUNNER_TEMP/changelog.md
+
+      - name: Create Github Release
+        uses: goreleaser/goreleaser-action@v2
+        with:
+          args: release --rm-dist --release-notes ${{ runner.temp }}/changelog.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v1
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v2
+        with:
+          push: true
+          tags: |
+            mercari/spanner-autoscaler:latest
+            mercari/spanner-autoscaler:${{ steps.current-tag.outputs.tag }}
+
+      - name: Get Merged Pull Request
+        uses: actions-ecosystem/action-get-merged-pull-request@v1
         id: get-merged-pull-request
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: actions-ecosystem/action-release-label@v1
-        id: release-label
-        if: ${{ steps.get-merged-pull-request.outputs.title != null }}
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          labels: ${{ steps.get-merged-pull-request.outputs.labels }}
-
-      - uses: actions-ecosystem/action-get-latest-tag@v1
-        id: get-latest-tag
-        if: ${{ steps.release-label.outputs.level != null }}
-        with:
-          semver_only: true
-
-      - uses: actions-ecosystem/action-bump-semver@v1
-        id: bump-semver
-        if: ${{ steps.release-label.outputs.level != null }}
-        with:
-          current_version: ${{ steps.get-latest-tag.outputs.tag }}
-          level: ${{ steps.release-label.outputs.level }}
-
-      - uses: actions-ecosystem/action-push-tag@v1
-        if: ${{ steps.bump-semver.outputs.new_version != null }}
-        with:
-          tag: ${{ steps.bump-semver.outputs.new_version }}
-          message: "${{ steps.bump-semver.outputs.new_version }}: PR #${{ steps.get-merged-pull-request.outputs.number }} ${{ steps.get-merged-pull-request.outputs.title }}"
-
-      - uses: goreleaser/goreleaser-action@v2
-        if: ${{ steps.release-label.outputs.level == 'major' || steps.release-label.outputs.level == 'minor' || steps.release-label.outputs.level == 'patch' }}
-        with:
-          version: v0.143.0
-          args: release --rm-dist
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: docker/build-push-action@v1
-        if: ${{ steps.bump-semver.outputs.new_version != null }}
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
-          repository: mercari/spanner-autoscaler
-          tags: "latest,${{ steps.bump-semver.outputs.new_version }}"
-
-      - uses: actions-ecosystem/action-create-comment@v1
-        if: ${{ steps.bump-semver.outputs.new_version != null }}
+      - name: Comment on Pull Request
+        uses: actions-ecosystem/action-create-comment@v1
+        if: ${{ steps.get-merged-pull-request.outputs.number != null }}
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           number: ${{ steps.get-merged-pull-request.outputs.number }}
           body: |
-            The new version [${{ steps.bump-semver.outputs.new_version }}](https://github.com/${{ github.repository }}/releases/tag/${{ steps.bump-semver.outputs.new_version }}) has been released :tada:
-
-            Changes: https://github.com/${{ github.repository }}/compare/${{ steps.get-latest-tag.outputs.tag }}...${{ steps.bump-semver.outputs.new_version }}
+            A new github release with version [${{ steps.current-tag.outputs.tag }}](https://github.com/${{ github.repository }}/releases/tag/${{ steps.current-tag.outputs.tag }}) has been created! :tada:
