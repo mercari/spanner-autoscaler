@@ -98,7 +98,7 @@ $ kustomize build spanner-autoscaler/kpt | kpt live destroy -
 #### 2. Create a Custom Resource
 
 ```console
-$ kubectl apply -f https://raw.githubusercontent.com/mercari/spanner-autoscaler/master/config/samples/spanner_v1alpha1_spannerautoscaler.yaml
+$ kubectl apply -f spanner-autoscaler/samples/spanner_v1alpha1_spannerautoscaler.yaml
 ```
 
 ### (Optional) Setting GKE Workload Identity
