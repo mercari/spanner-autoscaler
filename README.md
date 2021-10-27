@@ -210,40 +210,7 @@ You can define and use the least privileged [custom roles](https://cloud.google.
     * `monitoring.timeSeries.list`
 
 
-### 2. Create Kubernetes Role and RoleBinding for publish events
-
-Add Role and RoleBinding to allow Spanner Autoscaler publish Events into the namespace like below:
-
-```yaml
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  namespace: your-namespace
-  name: spanner-autoscaler-event-publisher
-rules:
-  - apiGroups: [""]
-    resources: ["events"]
-    verbs: ["create", "patch"]
-
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  namespace: your-namespace
-  name: spanner-autoscaler-event-publisher
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: spanner-autoscaler-event-publisher
-subjects:
-  - kind: ServiceAccount
-    name: spanner-autoscaler-controller-manager
-    namespace: spanner-autoscaler
-```
-
-
-### 3. Create SpannerAutoscaler resource
+### 2. Create SpannerAutoscaler resource
 
 You need to configure following items
 
