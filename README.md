@@ -155,40 +155,6 @@ There are possible choices of GCP Service Account configurations.
     $ kubectl create secret generic spanner-autoscaler-service-account --from-file=service-account=./service-account-key.json -n your-namespace
     ```
    
-5. Create Kubernetes Role and RoleBinding to read the secret
-
-    * Add Role and RoleBinding to allow Spanner Autoscaler to read the service account secret like below:
-
-        ```yaml
-        ---
-        apiVersion: rbac.authorization.k8s.io/v1
-        kind: Role
-        metadata:
-          namespace: your-namespace
-          name: spanner-autoscaler-service-account-reader
-        rules:
-          - apiGroups: [""]
-            resources: ["secrets"]
-            verbs: ["get"]
-            resourceNames: ["spanner-autoscaler-service-account"]
-        
-        ---
-        apiVersion: rbac.authorization.k8s.io/v1
-        kind: RoleBinding
-        metadata:
-          namespace: your-namespace
-          name: spanner-autoscaler-service-account-reader
-        roleRef:
-          apiGroup: rbac.authorization.k8s.io
-          kind: Role
-          name: spanner-autoscaler-service-account-reader
-        subjects:
-          - kind: ServiceAccount
-            name: spanner-autoscaler-controller-manager
-            namespace: spanner-autoscaler
-        ```
-
-
 #### 1c. Prepare Service Account for each SpannerAutoscaler using Workload Identity and impersonation
 
 1. Create a GCP service account for SpannerAutoscaler instance(tenant service account).
