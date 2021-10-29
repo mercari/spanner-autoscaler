@@ -1,9 +1,15 @@
-bin/
-config/
-.git/
-hack/
-.gitignore
-LICENSE
-Makefile
-PROJECT
-README.md
+# More info: https://docs.docker.com/engine/reference/builder/#dockerignore-file
+
+# NOTE: The exclusion syntax using `!` does not work as expected
+# Ref:
+#   - https://github.com/moby/moby/issues/30018
+#   - https://github.com/kubernetes-sigs/kubebuilder/issues/2073
+
+# Ignore all files
+**
+
+# Only include Go files
+!pkg
+!cmd
+!go.mod
+!go.sum

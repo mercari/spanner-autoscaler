@@ -9,7 +9,6 @@ spec:
     projectId: test-project
     instanceId: test-instance
   serviceAccountSecretRef:
-    namespace: test
     name: spanner-autoscaler-service-account
     key: service-account
   minNodes: 1

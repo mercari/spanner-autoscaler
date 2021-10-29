@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
@@ -44,29 +45,28 @@ var (
 
 func init() {
 	//nolint:errcheck
-	clientgoscheme.AddToScheme(scheme)
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
 	//nolint:errcheck
-	spannerv1alpha1.AddToScheme(scheme)
+	utilruntime.Must(spannerv1alpha1.AddToScheme(scheme))
 
 	// +kubebuilder:scaffold:scheme
 }
 
 var (
-	metricsAddr       = flag.String("metrics-addr", "localhost:8090", "The address the metric endpoint binds to.")
-	healthzAddr       = flag.String("healthz-addr", "localhost:8091", "The address the healthz endpoint binds to.")
-	scaleDownInterval = flag.Duration("scale-down-interval", 55*time.Minute, "The scale down interval.")
+	metricsAddr          = flag.String("metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
+	probeAddr            = flag.String("health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
+	enableLeaderElection = flag.Bool("leader-elect", false, "Enable leader election for controller manager. Enabling this will ensure there is only one active controller manager.")
+	scaleDownInterval    = flag.Duration("scale-down-interval", 55*time.Minute, "The scale down interval.")
 )
 
 const (
-	exitCode             = 1
-	enableLeaderElection = true
-	leaderElectionID     = "spanner-autoscaler-leader-election"
-
-	healthzEndpoint = "/healthz"
-	readyzEndpoint  = "/readyz"
-	healthzName     = "healthz"
-	readyzName      = "readyz"
+	exitCode         = 1
+	leaderElectionID = "spanner-autoscaler-leader-election"
+	healthzEndpoint  = "/healthz"
+	readyzEndpoint   = "/readyz"
+	healthzName      = "healthz"
+	readyzName       = "readyz"
 )
 
 func main() {
@@ -94,7 +94,7 @@ func run() error {
 	log.V(1).Info(
 		"flags",
 		"metricsAddr", metricsAddr,
-		"helthzAddr", healthzAddr,
+		"probeAddr", probeAddr,
 		"scaleDownInterval", scaleDownInterval,
 	)
 
@@ -105,10 +105,10 @@ func run() error {
 
 	mgr, err := ctrlmanager.New(cfg, ctrlmanager.Options{
 		Scheme:                 scheme,
-		LeaderElection:         enableLeaderElection,
+		LeaderElection:         *enableLeaderElection,
 		LeaderElectionID:       leaderElectionID,
 		MetricsBindAddress:     *metricsAddr,
-		HealthProbeBindAddress: *healthzAddr,
+		HealthProbeBindAddress: *probeAddr,
 		ReadinessEndpointName:  readyzEndpoint,
 		LivenessEndpointName:   healthzEndpoint,
 	})

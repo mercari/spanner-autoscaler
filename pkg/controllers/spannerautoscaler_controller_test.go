@@ -175,7 +175,7 @@ func TestSpannerAutoscalerReconciler_Reconcile(t *testing.T) {
 				WithClock(clock.NewFakeClock(fakeTime)),
 			)
 
-			res, err := r.Reconcile(ctrlreconcile.Request{
+			res, err := r.Reconcile(ctx, ctrlreconcile.Request{
 				NamespacedName: namespacedName,
 			})
 			if (err != nil) != tt.wantErr {
@@ -576,7 +576,7 @@ func Test_calcDesiredProcessingUnits(t *testing.T) {
 func TestNextValidProcessingUnits(t *testing.T) {
 	tests := []struct {
 		input int32
-	    want  int32
+		want  int32
 	}{
 		{input: 0, want: 100},
 		{input: 99, want: 100},
