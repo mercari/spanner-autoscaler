@@ -76,23 +76,36 @@ $ kubectl apply -f config/samples/spanner_v1alpha1_spannerautoscaler.yaml
 
 ### KPT
 
-Spanner Autoscaler can be installed using [KPT](https://github.com/GoogleContainerTools/kpt).
+Spanner Autoscaler can be installed using [KPT](https://kpt.dev/installation/).
 The installation has 2 steps:
 
-1. Fetch package
-2. Create Custom Resource
+1. Deploy the operator through `kpt`
+2. Create a Custom Resource for managing a spanner instance
 
-#### 1. Fetch package
+#### 1. Deploy the operator
 
+```console
+$ kpt pkg get https://github.com/mercari/spanner-autoscaler/config@v0.1 spanner-autoscaler
+$ kpt live init spanner-autoscaler/kpt
+$ kpt live install-resource-group
+
+## Append '--dry-run' to the below line to just 
+## check the resources which will be created
+$ kustomize build spanner-autoscaler/kpt | kpt live apply -
+
+## To uninstall, use the following
+$ kustomize build spanner-autoscaler/kpt | kpt live destroy -
 ```
-$ mkdir tmp
-$ kpt pkg get https://github.com/mercari/spanner-autoscaler tmp/
-```
+> :information_source: **TIP:** Instead of `kpt`, you can also use `kubectl` directly to apply the resources with 
+>   ```console
+>   $ kustomize build spanner-autoscaler/default | kubectl apply -f -
+>   ```
+> These resources can then be adopted by `kpt` by using the `--inventory-policy=adopt` flag while using `kpt live apply` command. [More info](https://kpt.dev/reference/cli/live/apply/?id=flags).
 
-#### 2. Create Custom Resource
+#### 2. Create a Custom Resource
 
-```
-$ kubectl apply -R -f tmp/kpt
+```console
+$ kubectl apply -f spanner-autoscaler/samples/spanner_v1alpha1_spannerautoscaler.yaml
 ```
 
 ### (Optional) Setting GKE Workload Identity
