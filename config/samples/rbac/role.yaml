@@ -1,0 +1,26 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: spanner-autoscaller-service-account-reader
+  namespace: test
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+    resourceNames: ["spanner-autoscaler-service-account"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: spanner-autoscaller-service-account-reader
+  namespace: test
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: spanner-autoscaller-service-account-reader
+subjects:
+  - kind: ServiceAccount
+    name: spanner-autoscaler-controller-manager
+    namespace: spanner-autoscaler

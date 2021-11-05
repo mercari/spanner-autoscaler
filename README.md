@@ -154,6 +154,7 @@ There are possible choices of GCP Service Account configurations.
     ```sh
     $ kubectl create secret generic spanner-autoscaler-service-account --from-file=service-account=./service-account-key.json -n your-namespace
     ```
+> :information_source: At deployment time, if you do not wish to provide `spanner-autoscaler` access to cluster wide secrets, then you can choose to uncomment [this patch section](https://github.com/mercari/spanner-autoscaler/blob/rbac-optimize-test/config/rbac/kustomization.yaml#L23-L31). You can then create a separate `Role` and `RoleBinding` in your namespace and restrict the access of `spanner-autoscaler` to only specific secrets. An example of this can be found in [examples](/config/samples/rbac/role.yaml).
    
 #### 1c. Prepare Service Account for each SpannerAutoscaler using Workload Identity and impersonation
 
