@@ -23,10 +23,10 @@ jobs:
       - name: Extract Current Tag
         run: |
           current=${GITHUB_REF#refs/tags/}
-          if [ -n $CURRENT_TAG ]; then
+          if [[ -n $CURRENT_TAG ]]; then
             current=$CURRENT_TAG
           fi
-          echo "::set-output name=tag::${CURRENT_TAG}"
+          echo "::set-output name=tag::$current"
         id: current-tag
         env:
           CURRENT_TAG: ${{ inputs.version }}
