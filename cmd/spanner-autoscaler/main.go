@@ -44,10 +44,8 @@ var (
 )
 
 func init() {
-	//nolint:errcheck
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
-	//nolint:errcheck
 	utilruntime.Must(spannerv1alpha1.AddToScheme(scheme))
 
 	// +kubebuilder:scaffold:scheme
@@ -70,7 +68,6 @@ const (
 )
 
 func main() {
-
 	if err := run(); err != nil {
 		setupLog.Error(err, "unable to run controller")
 		os.Exit(exitCode)
@@ -79,7 +76,7 @@ func main() {
 
 func run() error {
 	zapOptions := zap.Options{
-		//TODO: `DestWritter` is deprecated (because of typo).
+		// TODO: `DestWritter` is deprecated (because of typo).
 		// Switch to `DestWriter` after controller-runtime or kubebuilder version upgrade
 		DestWritter: os.Stdout, // default is os.Stderr
 	}
@@ -134,7 +131,7 @@ func run() error {
 		controllers.WithScaleDownInterval(*scaleDownInterval),
 	)
 
-	if err = r.SetupWithManager(mgr); err != nil {
+	if err := r.SetupWithManager(mgr); err != nil {
 		return err
 	}
 	// +kubebuilder:scaffold:builder
