@@ -54,10 +54,6 @@ test: manifests generate fmt vet ## Run tests.
 	test -f ${ENVTEST_ASSETS_DIR}/setup-envtest.sh || curl -sSLo ${ENVTEST_ASSETS_DIR}/setup-envtest.sh https://raw.githubusercontent.com/kubernetes-sigs/controller-runtime/v0.8.3/hack/setup-envtest.sh
 	source ${ENVTEST_ASSETS_DIR}/setup-envtest.sh; fetch_envtest_tools $(ENVTEST_ASSETS_DIR); setup_envtest_env $(ENVTEST_ASSETS_DIR); go test ./... -coverprofile cover.out
 
-kind-cluster: kind-cluster-create ## Deploy RBAC resources to kindd cluster for development
-	kubectl apply -f kind
-	kubectl apply -f kind/rbac
-
 KIND_CLUSTER_NAME = spanner-autoscaler
 kind-cluster-create: kind ## Create a kind cluster for development
 	@if [ -z $(shell $(KIND) get clusters | grep $(KIND_CLUSTER_NAME)) ]; then \
@@ -68,7 +64,7 @@ kind-cluster-create: kind ## Create a kind cluster for development
 kind-cluster-delete: kind ## Delete the kind cluster created for development
 	@$(KIND) delete cluster --name $(KIND_CLUSTER_NAME)
 
-kind-cluster-reset: kind kind-cluster-delete kind-cluster-create kind-cluster ## Recreate the kind cluster for development
+kind-cluster-reset: kind-cluster-delete kind-cluster-create ## Recreate the kind cluster for development
 
 ##@ Build
 
@@ -109,7 +105,6 @@ kustomize: ## Download kustomize locally if necessary.
 	$(call go-get-tool,$(KUSTOMIZE),sigs.k8s.io/kustomize/kustomize/v3@v3.8.7)
 
 KIND = $(shell pwd)/bin/kind
-.PHONY: kind
 kind: ## Downlaod 'kind' locally if necessary
 	$(call go-get-tool,$(KIND),sigs.k8s.io/kind@v0.11.1)
 

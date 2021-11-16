@@ -71,7 +71,7 @@ $ make deploy
 ### 3. Create Custom Resource
 
 ```
-$ kubectl apply -f config/samples/spanner_v1alpha1_spannerautoscaler.yaml
+$ kubectl apply -f config/samples
 ```
 
 ### KPT
@@ -85,7 +85,7 @@ The installation has 2 steps:
 #### 1. Deploy the operator
 
 ```console
-$ kpt pkg get https://github.com/mercari/spanner-autoscaler/config@v0.1 spanner-autoscaler
+$ kpt pkg get https://github.com/mercari/spanner-autoscaler/config spanner-autoscaler
 $ kpt live init spanner-autoscaler/kpt
 $ kpt live install-resource-group
 
@@ -152,43 +152,10 @@ There are possible choices of GCP Service Account configurations.
 4. Create Kubernetes Secret for the service account like below:
 
     ```sh
-    $ kubectl create secret generic spanner-autoscaler-service-account --from-file=service-account=./service-account-key.json -n your-namespace
+    $ kubectl create secret generic spanner-autoscaler-gcp-sa --from-file=service-account=./service-account-key.json -n your-namespace
     ```
+> :information_source: By default, `spanner-autoscaler` will have read access to `secret`s named `spanner-autoscaler-gcp-sa` in any namespace. If you wish to use a different name for your secret, then you need to explicitly create a `Role` and a `RoleBinding` ([example](/config/samples/rbac/role.yaml)) in your namespace. This will provide `spanner-autoscaler` with read access to any secret of your choice.
    
-5. Create Kubernetes Role and RoleBinding to read the secret
-
-    * Add Role and RoleBinding to allow Spanner Autoscaler to read the service account secret like below:
-
-        ```yaml
-        ---
-        apiVersion: rbac.authorization.k8s.io/v1
-        kind: Role
-        metadata:
-          namespace: your-namespace
-          name: spanner-autoscaler-service-account-reader
-        rules:
-          - apiGroups: [""]
-            resources: ["secrets"]
-            verbs: ["get"]
-            resourceNames: ["spanner-autoscaler-service-account"]
-        
-        ---
-        apiVersion: rbac.authorization.k8s.io/v1
-        kind: RoleBinding
-        metadata:
-          namespace: your-namespace
-          name: spanner-autoscaler-service-account-reader
-        roleRef:
-          apiGroup: rbac.authorization.k8s.io
-          kind: Role
-          name: spanner-autoscaler-service-account-reader
-        subjects:
-          - kind: ServiceAccount
-            name: spanner-autoscaler-controller-manager
-            namespace: spanner-autoscaler
-        ```
-
-
 #### 1c. Prepare Service Account for each SpannerAutoscaler using Workload Identity and impersonation
 
 1. Create a GCP service account for SpannerAutoscaler instance(tenant service account).
@@ -210,40 +177,7 @@ You can define and use the least privileged [custom roles](https://cloud.google.
     * `monitoring.timeSeries.list`
 
 
-### 2. Create Kubernetes Role and RoleBinding for publish events
-
-Add Role and RoleBinding to allow Spanner Autoscaler publish Events into the namespace like below:
-
-```yaml
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  namespace: your-namespace
-  name: spanner-autoscaler-event-publisher
-rules:
-  - apiGroups: [""]
-    resources: ["events"]
-    verbs: ["create", "patch"]
-
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  namespace: your-namespace
-  name: spanner-autoscaler-event-publisher
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: spanner-autoscaler-event-publisher
-subjects:
-  - kind: ServiceAccount
-    name: spanner-autoscaler-controller-manager
-    namespace: spanner-autoscaler
-```
-
-
-### 3. Create SpannerAutoscaler resource
+### 2. Create SpannerAutoscaler resource
 
 You need to configure following items
 
@@ -296,7 +230,7 @@ spec:
     instanceId: your-spanner-instance-id
   serviceAccountSecretRef:
     namespace: your-namespace
-    name: spanner-autoscaler-service-account
+    name: spanner-autoscaler-gcp-sa
     key: service-account
   minNodes: 1
   maxNodes: 4
@@ -329,7 +263,7 @@ spec:
 
 ## CRD
 
-See [example](./config/samples/spanner-autoscaler.yaml) and [crd](./config/crd/bases/spanner.mercari.com_spannerautoscalers.yaml).
+See [example](./config/samples/spanner_v1alpha1_spannerautoscaler.yaml) and [crd](./config/crd/bases/spanner.mercari.com_spannerautoscalers.yaml).
 
 ## Development
 

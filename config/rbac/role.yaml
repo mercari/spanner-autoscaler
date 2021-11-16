@@ -7,6 +7,21 @@ metadata:
   name: manager-role
 rules:
 - apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - ""
+  resourceNames:
+  - spanner-autoscaler-gcp-sa
+  resources:
+  - secrets
+  verbs:
+  - get
+- apiGroups:
   - spanner.mercari.com
   resources:
   - spannerautoscalers

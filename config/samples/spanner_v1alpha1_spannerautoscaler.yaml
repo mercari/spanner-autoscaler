@@ -9,7 +9,7 @@ spec:
     projectId: test-project
     instanceId: test-instance
   serviceAccountSecretRef:
-    name: spanner-autoscaler-service-account
+    name: spanner-autoscaler-gcp-sa
     key: service-account
   minNodes: 1
   maxNodes: 4
