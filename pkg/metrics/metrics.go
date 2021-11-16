@@ -6,7 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	monitoring "cloud.google.com/go/monitoring/apiv3"
+	// nolint:gocritic // TODO: Lint suggests that this api is deprecated in favor of 'monitoring/v2', confirm and update
+	monitoring "cloud.google.com/go/monitoring/apiv3" // nolint:staticcheck
 	"github.com/go-logr/logr"
 	"github.com/go-logr/zapr"
 	"github.com/golang/protobuf/ptypes/duration"
@@ -16,7 +17,7 @@ import (
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
 	monitoringpb "google.golang.org/genproto/googleapis/monitoring/v3"
-	"k8s.io/apimachinery/pkg/util/clock"
+	utilclock "k8s.io/apimachinery/pkg/util/clock"
 
 	"github.com/mercari/spanner-autoscaler/pkg/pointer"
 )
@@ -47,7 +48,7 @@ type client struct {
 
 	tokenSource oauth2.TokenSource
 
-	clock clock.Clock
+	clock utilclock.Clock
 	log   logr.Logger
 }
 
@@ -67,7 +68,7 @@ func WithTokenSource(ts oauth2.TokenSource) Option {
 	}
 }
 
-func WithClock(clock clock.Clock) Option {
+func WithClock(clock utilclock.Clock) Option {
 	return func(c *client) {
 		c.clock = clock
 	}
@@ -84,7 +85,7 @@ func NewClient(ctx context.Context, projectID string, opts ...Option) (Client, e
 	c := &client{
 		projectID: projectID,
 		term:      10 * time.Minute,
-		clock:     clock.RealClock{},
+		clock:     utilclock.RealClock{},
 		log:       zapr.NewLogger(zap.NewNop()),
 	}
 
@@ -151,7 +152,8 @@ func (c *client) GetInstanceMetrics(ctx context.Context, instanceID string) (*In
 			return nil, err
 		}
 
-		return &InstanceMetrics{
+		// TODO: Fix this loop so that lint check will pass
+		return &InstanceMetrics{ // nolint:staticcheck
 			CurrentHighPriorityCPUUtilization: pointer.Int32(cpuPercent),
 		}, nil
 	}

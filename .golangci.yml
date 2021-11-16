@@ -1,80 +1,121 @@
----
-service:
-  golangci-lint-version: 1.21.x
-run:
-  deadline: 5m
+# golangci-lint configuration file
+# see: https://github.com/golangci/golangci/wiki/Configuration
 
+# Options for analysis running
+run:
+  # Which dirs to skip: they won't be analyzed;
+  # Can use regexp here: generated.*, regexp is applied on full path;
+  # Default value is empty list, but next dirs are always skipped independently
+  # From this option's value:
+  #   	vendor$, third_party$, testdata$, examples$, Godeps$, builtin$
   skip-dirs:
-    - vendor$
+    - bin
 
   skip-files:
-    - ".*\\.pb\\.go"
-    - ".*\\.mock\\.go"
-    - ".*(.|_)gen\\.go"
+    - ".*_test.go"
 
-linters:
-  enable-all: true
-  disable:
-    - depguard
-    - dupl
-    - gochecknoglobals
-    - gochecknoinits
-    - goconst
-    - gocyclo
-    - gomnd
-    - gosec
-    - nakedret
-    - maligned
-    - prealloc
-    - scopelint
-    - funlen
-    - wsl
-    - godox
-    - stylecheck
-  fast: false
+  timeout: 10m
 
+# All available settings of specific linters
 linters-settings:
-  errcheck:
-    check-type-assertions: false
-    check-blank: true
-    exclude: .errcheckignore
+
   govet:
-    check-shadowing: false
+    # Report about shadowed variables
+    check-shadowing: true
+
   golint:
-    min-confidence: 0.8
-  gofmt:
-    simplify: true
-  goimports:
-    local-prefixes: github.com/mercari/spanner-autoscaler
-  maligned:
-    suggest-new: true
+    # Minimal confidence for issues, default is 0.8
+    min-confidence: 0
+
+  gocyclo:
+    # Minimal code complexity to report, 30 by default (but we recommend 10-20)
+    min-complexity: 30
+
+  dupl:
+    # Tokens count to trigger issue, 150 by default
+    threshold: 100
+
   misspell:
+    # Correct spellings using locale preferences for US or UK.
+    # Default is to use a neutral variety of English.
+    # Setting locale to US will correct the British spelling of 'colour' to 'color'.
     locale: US
-  lll:
-    line-length: 160
-    tab-width: 1
-  unused:
-    check-exported: false
-  unparam:
-    algo: cha
-    check-exported: false
+    # - colour
+
+  nakedret:
+    # Make an issue if func has more lines of code than this setting and it has naked returns; default is 30
+    max-func-lines: 0
+
   gocritic:
+    # Which checks should be disabled; can't be combined with 'enabled-checks'; default is empty
     disabled-checks:
-      - regexpMust
+      - whyNoLint
+      - wrapperFunc
+      - ifElseChain
+      - paramTypeCombine
+      - singleCaseSwitch
+      - unnamedResult
+      - hugeParam
+      - octalLiteral
+      - commentedOutCode
+
+    # Enable multiple checks by tags, run `GL_DEBUG=gocritic golangci-lint` run to see all tags and checks.
+    # Empty list by default. See https://github.com/go-critic/go-critic#usage -> section "Tags".
     enabled-tags:
       - performance
-    settings:
-      captLocal:
-        paramsOnly: true
-      hugeParam:
-        sizeThreshold: 80
-      rangeExprCopy:
-        sizeThreshold: 512
-      rangeValCopy:
-        sizeThreshold: 128
+      - style
+      - experimental
+
+# Settings for enabling and disabling linters
+linters:
+  disable-all: true
+  enable:
+    - bodyclose
+    - deadcode
+    - depguard
+    - dogsled
+    - exportloopref
+    - errcheck
+    - gocritic
+    - gocyclo
+    - gofmt
+    - gofumpt
+    - goimports
+    - goprintffuncname
+    - gosec
+    - gosimple
+    - govet
+    - ifshort
+    - ineffassign
+    - misspell
+    - nakedret
+    - nolintlint
+    - rowserrcheck
+    - staticcheck
+    - structcheck
+    - stylecheck
+    - typecheck
+    - unconvert
+    - unused
+    - varcheck
+    - whitespace
+
+# Configuration of issue rules
 issues:
+  # Excluding configuration per-path, per-linter, per-text and per-source
   exclude-rules:
-    - path: _test\.go$
+    # Exclude shadow checking on the variable named err
+    - text: "shadow: declaration of \"err\""
       linters:
-        - errcheck
-        - maligned
+        - govet
+
+    # Exclude godox check for TODOs, FIXMEs, and BUGs
+    - text: "Line contains TODO/BUG/FIXME:"
+      linters:
+        - godox
+
+    # Exclude some linters from running on tests files
+    - path: _test\.go
+      linters:
+        - gocyclo
+        - goconst

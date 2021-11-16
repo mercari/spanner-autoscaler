@@ -27,7 +27,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/clock"
+	utilclock "k8s.io/apimachinery/pkg/util/clock"
 	"k8s.io/client-go/tools/record"
 	ctrlbuilder "sigs.k8s.io/controller-runtime/pkg/builder"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
@@ -43,10 +43,10 @@ import (
 )
 
 var (
-	errFetchServiceAccountJSONNoNameSpecified   = errors.New("No name specified")
-	errFetchServiceAccountJSONNoKeySpecified    = errors.New("No key specified")
-	errFetchServiceAccountJSONNoSecretFound     = errors.New("No secret found by specified name")
-	errFetchServiceAccountJSONNoSecretDataFound = errors.New("No secret found by specified key")
+	errFetchServiceAccountJSONNoNameSpecified   = errors.New("no name specified")
+	errFetchServiceAccountJSONNoKeySpecified    = errors.New("no key specified")
+	errFetchServiceAccountJSONNoSecretFound     = errors.New("no secret found by specified name")
+	errFetchServiceAccountJSONNoSecretDataFound = errors.New("no secret found by specified key")
 	errInvalidExclusiveCredentials              = errors.New("impersonateConfig and serviceAccountSecretRef are mutually exclusive")
 )
 
@@ -64,7 +64,7 @@ type SpannerAutoscalerReconciler struct {
 
 	scaleDownInterval time.Duration
 
-	clock clock.Clock
+	clock utilclock.Clock
 	log   logr.Logger
 	mu    sync.RWMutex
 }
@@ -85,7 +85,7 @@ func WithScaleDownInterval(scaleDownInterval time.Duration) Option {
 	}
 }
 
-func WithClock(clock clock.Clock) Option {
+func WithClock(clock utilclock.Clock) Option {
 	return func(r *SpannerAutoscalerReconciler) {
 		r.clock = clock
 	}
@@ -113,7 +113,7 @@ func NewSpannerAutoscalerReconciler(
 		recorder:          recorder,
 		syncers:           make(map[types.NamespacedName]syncer.Syncer),
 		scaleDownInterval: 55 * time.Minute,
-		clock:             clock.RealClock{},
+		clock:             utilclock.RealClock{},
 		log:               logger,
 	}
 
