@@ -31,30 +31,10 @@ jobs:
         env:
           CURRENT_TAG: ${{ inputs.version }}
 
-      - name: Extract Repository Name
-        run: echo "::set-output name=repository-name::${GITHUB_REPOSITORY#*/}"
-        id: repository-name
-
-      ## Get the automatically generated release notes
-      ## Ref: https://docs.github.com/en/repositories/releasing-projects-on-github/automatically-generated-release-notes#example-configuration
-      - name: Generate Release Notes
-        uses: octokit/request-action@v2.x
-        id: get-release-notes
-        with:
-          route: POST /repos/{owner}/{repo}/releases/generate-notes
-          repo: ${{ steps.repository-name.outputs.repository-name }}
-          owner: ${{ github.repository_owner }}
-          tag_name: ${{ steps.current-tag.outputs.tag }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Save Release Notes To File
-        run: echo "${{ fromJson(steps.get-release-notes.outputs.data).body }}" > $RUNNER_TEMP/changelog.md
-
       - name: Create Github Release
         uses: goreleaser/goreleaser-action@v2
         with:
-          args: release --rm-dist --release-notes ${{ runner.temp }}/changelog.md
+          args: release --rm-dist
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
