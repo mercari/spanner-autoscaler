@@ -75,7 +75,7 @@ kind-cluster-reset: kind-cluster-delete kind-cluster-create ## Recreate the kind
 ##@ Build
 
 build: generate fmt vet ## Build manager binary.
-	go build -o bin/manager cmd/spanner-autoscaler/main.go
+	go build -o bin/manager main.go
 
 run: manifests generate fmt vet ## Run a controller from your host.
 	go run ./main.go

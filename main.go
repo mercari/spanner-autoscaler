@@ -34,8 +34,8 @@ import (
 
 	// +kubebuilder:scaffold:imports
 
-	spannerv1alpha1 "github.com/mercari/spanner-autoscaler/pkg/api/v1alpha1"
-	"github.com/mercari/spanner-autoscaler/pkg/controllers"
+	spannerv1alpha1 "github.com/mercari/spanner-autoscaler/api/v1alpha1"
+	"github.com/mercari/spanner-autoscaler/controllers"
 )
 
 var (

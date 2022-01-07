@@ -9,7 +9,9 @@ require (
 	github.com/go-logr/zapr v0.2.0
 	github.com/golang/protobuf v1.5.2
 	github.com/google/go-cmp v0.5.6
-	github.com/google/uuid v1.1.2
+	github.com/google/uuid v1.3.0
+	github.com/onsi/ginkgo/v2 v2.0.0
+	github.com/onsi/gomega v1.17.0
 	go.uber.org/zap v1.15.0
 	golang.org/x/oauth2 v0.0.0-20210819190943-2bc19b11175f
 	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c

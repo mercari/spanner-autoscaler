@@ -35,7 +35,7 @@ import (
 	ctrlmanager "sigs.k8s.io/controller-runtime/pkg/manager"
 	ctrlreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	spannerv1alpha1 "github.com/mercari/spanner-autoscaler/pkg/api/v1alpha1"
+	spannerv1alpha1 "github.com/mercari/spanner-autoscaler/api/v1alpha1"
 	"github.com/mercari/spanner-autoscaler/pkg/logging"
 	"github.com/mercari/spanner-autoscaler/pkg/pointer"
 	"github.com/mercari/spanner-autoscaler/pkg/spanner"

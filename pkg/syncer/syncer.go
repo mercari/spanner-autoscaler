@@ -22,7 +22,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
-	spannerv1alpha1 "github.com/mercari/spanner-autoscaler/pkg/api/v1alpha1"
+	spannerv1alpha1 "github.com/mercari/spanner-autoscaler/api/v1alpha1"
 	"github.com/mercari/spanner-autoscaler/pkg/metrics"
 	"github.com/mercari/spanner-autoscaler/pkg/spanner"
 	"google.golang.org/api/impersonate"
