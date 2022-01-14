@@ -14,7 +14,7 @@ import (
 	field_mask "google.golang.org/genproto/protobuf/field_mask"
 
 	spannerv1alpha1 "github.com/mercari/spanner-autoscaler/api/v1alpha1"
-	"github.com/mercari/spanner-autoscaler/pkg/pointer"
+	"k8s.io/utils/pointer"
 )
 
 const instanceNameFormat = "projects/%s/instances/%s"
