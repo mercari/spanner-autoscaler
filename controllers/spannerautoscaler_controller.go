@@ -37,9 +37,9 @@ import (
 
 	spannerv1alpha1 "github.com/mercari/spanner-autoscaler/api/v1alpha1"
 	"github.com/mercari/spanner-autoscaler/pkg/logging"
-	"github.com/mercari/spanner-autoscaler/pkg/pointer"
 	"github.com/mercari/spanner-autoscaler/pkg/spanner"
 	"github.com/mercari/spanner-autoscaler/pkg/syncer"
+	"k8s.io/utils/pointer"
 )
 
 var (

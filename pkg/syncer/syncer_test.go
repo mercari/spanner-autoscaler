@@ -22,8 +22,8 @@ import (
 
 	spannerv1alpha1 "github.com/mercari/spanner-autoscaler/api/v1alpha1"
 	"github.com/mercari/spanner-autoscaler/pkg/metrics"
-	"github.com/mercari/spanner-autoscaler/pkg/pointer"
 	"github.com/mercari/spanner-autoscaler/pkg/spanner"
+	"k8s.io/utils/pointer"
 )
 
 var scheme = runtime.NewScheme()

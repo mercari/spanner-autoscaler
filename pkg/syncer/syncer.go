@@ -9,7 +9,6 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/go-logr/zapr"
-	"github.com/mercari/spanner-autoscaler/pkg/pointer"
 	"go.uber.org/zap"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
@@ -20,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	utilclock "k8s.io/apimachinery/pkg/util/clock"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/utils/pointer"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	spannerv1alpha1 "github.com/mercari/spanner-autoscaler/api/v1alpha1"

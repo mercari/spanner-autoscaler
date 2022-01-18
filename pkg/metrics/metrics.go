@@ -19,7 +19,7 @@ import (
 	monitoringpb "google.golang.org/genproto/googleapis/monitoring/v3"
 	utilclock "k8s.io/apimachinery/pkg/util/clock"
 
-	"github.com/mercari/spanner-autoscaler/pkg/pointer"
+	"k8s.io/utils/pointer"
 )
 
 const metricsFilterFormat = `
