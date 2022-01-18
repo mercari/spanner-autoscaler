@@ -1,8 +1,7 @@
 changelog:
   use: github-native
 builds:
-- main: ./cmd/spanner-autoscaler/main.go
-  goos:
+- goos:
   - linux
   - darwin
   - windows
