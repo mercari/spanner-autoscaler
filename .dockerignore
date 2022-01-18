@@ -10,6 +10,8 @@
 
 # Only include Go files
 !pkg
-!cmd
+!controllers
+!api
+!main.go
 !go.mod
 !go.sum

@@ -20,7 +20,7 @@ import (
 	ctrlenvtest "sigs.k8s.io/controller-runtime/pkg/envtest"
 	ctrlzap "sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	spannerv1alpha1 "github.com/mercari/spanner-autoscaler/pkg/api/v1alpha1"
+	spannerv1alpha1 "github.com/mercari/spanner-autoscaler/api/v1alpha1"
 	"github.com/mercari/spanner-autoscaler/pkg/metrics"
 	"github.com/mercari/spanner-autoscaler/pkg/pointer"
 	"github.com/mercari/spanner-autoscaler/pkg/spanner"

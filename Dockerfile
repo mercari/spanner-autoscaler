@@ -1,5 +1,5 @@
 # Build the manager binary
-FROM golang:1.16 AS builder
+FROM golang:1.17 AS builder
 
 WORKDIR /workspace
 # Copy the Go Modules manifests
@@ -11,10 +11,12 @@ RUN go mod download
 
 # Copy the go source
 COPY pkg/ pkg/
-COPY cmd/ cmd/
+COPY main.go main.go
+COPY api/ api/
+COPY controllers/ controllers/
 
 # Build
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -o manager cmd/spanner-autoscaler/main.go
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -o manager main.go
 
 # Use distroless as minimal base image to package the manager binary
 # Refer to https://github.com/GoogleContainerTools/distroless for more details

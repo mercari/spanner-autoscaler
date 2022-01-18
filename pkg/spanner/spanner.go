@@ -13,7 +13,7 @@ import (
 	instancepb "google.golang.org/genproto/googleapis/spanner/admin/instance/v1"
 	field_mask "google.golang.org/genproto/protobuf/field_mask"
 
-	spannerv1alpha1 "github.com/mercari/spanner-autoscaler/pkg/api/v1alpha1"
+	spannerv1alpha1 "github.com/mercari/spanner-autoscaler/api/v1alpha1"
 	"github.com/mercari/spanner-autoscaler/pkg/pointer"
 )
 
