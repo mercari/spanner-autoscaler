@@ -1,0 +1,56 @@
+
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  creationTimestamp: null
+  name: mutating-webhook-configuration
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /mutate-spanner-mercari-com-v1beta1-spannerautoscaler
+  failurePolicy: Fail
+  name: mspannerautoscaler.kb.io
+  rules:
+  - apiGroups:
+    - spanner.mercari.com
+    apiVersions:
+    - v1beta1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - spannerautoscalers
+  sideEffects: None
+
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  creationTimestamp: null
+  name: validating-webhook-configuration
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-spanner-mercari-com-v1beta1-spannerautoscaler
+  failurePolicy: Fail
+  name: vspannerautoscaler.kb.io
+  rules:
+  - apiGroups:
+    - spanner.mercari.com
+    apiVersions:
+    - v1beta1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - spannerautoscalers
+  sideEffects: None

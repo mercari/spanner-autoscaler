@@ -1,16 +1,32 @@
-version: "3"
 domain: mercari.com
 layout:
 - go.kubebuilder.io/v3
 projectName: spanner-autoscaler
 repo: github.com/mercari/spanner-autoscaler
 resources:
-- group: spanner
-  version: v1alpha1
-  kind: SpannerAutoscaler
-  controller: true
-  domain: mercari.com
-  path: github.com/mercari/spanner-autoscaler/api/v1alpha1
-  api:
+- api:
     crdVersion: v1
     namespaced: true
+  controller: true
+  domain: mercari.com
+  group: spanner
+  kind: SpannerAutoscaler
+  path: github.com/mercari/spanner-autoscaler/api/v1alpha1
+  version: v1alpha1
+  webhooks:
+    conversion: true
+    webhookVersion: v1
+- api:
+    crdVersion: v1
+    namespaced: true
+  domain: mercari.com
+  group: spanner
+  kind: SpannerAutoscaler
+  path: github.com/mercari/spanner-autoscaler/api/v1beta1
+  version: v1beta1
+  webhooks:
+    conversion: true
+    defaulting: true
+    validation: true
+    webhookVersion: v1
+version: "3"

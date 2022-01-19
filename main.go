@@ -17,7 +17,6 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"os"
 	"time"
 
@@ -32,6 +31,7 @@ import (
 	ctrlmanager "sigs.k8s.io/controller-runtime/pkg/manager"
 	ctrlsignals "sigs.k8s.io/controller-runtime/pkg/manager/signals"
 
+	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
 	// +kubebuilder:scaffold:imports
 
 	spannerv1alpha1 "github.com/mercari/spanner-autoscaler/api/v1alpha1"
@@ -48,6 +48,7 @@ func init() {
 
 	utilruntime.Must(spannerv1alpha1.AddToScheme(scheme))
 
+	utilruntime.Must(spannerv1beta1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -68,13 +69,6 @@ const (
 )
 
 func main() {
-	if err := run(); err != nil {
-		setupLog.Error(err, "unable to run controller")
-		os.Exit(exitCode)
-	}
-}
-
-func run() error {
 	zapOptions := zap.Options{
 		// TODO: `DestWritter` is deprecated (because of typo).
 		// Switch to `DestWriter` after controller-runtime or kubebuilder version upgrade
@@ -97,7 +91,8 @@ func run() error {
 
 	cfg, err := config.GetConfig()
 	if err != nil {
-		return err
+		setupLog.Error(err, "failed to get config")
+		os.Exit(exitCode)
 	}
 
 	mgr, err := ctrlmanager.New(cfg, ctrlmanager.Options{
@@ -108,17 +103,24 @@ func run() error {
 		HealthProbeBindAddress: *probeAddr,
 		ReadinessEndpointName:  readyzEndpoint,
 		LivenessEndpointName:   healthzEndpoint,
+
+		// TODO: remove this when `v1beta1` is stable and tested
+		// Only for development
+		//CertDir: "./bin/dummytls",
 	})
 	if err != nil {
-		return err
+		setupLog.Error(err, "failed to create manager")
+		os.Exit(exitCode)
 	}
 
 	if err := mgr.AddHealthzCheck(healthzName, healthz.Ping); err != nil {
-		return fmt.Errorf("failed to register healthz checker: %w", err)
+		setupLog.Error(err, "failed to register healthz checker")
+		os.Exit(exitCode)
 	}
 
 	if err := mgr.AddReadyzCheck(readyzName, healthz.Ping); err != nil {
-		return fmt.Errorf("failed to register readyz checker: %w", err)
+		setupLog.Error(err, "failed to register readyz checker")
+		os.Exit(exitCode)
 	}
 
 	r := controllers.NewSpannerAutoscalerReconciler(
@@ -130,17 +132,29 @@ func run() error {
 		controllers.WithLog(log.WithName("controllers")),
 		controllers.WithScaleDownInterval(*scaleDownInterval),
 	)
-
 	if err := r.SetupWithManager(mgr); err != nil {
-		return err
+		setupLog.Error(err, "unable to create controller", "controller", "SpannerAutoscaler")
+		os.Exit(exitCode)
 	}
-	// +kubebuilder:scaffold:builder
+
+	if err = (&spannerv1beta1.SpannerAutoscaler{}).SetupWebhookWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create webhook", "webhook", "SpannerAutoscaler")
+		os.Exit(exitCode)
+	}
+
+	// TODO: Enable this after implementing the webhooks for `v1alpha1` with deprication notice
+	//if err = (&spannerv1alpha1.SpannerAutoscaler{}).SetupWebhookWithManager(mgr); err != nil {
+	//	setupLog.Error(err, "unable to create webhook", "webhook", "SpannerAutoscaler")
+	//	os.Exit(exitCode)
+	//}
+
+	//+kubebuilder:scaffold:builder
 
 	setupLog.Info("starting manager")
 
 	if err := mgr.Start(ctrlsignals.SetupSignalHandler()); err != nil {
-		return err
+		setupLog.Error(err, "problem running manager")
+		os.Exit(exitCode)
 	}
 
-	return nil
 }

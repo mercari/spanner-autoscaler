@@ -14,8 +14,8 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/google/uuid"
 	spannerv1alpha1 "github.com/mercari/spanner-autoscaler/api/v1alpha1"
-	"k8s.io/utils/pointer"
 	"github.com/mercari/spanner-autoscaler/pkg/syncer"
+	"k8s.io/utils/pointer"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
