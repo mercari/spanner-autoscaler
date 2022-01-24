@@ -64,5 +64,8 @@ jobs:
     needs: bump-tag
     if: ${{ needs.bump-tag.outputs.new_version != null }}
     uses: mercari/spanner-autoscaler/.github/workflows/release.yml@master
+    secrets:
+      DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+      DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
     with:
       version: ${{ needs.bump-tag.outputs.new_version }}

@@ -7,6 +7,11 @@ on:
         description: The semantic tag version against which the release will be created
         required: true
         type: string
+    secrets:
+      DOCKER_USERNAME:
+        required: true
+      DOCKER_PASSWORD:
+        required: true
   push:
     tags:
       - v*
