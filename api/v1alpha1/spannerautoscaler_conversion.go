@@ -8,12 +8,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/conversion"
 )
 
-var (
-	log = ctrllog.Log.WithName("spannerautoscaler-v1alpha1.converter")
-)
+var log = ctrllog.Log.WithName("spannerautoscaler-v1alpha1.converter")
 
 func (src *SpannerAutoscaler) ConvertTo(dstRaw conversion.Hub) error {
-
 	log.V(2).Info("begin conversion from v1alpha1 to v1beta1", "src", src)
 
 	dst := dstRaw.(*v1beta1.SpannerAutoscaler)
@@ -73,11 +70,10 @@ func (src *SpannerAutoscaler) ConvertTo(dstRaw conversion.Hub) error {
 	log.V(2).Info("finished conversion from v1alpha1 to v1beta1", "src", src, "dst", dst)
 
 	return nil
-
 }
 
+//nolint:stylecheck
 func (dst *SpannerAutoscaler) ConvertFrom(srcRaw conversion.Hub) error {
-
 	src := srcRaw.(*v1beta1.SpannerAutoscaler)
 	log.V(2).Info("begin conversion from v1beta1 to v1alpha1", "src", src)
 
@@ -120,5 +116,4 @@ func (dst *SpannerAutoscaler) ConvertFrom(srcRaw conversion.Hub) error {
 	log.V(2).Info("finished conversion from v1beta1 to v1alpha1", "src", src, "dst", dst)
 
 	return nil
-
 }

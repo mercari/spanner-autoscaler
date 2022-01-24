@@ -106,7 +106,7 @@ func main() {
 
 		// TODO: remove this when `v1beta1` is stable and tested
 		// Only for development
-		//CertDir: "./bin/dummytls",
+		// CertDir: "./bin/dummytls",
 	})
 	if err != nil {
 		setupLog.Error(err, "failed to create manager")
@@ -142,11 +142,11 @@ func main() {
 		os.Exit(exitCode)
 	}
 
-	// TODO: Enable this after implementing the webhooks for `v1alpha1` with deprication notice
-	//if err = (&spannerv1alpha1.SpannerAutoscaler{}).SetupWebhookWithManager(mgr); err != nil {
-	//	setupLog.Error(err, "unable to create webhook", "webhook", "SpannerAutoscaler")
-	//	os.Exit(exitCode)
-	//}
+	// TODO: Enable this after implementing the webhooks for `v1alpha1` with deprecation notice
+	// if err = (&spannerv1alpha1.SpannerAutoscaler{}).SetupWebhookWithManager(mgr); err != nil {
+	// 	setupLog.Error(err, "unable to create webhook", "webhook", "SpannerAutoscaler")
+	// 	os.Exit(exitCode)
+	// }
 
 	//+kubebuilder:scaffold:builder
 
@@ -156,5 +156,4 @@ func main() {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(exitCode)
 	}
-
 }
