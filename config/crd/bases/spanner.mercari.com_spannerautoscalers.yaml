@@ -29,14 +29,23 @@ spec:
     - jsonPath: .spec.maxNodes
       name: Max Nodes
       type: integer
+    - jsonPath: .status.currentNodes
+      name: Current Nodes
+      type: integer
     - jsonPath: .spec.minProcessingUnits
       name: Min PUs
       type: integer
     - jsonPath: .spec.maxProcessingUnits
       name: Max PUs
       type: integer
+    - jsonPath: .status.currentProcessingUnits
+      name: Current PUs
+      type: integer
     - jsonPath: .spec.targetCPUUtilization.highPriority
       name: Target CPU
+      type: integer
+    - jsonPath: .status.currentHighPriorityCPUUtilization
+      name: Current CPU
       type: integer
     - jsonPath: .metadata.creationTimestamp
       name: Age
