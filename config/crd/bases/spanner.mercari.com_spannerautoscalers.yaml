@@ -202,6 +202,193 @@ spec:
     storage: true
     subresources:
       status: {}
+  - additionalPrinterColumns:
+    - jsonPath: .spec.targetInstance.projectId
+      name: Project Id
+      type: string
+    - jsonPath: .spec.targetInstance.instanceId
+      name: Instance Id
+      type: string
+    - jsonPath: .spec.scaleConfig.nodes.min
+      name: Min Nodes
+      type: integer
+    - jsonPath: .spec.scaleConfig.nodes.max
+      name: Max Nodes
+      type: integer
+    - jsonPath: .status.currentNodes
+      name: Current Nodes
+      type: integer
+    - jsonPath: .spec.scaleConfig.processingUnits.min
+      name: Min PUs
+      type: integer
+    - jsonPath: .spec.scaleConfig.processingUnits.max
+      name: Max PUs
+      type: integer
+    - jsonPath: .status.currentProcessingUnits
+      name: Current PUs
+      type: integer
+    - jsonPath: .spec.scaleConfig.targetCPUUtilization.highPriority
+      name: Target CPU
+      type: integer
+    - jsonPath: .status.currentHighPriorityCPUUtilization
+      name: Current CPU
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1beta1
+    schema:
+      openAPIV3Schema:
+        description: SpannerAutoscaler is the Schema for the spannerautoscalers API
+        properties:
+          apiVersion:
+            description: 'APIVersion defines the versioned schema of this representation
+              of an object. Servers should convert recognized schemas to the latest
+              internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
+            type: string
+          kind:
+            description: 'Kind is a string value representing the REST resource this
+              object represents. Servers may infer this from the endpoint the client
+              submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: SpannerAutoscalerSpec defines the desired state of SpannerAutoscaler
+            properties:
+              authentication:
+                properties:
+                  iamKeySecret:
+                    properties:
+                      key:
+                        type: string
+                      name:
+                        type: string
+                      namespace:
+                        type: string
+                    required:
+                    - key
+                    - name
+                    type: object
+                  impersonateConfig:
+                    properties:
+                      delegates:
+                        items:
+                          type: string
+                        type: array
+                      targetServiceAccount:
+                        type: string
+                    required:
+                    - targetServiceAccount
+                    type: object
+                  type:
+                    description: 'TODO: Add comments for describing each of the structs'
+                    type: string
+                required:
+                - type
+                type: object
+              scaleConfig:
+                properties:
+                  computeType:
+                    type: string
+                  nodes:
+                    properties:
+                      max:
+                        type: integer
+                      min:
+                        type: integer
+                    required:
+                    - max
+                    - min
+                    type: object
+                  processingUnits:
+                    properties:
+                      max:
+                        type: integer
+                      min:
+                        type: integer
+                    required:
+                    - max
+                    - min
+                    type: object
+                  scaledownStepSize:
+                    type: integer
+                  targetCPUUtilization:
+                    properties:
+                      highPriority:
+                        type: integer
+                    required:
+                    - highPriority
+                    type: object
+                required:
+                - computeType
+                - targetCPUUtilization
+                type: object
+              targetInstance:
+                properties:
+                  instanceId:
+                    type: string
+                  projectId:
+                    type: string
+                required:
+                - instanceId
+                - projectId
+                type: object
+            required:
+            - authentication
+            - scaleConfig
+            - targetInstance
+            type: object
+          status:
+            description: SpannerAutoscalerStatus defines the observed state of SpannerAutoscaler
+            properties:
+              currentHighPriorityCPUUtilization:
+                description: Current average CPU utilization for high priority task,
+                  represented as a percentage
+                type: integer
+              currentNodes:
+                description: Current number of nodes in the Spanner instance
+                type: integer
+              currentProcessingUnits:
+                description: Current number of processing-units in the Spanner instance
+                type: integer
+              currentlyActiveSchedules:
+                items:
+                  type: string
+                type: array
+              desiredNodes:
+                description: Desired number of nodes in the Spanner instance
+                type: integer
+              desiredProcessingUnits:
+                description: Desired number of processing-units in the Spanner instance
+                type: integer
+              instanceState:
+                type: string
+              lastScaleTime:
+                description: Last time the SpannerAutoscaler scaled the number of
+                  Spanner nodes Used by the autoscaler to control how often the number
+                  of nodes are changed
+                format: date-time
+                type: string
+              lastSyncTime:
+                description: Last time the SpannerAutoscaler fetched and synced this
+                  status
+                format: date-time
+                type: string
+              scheddules:
+                items:
+                  type: string
+                type: array
+            required:
+            - currentlyActiveSchedules
+            - instanceState
+            - scheddules
+            type: object
+        type: object
+    served: true
+    storage: false
+    subresources:
+      status: {}
 status:
   acceptedNames:
     kind: ""

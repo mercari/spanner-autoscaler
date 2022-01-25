@@ -1,0 +1,20 @@
+apiVersion: spanner.mercari.com/v1beta1
+kind: SpannerAutoscaler
+metadata:
+  name: spannerautoscaler-sample-beta
+spec:
+  targetInstance:
+    projectId: beta-project
+    instanceId: beta-instance
+  authentication:
+    type: impersonation
+    impersonateConfig:
+      targetServiceAccount: dummy@example.iam.gserviceaccount.com
+  scaleConfig:
+    computeType: processing-units
+    processingUnits:
+      min: 100
+      max: 500
+    scaledownStepSize: 2
+    targetCPUUtilization:
+      highPriority: 50

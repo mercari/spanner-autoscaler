@@ -14,20 +14,17 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/google/uuid"
 	spannerv1alpha1 "github.com/mercari/spanner-autoscaler/api/v1alpha1"
-	"k8s.io/utils/pointer"
 	"github.com/mercari/spanner-autoscaler/pkg/syncer"
+	"k8s.io/utils/pointer"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
 
 var _ = Describe("SpannerAutoscaler controller", func() {
-	var (
-		baseObj *spannerv1alpha1.SpannerAutoscaler
-	)
+	var baseObj *spannerv1alpha1.SpannerAutoscaler
 
 	BeforeEach(func() {
-
 		baseObj = &spannerv1alpha1.SpannerAutoscaler{
 			TypeMeta: metav1.TypeMeta{
 				Kind:       "SpannerAutoscaler",
@@ -54,7 +51,6 @@ var _ = Describe("SpannerAutoscaler controller", func() {
 
 	Context("Check Reconciler", func() {
 		It("should scale up spanner instance nodes", func() {
-
 			testSecret := &corev1.Secret{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-service-account-secret",
@@ -159,7 +155,6 @@ var _ = Describe("Check Processing Units", func() {
 		}
 		Expect(testReconciler.needCalcProcessingUnits(sa)).To(BeFalse())
 	})
-
 })
 
 var _ = Describe("Check Upddate Nodes", func() {
@@ -263,7 +258,6 @@ var _ = DescribeTable("Next Valid ProcessingUnits",
 )
 
 var _ = Describe("Fetch Credentials", func() {
-
 	type testResult struct {
 		want        *syncer.Credentials
 		expectedErr error
@@ -314,7 +308,6 @@ var _ = Describe("Fetch Credentials", func() {
 			ctrlClient: k8sClient,
 			apiReader:  k8sClient,
 		}
-
 	})
 
 	AfterEach(func() {
