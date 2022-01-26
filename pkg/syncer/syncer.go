@@ -23,6 +23,7 @@ import (
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	spannerv1alpha1 "github.com/mercari/spanner-autoscaler/api/v1alpha1"
+	"github.com/mercari/spanner-autoscaler/pkg/logging"
 	"github.com/mercari/spanner-autoscaler/pkg/metrics"
 	"github.com/mercari/spanner-autoscaler/pkg/spanner"
 	"google.golang.org/api/impersonate"
@@ -176,10 +177,12 @@ func New(
 		return nil, err
 	}
 
+	log := logging.FromContext(ctx)
 	spannerClient, err := spanner.NewClient(
 		ctx,
 		projectID,
 		spanner.WithTokenSource(ts),
+		spanner.WithLog(log),
 	)
 	if err != nil {
 		return nil, err
