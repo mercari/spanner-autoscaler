@@ -21,11 +21,12 @@ import (
 )
 
 // TODO: Add comments for describing each of the structs
-type AuthenticationType string
+type AuthType string
 
 const (
-	AuthenticationTypeSA            AuthenticationType = "gcp-sa-key"
-	AuthenticationTypeImpersonation AuthenticationType = "impersonation"
+	AuthTypeSA            AuthType = "gcp-sa-key"
+	AuthTypeImpersonation AuthType = "impersonation"
+	AuthTypeADC           AuthType = "adc"
 )
 
 type ComputeType string
@@ -41,9 +42,11 @@ type TargetInstance struct {
 }
 
 type Authentication struct {
-	Type              AuthenticationType `json:"type"`
-	ImpersonateConfig ImpersonateConfig  `json:"impersonateConfig,omitempty"`
-	IAMKeySecret      IAMKeySecret       `json:"iamKeySecret,omitempty"`
+	Type AuthType `json:"type"`
+
+	// This is a pointer because structs with string slices can not be compared for zero values
+	ImpersonateConfig *ImpersonateConfig `json:"impersonateConfig,omitempty"`
+	IAMKeySecret      *IAMKeySecret      `json:"iamKeySecret,omitempty"`
 }
 
 type ImpersonateConfig struct {
@@ -103,8 +106,8 @@ const (
 
 // SpannerAutoscalerStatus defines the observed state of SpannerAutoscaler
 type SpannerAutoscalerStatus struct {
-	Schedules                []string `json:"scheddules"`
-	CurrentlyActiveSchedules []string `json:"currentlyActiveSchedules"`
+	Schedules                []string `json:"schedules,omitempty"`
+	CurrentlyActiveSchedules []string `json:"currentlyActiveSchedules,omitempty"`
 
 	// Last time the SpannerAutoscaler scaled the number of Spanner nodes
 	// Used by the autoscaler to control how often the number of nodes are changed
@@ -125,7 +128,6 @@ type SpannerAutoscalerStatus struct {
 	// Desired number of processing-units in the Spanner instance
 	DesiredProcessingUnits int `json:"desiredProcessingUnits,omitempty"`
 
-	// +kubebuilder:validation:Type=string
 	InstanceState InstanceState `json:"instanceState"`
 
 	// Current average CPU utilization for high priority task, represented as a percentage
@@ -134,6 +136,7 @@ type SpannerAutoscalerStatus struct {
 
 //+kubebuilder:object:root=true
 //+kubebuilder:subresource:status
+//+kubebuilder:storageversion
 //+kubebuilder:printcolumn:name="Project Id",type="string",JSONPath=".spec.targetInstance.projectId"
 //+kubebuilder:printcolumn:name="Instance Id",type="string",JSONPath=".spec.targetInstance.instanceId"
 //+kubebuilder:printcolumn:name="Min Nodes",type="integer",JSONPath=".spec.scaleConfig.nodes.min"

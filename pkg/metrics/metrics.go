@@ -18,8 +18,6 @@ import (
 	"google.golang.org/api/option"
 	monitoringpb "google.golang.org/genproto/googleapis/monitoring/v3"
 	utilclock "k8s.io/apimachinery/pkg/util/clock"
-
-	"k8s.io/utils/pointer"
 )
 
 const metricsFilterFormat = `
@@ -30,7 +28,7 @@ const metricsFilterFormat = `
 
 // InstanceMetrics represents metrics of Spanner instance.
 type InstanceMetrics struct {
-	CurrentHighPriorityCPUUtilization *int32
+	CurrentHighPriorityCPUUtilization int
 }
 
 // Client is a client for manipulation of InstanceMetrics.
@@ -154,17 +152,17 @@ func (c *client) GetInstanceMetrics(ctx context.Context, instanceID string) (*In
 
 		// TODO: Fix this loop so that lint check will pass
 		return &InstanceMetrics{ // nolint:staticcheck
-			CurrentHighPriorityCPUUtilization: pointer.Int32(cpuPercent),
+			CurrentHighPriorityCPUUtilization: cpuPercent,
 		}, nil
 	}
 
 	return nil, errors.New("no such spanner instance metrics")
 }
 
-func firstPointAsPercent(points []*monitoringpb.Point) (percent int32, err error) {
+func firstPointAsPercent(points []*monitoringpb.Point) (percent int, err error) {
 	if len(points) == 0 {
 		return 0, errors.New("invalid points")
 	}
 
-	return int32(points[0].GetValue().GetDoubleValue() * 100), nil
+	return int(points[0].GetValue().GetDoubleValue() * 100), nil
 }

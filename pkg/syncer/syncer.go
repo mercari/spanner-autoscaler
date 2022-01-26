@@ -19,10 +19,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	utilclock "k8s.io/apimachinery/pkg/util/clock"
 	"k8s.io/client-go/tools/record"
-	"k8s.io/utils/pointer"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
-	spannerv1alpha1 "github.com/mercari/spanner-autoscaler/api/v1alpha1"
+	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
 	"github.com/mercari/spanner-autoscaler/pkg/logging"
 	"github.com/mercari/spanner-autoscaler/pkg/metrics"
 	"github.com/mercari/spanner-autoscaler/pkg/spanner"
@@ -36,7 +35,7 @@ type Syncer interface {
 	// Stop stops synchronization of resource status.
 	Stop()
 	UpdateTarget(projectID, instanceID string, credentials *Credentials) bool
-	UpdateInstance(ctx context.Context, desiredProcessingUnits int32) error
+	UpdateInstance(ctx context.Context, desiredProcessingUnits int) error
 }
 
 type CredentialsType int
@@ -274,9 +273,9 @@ func (s *syncer) UpdateTarget(projectID, instanceID string, credentials *Credent
 	return updated
 }
 
-func (s *syncer) UpdateInstance(ctx context.Context, desiredProcessingUnits int32) error {
+func (s *syncer) UpdateInstance(ctx context.Context, desiredProcessingUnits int) error {
 	err := s.spannerClient.UpdateInstance(ctx, s.instanceID, &spanner.Instance{
-		ProcessingUnits: &desiredProcessingUnits,
+		ProcessingUnits: desiredProcessingUnits,
 	})
 	if err != nil {
 		return err
@@ -291,7 +290,7 @@ func (s *syncer) syncResource(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 
-	var sa spannerv1alpha1.SpannerAutoscaler
+	var sa spannerv1beta1.SpannerAutoscaler
 	if err := s.ctrlClient.Get(ctx, s.namespacedName, &sa); err != nil {
 		err = ctrlclient.IgnoreNotFound(err)
 		if err != nil {
@@ -307,7 +306,7 @@ func (s *syncer) syncResource(ctx context.Context) error {
 		"spannerautoscaler", sa,
 	)
 
-	instance, instanceMetrics, err := s.getInstanceInfo(ctx, *sa.Spec.ScaleTargetRef.InstanceID)
+	instance, instanceMetrics, err := s.getInstanceInfo(ctx, sa.Spec.TargetInstance.InstanceID)
 	if err != nil {
 		s.recorder.Eventf(&sa, corev1.EventTypeWarning, "FailedSpannerAPICall", err.Error())
 		log.Error(err, "unable to get instance info")
@@ -322,10 +321,10 @@ func (s *syncer) syncResource(ctx context.Context) error {
 
 	saCopy := sa.DeepCopy()
 	saCopy.Status.CurrentProcessingUnits = instance.ProcessingUnits
-	saCopy.Status.CurrentNodes = pointer.Int32(*instance.ProcessingUnits / 1000)
+	saCopy.Status.CurrentNodes = instance.ProcessingUnits / 1000
 	saCopy.Status.InstanceState = instance.InstanceState
 	saCopy.Status.CurrentHighPriorityCPUUtilization = instanceMetrics.CurrentHighPriorityCPUUtilization
-	saCopy.Status.LastSyncTime = &metav1.Time{Time: s.clock.Now()}
+	saCopy.Status.LastSyncTime = metav1.Time{Time: s.clock.Now()}
 
 	if err := s.ctrlClient.Status().Update(ctx, saCopy); err != nil {
 		s.recorder.Event(&sa, corev1.EventTypeWarning, "FailedUpdateStatus", err.Error())

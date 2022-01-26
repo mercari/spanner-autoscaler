@@ -13,23 +13,22 @@ import (
 	instancepb "google.golang.org/genproto/googleapis/spanner/admin/instance/v1"
 	field_mask "google.golang.org/genproto/protobuf/field_mask"
 
-	spannerv1alpha1 "github.com/mercari/spanner-autoscaler/api/v1alpha1"
-	"k8s.io/utils/pointer"
+	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
 )
 
 const instanceNameFormat = "projects/%s/instances/%s"
 
-type State = spannerv1alpha1.InstanceState
+type State = spannerv1beta1.InstanceState
 
 const (
-	StateUnspecified = spannerv1alpha1.InstanceStateUnspecified
-	StateCreating    = spannerv1alpha1.InstanceStateCreating
-	StateReady       = spannerv1alpha1.InstanceStateReady
+	StateUnspecified = spannerv1beta1.InstanceStateUnspecified
+	StateCreating    = spannerv1beta1.InstanceStateCreating
+	StateReady       = spannerv1beta1.InstanceStateReady
 )
 
 // Instance represents Spanner Instance.
 type Instance struct {
-	ProcessingUnits *int32
+	ProcessingUnits int
 	InstanceState   State
 }
 
@@ -106,7 +105,7 @@ func (c *client) GetInstance(ctx context.Context, instanceID string) (*Instance,
 	}
 
 	return &Instance{
-		ProcessingUnits: pointer.Int32(i.ProcessingUnits),
+		ProcessingUnits: int(i.ProcessingUnits),
 		InstanceState:   instanceState(i.State),
 	}, nil
 }
@@ -123,9 +122,7 @@ func (c *client) UpdateInstance(ctx context.Context, instanceID string, instance
 		return err
 	}
 
-	if instance.ProcessingUnits != nil {
-		i.ProcessingUnits = *instance.ProcessingUnits
-	}
+	i.ProcessingUnits = int32(instance.ProcessingUnits)
 
 	_, err = c.spannerInstanceAdminClient.UpdateInstance(ctx, &instancepb.UpdateInstanceRequest{
 		Instance: i,

@@ -141,10 +141,7 @@ type SpannerAutoscalerStatus struct {
 	CurrentHighPriorityCPUUtilization *int32 `json:"currentHighPriorityCPUUtilization,omitempty"`
 }
 
-// Store resources in this version only until `v1beta1` is stable and tested
-// TODO: remove `storageversion` marker later
-
-// +kubebuilder:storageversion
+// +kubebuilder:deprecatedversion
 // +kubebuilder:object:root=true
 // +k8s:openapi-gen=true
 // +kubebuilder:subresource:status

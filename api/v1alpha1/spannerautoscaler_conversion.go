@@ -4,6 +4,7 @@ import (
 	v1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/pointer"
 	"sigs.k8s.io/controller-runtime/pkg/conversion"
 )
@@ -22,16 +23,16 @@ func (src *SpannerAutoscaler) ConvertTo(dstRaw conversion.Hub) error {
 	auth := v1beta1.Authentication{}
 
 	if src.Spec.ImpersonateConfig != nil {
-		auth.Type = v1beta1.AuthenticationTypeImpersonation
-		auth.ImpersonateConfig = v1beta1.ImpersonateConfig{
+		auth.Type = v1beta1.AuthTypeImpersonation
+		auth.ImpersonateConfig = &v1beta1.ImpersonateConfig{
 			TargetServiceAccount: src.Spec.ImpersonateConfig.TargetServiceAccount,
 			Delegates:            src.Spec.ImpersonateConfig.Delegates,
 		}
 	}
 
 	if src.Spec.ServiceAccountSecretRef != nil {
-		auth.Type = v1beta1.AuthenticationTypeSA
-		auth.IAMKeySecret = v1beta1.IAMKeySecret{
+		auth.Type = v1beta1.AuthTypeSA
+		auth.IAMKeySecret = &v1beta1.IAMKeySecret{
 			Name: *src.Spec.ServiceAccountSecretRef.Name,
 			Key:  *src.Spec.ServiceAccountSecretRef.Key,
 		}
@@ -65,7 +66,32 @@ func (src *SpannerAutoscaler) ConvertTo(dstRaw conversion.Hub) error {
 
 	dst.Spec.ScaleConfig = scaleConfig
 
+	// Copy the resource metadata
 	dst.ObjectMeta = src.ObjectMeta
+
+	// Copy the resource status
+	if !src.Status.LastScaleTime.IsZero() {
+		dst.Status.LastScaleTime = metav1.Time{Time: src.Status.LastScaleTime.Time}
+	}
+	if !src.Status.LastSyncTime.IsZero() {
+		dst.Status.LastSyncTime = metav1.Time{Time: src.Status.LastSyncTime.Time}
+	}
+	if src.Status.CurrentNodes != nil {
+		dst.Status.CurrentNodes = int(*src.Status.CurrentNodes)
+	}
+	if src.Status.CurrentProcessingUnits != nil {
+		dst.Status.CurrentProcessingUnits = int(*src.Status.CurrentProcessingUnits)
+	}
+	if src.Status.DesiredNodes != nil {
+		dst.Status.DesiredNodes = int(*src.Status.DesiredNodes)
+	}
+	if src.Status.DesiredProcessingUnits != nil {
+		dst.Status.DesiredProcessingUnits = int(*src.Status.DesiredProcessingUnits)
+	}
+	if src.Status.CurrentHighPriorityCPUUtilization != nil {
+		dst.Status.CurrentHighPriorityCPUUtilization = int(*src.Status.CurrentHighPriorityCPUUtilization)
+	}
+	dst.Status.InstanceState = v1beta1.InstanceState(src.Status.InstanceState)
 
 	log.V(2).Info("finished conversion from v1alpha1 to v1beta1", "src", src, "dst", dst)
 
@@ -83,13 +109,13 @@ func (dst *SpannerAutoscaler) ConvertFrom(srcRaw conversion.Hub) error {
 	}
 
 	switch src.Spec.Authentication.Type {
-	case v1beta1.AuthenticationTypeSA:
+	case v1beta1.AuthTypeSA:
 		dst.Spec.ServiceAccountSecretRef = &ServiceAccountSecretRef{
 			Name:      pointer.String(src.Spec.Authentication.IAMKeySecret.Name),
 			Namespace: pointer.String(src.Spec.Authentication.IAMKeySecret.Namespace),
 			Key:       pointer.String(src.Spec.Authentication.IAMKeySecret.Key),
 		}
-	case v1beta1.AuthenticationTypeImpersonation:
+	case v1beta1.AuthTypeImpersonation:
 		dst.Spec.ImpersonateConfig = &ImpersonateConfig{
 			TargetServiceAccount: src.Spec.Authentication.ImpersonateConfig.TargetServiceAccount,
 			Delegates:            src.Spec.Authentication.ImpersonateConfig.Delegates,
@@ -111,8 +137,18 @@ func (dst *SpannerAutoscaler) ConvertFrom(srcRaw conversion.Hub) error {
 		HighPriority: pointer.Int32(int32(src.Spec.ScaleConfig.TargetCPUUtilization.HighPriority)),
 	}
 
+	// Copy the resource metadata
 	dst.ObjectMeta = src.ObjectMeta
 
+	// Copy the resource status
+	dst.Status.LastScaleTime = &metav1.Time{Time: src.Status.LastScaleTime.Time}
+	dst.Status.LastSyncTime = &metav1.Time{Time: src.Status.LastSyncTime.Time}
+	dst.Status.CurrentNodes = pointer.Int32(int32(src.Status.CurrentNodes))
+	dst.Status.CurrentProcessingUnits = pointer.Int32(int32(src.Status.CurrentProcessingUnits))
+	dst.Status.DesiredNodes = pointer.Int32(int32(src.Status.DesiredNodes))
+	dst.Status.DesiredProcessingUnits = pointer.Int32(int32(src.Status.DesiredProcessingUnits))
+	dst.Status.CurrentHighPriorityCPUUtilization = pointer.Int32(int32(src.Status.CurrentHighPriorityCPUUtilization))
+	dst.Status.InstanceState = InstanceState(src.Status.InstanceState)
 	log.V(2).Info("finished conversion from v1beta1 to v1alpha1", "src", src, "dst", dst)
 
 	return nil
