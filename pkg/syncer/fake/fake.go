@@ -25,6 +25,6 @@ func (s *Syncer) UpdateTarget(projectID, instanceID string, credentials *syncer.
 	return false
 }
 
-func (s *Syncer) UpdateInstance(context.Context, int32) error {
+func (s *Syncer) UpdateInstance(context.Context, int) error {
 	return nil
 }

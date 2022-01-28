@@ -7,45 +7,56 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/clock"
-	ctrlreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/go-logr/zapr"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/google/uuid"
-	spannerv1alpha1 "github.com/mercari/spanner-autoscaler/api/v1alpha1"
+	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
 	"github.com/mercari/spanner-autoscaler/pkg/syncer"
-	"k8s.io/utils/pointer"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
 
 var _ = Describe("SpannerAutoscaler controller", func() {
-	var baseObj *spannerv1alpha1.SpannerAutoscaler
+	var baseObj *spannerv1beta1.SpannerAutoscaler
 
 	BeforeEach(func() {
-		baseObj = &spannerv1alpha1.SpannerAutoscaler{
+		baseObj = &spannerv1beta1.SpannerAutoscaler{
 			TypeMeta: metav1.TypeMeta{
 				Kind:       "SpannerAutoscaler",
-				APIVersion: "spanner.mercari.com/v1alpha1",
+				APIVersion: "spanner.mercari.com/v1beta1",
 			},
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      name,
 				Namespace: namespace,
 			},
-			Spec: spannerv1alpha1.SpannerAutoscalerSpec{
-				ScaleTargetRef: spannerv1alpha1.ScaleTargetRef{
-					ProjectID:  pointer.String("test-project-id"),
-					InstanceID: pointer.String("test-instance-id"),
+			Spec: spannerv1beta1.SpannerAutoscalerSpec{
+				TargetInstance: spannerv1beta1.TargetInstance{
+					ProjectID:  "test-project-id",
+					InstanceID: "test-instance-id",
 				},
-				ServiceAccountSecretRef: &spannerv1alpha1.ServiceAccountSecretRef{
-					Name:      pointer.String("test-service-account-secret"),
-					Namespace: pointer.String(""),
-					Key:       pointer.String("secret"),
+				Authentication: spannerv1beta1.Authentication{
+					Type: spannerv1beta1.AuthTypeSA,
+					IAMKeySecret: &spannerv1beta1.IAMKeySecret{
+						Name:      "test-service-account-secret",
+						Namespace: "",
+						Key:       "secret",
+					},
+				},
+				ScaleConfig: spannerv1beta1.ScaleConfig{
+					ComputeType: spannerv1beta1.ComputeTypeNode,
+					Nodes: spannerv1beta1.ScaleConfigNodes{
+						Min: 1,
+						Max: 10,
+					},
+					ScaledownStepSize: 2,
+					TargetCPUUtilization: spannerv1beta1.TargetCPUUtilization{
+						HighPriority: 30,
+					},
 				},
 			},
-			Status: spannerv1alpha1.SpannerAutoscalerStatus{},
 		}
 	})
 
@@ -59,17 +70,7 @@ var _ = Describe("SpannerAutoscaler controller", func() {
 				StringData: map[string]string{"secret": `{"foo":"bar"}`},
 			}
 
-			targetResource := baseObj.DeepCopy()
-			targetResource.Spec.MinNodes = pointer.Int32(1)
-			targetResource.Spec.MaxNodes = pointer.Int32(10)
-			targetResource.Spec.MaxScaleDownNodes = pointer.Int32(2)
-			targetResource.Spec.TargetCPUUtilization = spannerv1alpha1.TargetCPUUtilization{
-				HighPriority: pointer.Int32(30),
-			}
-			targetResource.Status.CurrentNodes = pointer.Int32(3)
-			targetResource.Status.InstanceState = spannerv1alpha1.InstanceStateReady
-			targetResource.Status.LastScaleTime = &metav1.Time{Time: fakeTime.Add(-2 * time.Hour)} // more than scaleDownInterval
-			targetResource.Status.CurrentHighPriorityCPUUtilization = pointer.Int32(50)
+			targetResource := baseObj
 
 			By("Creating a test secret")
 			err := k8sClient.Create(ctx, testSecret)
@@ -79,38 +80,41 @@ var _ = Describe("SpannerAutoscaler controller", func() {
 			err = k8sClient.Create(ctx, targetResource)
 			Expect(err).NotTo(HaveOccurred())
 
+			By("Fetching the created SpannerAutoscaler resource")
+			err = k8sClient.Get(ctx, namespacedName, targetResource)
+			Expect(err).NotTo(HaveOccurred())
+
 			By("Updating the status of SpannerAutoscaler resource")
+			initialStatus := spannerv1beta1.SpannerAutoscalerStatus{
+				CurrentNodes:                      3,
+				InstanceState:                     spannerv1beta1.InstanceStateReady,
+				LastScaleTime:                     metav1.Time{Time: fakeTime.Add(-2 * time.Hour)}, // more than scaleDownInterval
+				CurrentHighPriorityCPUUtilization: 50,
+			}
+			targetResource.Status = initialStatus
 			err = k8sClient.Status().Update(ctx, targetResource)
 			Expect(err).NotTo(HaveOccurred())
 
-			By("Pausing for status changes to propagate")
+			By("Pausing for reconciliation to complete")
 			time.Sleep(1 * time.Second)
 
-			By("Reconciling the SpannerAutoscaler resource")
-			res, err := spReconciler.Reconcile(ctx, ctrlreconcile.Request{
-				NamespacedName: namespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
-			Expect(res.Requeue).To(BeFalse())
-
-			want := baseObj.DeepCopy()
-			want.Status.DesiredNodes = pointer.Int32(6)
-			want.Status.DesiredProcessingUnits = pointer.Int32(6000)
-			want.Status.InstanceState = spannerv1alpha1.InstanceStateReady
-			want.Status.LastScaleTime = &metav1.Time{Time: fakeTime}
-
-			var got spannerv1alpha1.SpannerAutoscaler
-
 			By("Fetching the SpannerAutoscaler resource")
-			err = k8sClient.Get(ctx, namespacedName, &got)
+			got := &spannerv1beta1.SpannerAutoscaler{}
+			err = k8sClient.Get(ctx, namespacedName, got)
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Verifying the status of the fetched SpannerAutoscaler resource")
-			diff := cmp.Diff(want.Status, got.Status,
+			wantStatus := spannerv1beta1.SpannerAutoscalerStatus{
+				DesiredNodes:           6,
+				DesiredProcessingUnits: 6000,
+				InstanceState:          spannerv1beta1.InstanceStateReady,
+				LastScaleTime:          metav1.Time{Time: fakeTime},
+			}
+			diff := cmp.Diff(wantStatus, got.Status,
 				// Ignore CurrentNodes because syncer.Syncer updates it.
-				cmpopts.IgnoreFields(want.Status, "CurrentNodes"),
+				cmpopts.IgnoreFields(wantStatus, "CurrentNodes"),
 				// Ignore CurrentHighPriorityCPUUtilization because controller doesn't update it.
-				cmpopts.IgnoreFields(want.Status, "CurrentHighPriorityCPUUtilization"),
+				cmpopts.IgnoreFields(wantStatus, "CurrentHighPriorityCPUUtilization"),
 			)
 			Expect(diff).To(BeEmpty())
 		})
@@ -131,33 +135,33 @@ var _ = Describe("Check Processing Units", func() {
 	})
 
 	It("needs to calculate processing units", func() {
-		sa := &spannerv1alpha1.SpannerAutoscaler{
-			Status: spannerv1alpha1.SpannerAutoscalerStatus{
-				LastScaleTime: &metav1.Time{Time: fakeTime.Add(-2 * time.Hour)},
-				CurrentNodes:  pointer.Int32(1),
-				InstanceState: spannerv1alpha1.InstanceStateReady,
+		sa := &spannerv1beta1.SpannerAutoscaler{
+			Status: spannerv1beta1.SpannerAutoscalerStatus{
+				LastScaleTime: metav1.Time{Time: fakeTime.Add(-2 * time.Hour)},
+				CurrentNodes:  1,
+				InstanceState: spannerv1beta1.InstanceStateReady,
 			},
 		}
 		Expect(testReconciler.needCalcProcessingUnits(sa)).To(BeTrue())
 	})
 
-	It("does not need to calculate processing units because current noddes have not been fetched yet", func() {
-		sa := &spannerv1alpha1.SpannerAutoscaler{}
+	It("does not need to calculate processing units because current nodes have not been fetched yet", func() {
+		sa := &spannerv1beta1.SpannerAutoscaler{}
 		Expect(testReconciler.needCalcProcessingUnits(sa)).To(BeFalse())
 	})
 
-	It("does not need to calculate processing units because instance state is not readdy yet", func() {
-		sa := &spannerv1alpha1.SpannerAutoscaler{
-			Status: spannerv1alpha1.SpannerAutoscalerStatus{
-				CurrentNodes:  pointer.Int32(1),
-				InstanceState: spannerv1alpha1.InstanceStateCreating,
+	It("does not need to calculate processing units because instance state is not ready yet", func() {
+		sa := &spannerv1beta1.SpannerAutoscaler{
+			Status: spannerv1beta1.SpannerAutoscalerStatus{
+				CurrentNodes:  1,
+				InstanceState: spannerv1beta1.InstanceStateCreating,
 			},
 		}
 		Expect(testReconciler.needCalcProcessingUnits(sa)).To(BeFalse())
 	})
 })
 
-var _ = Describe("Check Upddate Nodes", func() {
+var _ = Describe("Check Update Nodes", func() {
 	var testReconciler *SpannerAutoscalerReconciler
 
 	BeforeEach(func() {
@@ -170,28 +174,33 @@ var _ = Describe("Check Upddate Nodes", func() {
 	})
 
 	It("does not need to scale down nodes because enough time has not elapsed since last update", func() {
-		sa := &spannerv1alpha1.SpannerAutoscaler{
-			Status: spannerv1alpha1.SpannerAutoscalerStatus{
-				LastScaleTime: &metav1.Time{Time: fakeTime.Add(-time.Minute)},
-				CurrentNodes:  pointer.Int32(2),
-				DesiredNodes:  pointer.Int32(1),
-				InstanceState: spannerv1alpha1.InstanceStateReady,
+		sa := &spannerv1beta1.SpannerAutoscaler{
+			Status: spannerv1beta1.SpannerAutoscalerStatus{
+				LastScaleTime: metav1.Time{Time: fakeTime.Add(-time.Minute)},
+				CurrentNodes:  2,
+				DesiredNodes:  1,
+				InstanceState: spannerv1beta1.InstanceStateReady,
 			},
 		}
-		got := testReconciler.needUpdateProcessingUnits(sa, normalizeProcessingUnitsOrNodes(sa.Status.DesiredProcessingUnits, sa.Status.DesiredNodes), fakeTime)
+		got := testReconciler.needUpdateProcessingUnits(sa, normalizeProcessingUnitsOrNodes(sa.Status.DesiredProcessingUnits, sa.Status.DesiredNodes, sa.Spec.ScaleConfig.ComputeType), fakeTime)
 		Expect(got).To(BeFalse())
 	})
 
 	It("needs to scale up nodes because cooldown interval is only applied to scale down operations", func() {
-		sa := &spannerv1alpha1.SpannerAutoscaler{
-			Status: spannerv1alpha1.SpannerAutoscalerStatus{
-				LastScaleTime: &metav1.Time{Time: fakeTime.Add(-time.Minute)},
-				CurrentNodes:  pointer.Int32(1),
-				DesiredNodes:  pointer.Int32(2),
-				InstanceState: spannerv1alpha1.InstanceStateReady,
+		sa := &spannerv1beta1.SpannerAutoscaler{
+			Spec: spannerv1beta1.SpannerAutoscalerSpec{
+				ScaleConfig: spannerv1beta1.ScaleConfig{
+					ComputeType: spannerv1beta1.ComputeTypeNode,
+				},
+			},
+			Status: spannerv1beta1.SpannerAutoscalerStatus{
+				LastScaleTime: metav1.Time{Time: fakeTime.Add(-time.Minute)},
+				CurrentNodes:  1,
+				DesiredNodes:  2,
+				InstanceState: spannerv1beta1.InstanceStateReady,
 			},
 		}
-		got := testReconciler.needUpdateProcessingUnits(sa, normalizeProcessingUnitsOrNodes(sa.Status.DesiredProcessingUnits, sa.Status.DesiredNodes), fakeTime)
+		got := testReconciler.needUpdateProcessingUnits(sa, normalizeProcessingUnitsOrNodes(sa.Status.DesiredProcessingUnits, sa.Status.DesiredNodes, sa.Spec.ScaleConfig.ComputeType), fakeTime)
 		Expect(got).To(BeTrue())
 	})
 })
@@ -199,14 +208,14 @@ var _ = Describe("Check Upddate Nodes", func() {
 var _ = DescribeTable("Calculate Desired Nodes",
 	func(currentCPU, currentNodes, targetCPU, minNodes, maxNodes, maxScaleDownNodes, want int) {
 		got := calcDesiredNodes(
-			int32(currentCPU),
-			int32(currentNodes),
-			int32(targetCPU),
-			int32(minNodes),
-			int32(maxNodes),
-			int32(maxScaleDownNodes),
+			currentCPU,
+			currentNodes,
+			targetCPU,
+			minNodes,
+			maxNodes,
+			maxScaleDownNodes,
 		)
-		Expect(got).To(Equal(int32(want)))
+		Expect(got).To(Equal(want))
 	},
 	Entry("should not scale", 25, 2, 30, 1, 10, 2, 2),
 	Entry("should scale up", 50, 3, 30, 1, 10, 2, 6),
@@ -219,14 +228,14 @@ var _ = DescribeTable("Calculate Desired Nodes",
 var _ = DescribeTable("Calculate Desired Processing Units",
 	func(currentCPU, currentProcessingUnits, targetCPU, minProcessingUnits, maxProcessingUnits, maxScaleDownNodes, want int) {
 		got := calcDesiredProcessingUnits(
-			int32(currentCPU),
-			int32(currentProcessingUnits),
-			int32(targetCPU),
-			int32(minProcessingUnits),
-			int32(maxProcessingUnits),
-			int32(maxScaleDownNodes),
+			currentCPU,
+			currentProcessingUnits,
+			targetCPU,
+			minProcessingUnits,
+			maxProcessingUnits,
+			maxScaleDownNodes,
 		)
-		Expect(got).To(Equal(int32(want)))
+		Expect(got).To(Equal(want))
 	},
 	Entry("should not scale", 25, 200, 30, 100, 1000, 2, 200),
 	Entry("should scale up", 50, 300, 30, 100, 1000, 2, 600),
@@ -244,8 +253,8 @@ var _ = DescribeTable("Calculate Desired Processing Units",
 
 var _ = DescribeTable("Next Valid ProcessingUnits",
 	func(input, want int) {
-		got := nextValidProcessingUnits(int32(input))
-		Expect(got).To(Equal(int32(want)))
+		got := nextValidProcessingUnits(input)
+		Expect(got).To(Equal(want))
 	},
 	EntryDescription("Next valid ProcessingUnit for %d is %d"),
 	Entry(nil, 0, 100),
@@ -269,7 +278,7 @@ var _ = Describe("Fetch Credentials", func() {
 		testSecretRefKey string
 		testSecretRefVal string
 		random           string
-		testResource     *spannerv1alpha1.SpannerAutoscaler
+		testResource     *spannerv1beta1.SpannerAutoscaler
 		testReconciler   *SpannerAutoscalerReconciler
 	)
 
@@ -290,16 +299,19 @@ var _ = Describe("Fetch Credentials", func() {
 			StringData: map[string]string{testSecretRefKey: testSecretRefVal},
 		}
 
-		testResource = &spannerv1alpha1.SpannerAutoscaler{
+		testResource = &spannerv1beta1.SpannerAutoscaler{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      testResourceName,
 				Namespace: namespace,
 			},
-			Spec: spannerv1alpha1.SpannerAutoscalerSpec{
-				ServiceAccountSecretRef: &spannerv1alpha1.ServiceAccountSecretRef{
-					Namespace: pointer.String(namespace),
-					Name:      pointer.String(testSecretName),
-					Key:       pointer.String(testSecretRefKey),
+			Spec: spannerv1beta1.SpannerAutoscalerSpec{
+				Authentication: spannerv1beta1.Authentication{
+					Type: spannerv1beta1.AuthTypeSA,
+					IAMKeySecret: &spannerv1beta1.IAMKeySecret{
+						Namespace: namespace,
+						Name:      testSecretName,
+						Key:       testSecretRefKey,
+					},
 				},
 			},
 		}
@@ -345,39 +357,40 @@ var _ = Describe("Fetch Credentials", func() {
 		result.want = syncer.NewServiceAccountJSONCredentials([]byte("non{json-data"))
 	})
 
-	It("should fetch json correctly even when ServiceAccountSecretRef does not have a namespace", func() {
-		testResource.Spec.ServiceAccountSecretRef.Namespace = nil
+	It("should fetch json correctly even when IAMKeySecret does not have a namespace", func() {
+		testResource.Spec.Authentication.IAMKeySecret.Namespace = ""
 		result.want = syncer.NewServiceAccountJSONCredentials([]byte(testSecretRefVal))
 	})
 
 	It("should return error when no secret key is provided", func() {
 		result.expectedErr = errFetchServiceAccountJSONNoKeySpecified
-		testResource.Spec.ServiceAccountSecretRef.Key = nil
+		testResource.Spec.Authentication.IAMKeySecret.Key = ""
 	})
 
-	It("should return error when no secret data is found in ServiceAccountSecretRef.Key", func() {
+	It("should return error when no secret data is found in IAMKeySecret.Key", func() {
 		result.expectedErr = errFetchServiceAccountJSONNoSecretDataFound
-		testResource.Spec.ServiceAccountSecretRef.Key = pointer.String("invalid-key")
+		testResource.Spec.Authentication.IAMKeySecret.Key = "invalid-key"
 	})
 
 	It("should return error when no secret name is specified", func() {
 		result.expectedErr = errFetchServiceAccountJSONNoNameSpecified
-		testResource.Spec.ServiceAccountSecretRef.Name = nil
+		testResource.Spec.Authentication.IAMKeySecret.Name = ""
 	})
 
 	It("should return error when secret is not found", func() {
 		result.expectedErr = errFetchServiceAccountJSONNoSecretFound
-		testResource.Spec.ServiceAccountSecretRef.Name = pointer.String("invalid-secret")
+		testResource.Spec.Authentication.IAMKeySecret.Name = "invalid-secret"
 	})
 
-	It("should return ADC credentials when ServiceAccountSecretRef is not specified", func() {
-		testResource.Spec.ServiceAccountSecretRef = nil
+	It("should return ADC credentials when IAMKeySecret is not specified", func() {
+		testResource.Spec.Authentication.Type = spannerv1beta1.AuthTypeADC
+		testResource.Spec.Authentication.IAMKeySecret = nil
 		result.want = syncer.NewADCCredentials()
 	})
 
-	It("should return error when both of ServiceAccountSecretRef and InstanceConfig", func() {
-		// testResource.Spec.ServiceAccountSecretRef is already set in the default initialization above
-		testResource.Spec.ImpersonateConfig = &spannerv1alpha1.ImpersonateConfig{
+	It("should return error when both of IAMKeySecret and InstanceConfig", func() {
+		// testResource.Spec.Authentication.IAMKeySecret is already set in the default initialization above
+		testResource.Spec.Authentication.ImpersonateConfig = &spannerv1beta1.ImpersonateConfig{
 			TargetServiceAccount: "target@example.iam.gserviceaccount.com",
 		}
 		result.expectedErr = errInvalidExclusiveCredentials
@@ -385,10 +398,11 @@ var _ = Describe("Fetch Credentials", func() {
 
 	It("should return impersonate config when only InstanceConfig is specified", func() {
 		// remove the default value which is already set in the initialization above
-		testResource.Spec.ServiceAccountSecretRef = nil
+		testResource.Spec.Authentication.Type = spannerv1beta1.AuthTypeImpersonation
+		testResource.Spec.Authentication.IAMKeySecret = nil
 
 		targetSA := "target@example.iam.gserviceaccount.com"
-		testResource.Spec.ImpersonateConfig = &spannerv1alpha1.ImpersonateConfig{
+		testResource.Spec.Authentication.ImpersonateConfig = &spannerv1beta1.ImpersonateConfig{
 			TargetServiceAccount: targetSA,
 		}
 		result.want = syncer.NewServiceAccountImpersonate(targetSA, nil)

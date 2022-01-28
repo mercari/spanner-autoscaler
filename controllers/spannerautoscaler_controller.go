@@ -35,11 +35,10 @@ import (
 	ctrlmanager "sigs.k8s.io/controller-runtime/pkg/manager"
 	ctrlreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	spannerv1alpha1 "github.com/mercari/spanner-autoscaler/api/v1alpha1"
+	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
 	"github.com/mercari/spanner-autoscaler/pkg/logging"
 	"github.com/mercari/spanner-autoscaler/pkg/spanner"
 	"github.com/mercari/spanner-autoscaler/pkg/syncer"
-	"k8s.io/utils/pointer"
 )
 
 var (
@@ -47,10 +46,11 @@ var (
 	errFetchServiceAccountJSONNoKeySpecified    = errors.New("no key specified")
 	errFetchServiceAccountJSONNoSecretFound     = errors.New("no secret found by specified name")
 	errFetchServiceAccountJSONNoSecretDataFound = errors.New("no secret found by specified key")
-	errInvalidExclusiveCredentials              = errors.New("impersonateConfig and serviceAccountSecretRef are mutually exclusive")
+	errInvalidExclusiveCredentials              = errors.New("impersonateConfig and iamKeySecret are mutually exclusive")
 )
 
-const defaultMaxScaleDownNodes = 2
+// TODO: move this to 'defaulting' webhook
+const defaultScaledownStepSize = 2
 
 // SpannerAutoscalerReconciler reconciles a SpannerAutoscaler object.
 type SpannerAutoscalerReconciler struct {
@@ -139,7 +139,7 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 	s, syncerExists := r.syncers[nn]
 	r.mu.RUnlock()
 
-	var sa spannerv1alpha1.SpannerAutoscaler
+	var sa spannerv1beta1.SpannerAutoscaler
 	if err := r.ctrlClient.Get(ctx, nn, &sa); err != nil {
 		err = ctrlclient.IgnoreNotFound(err)
 		if err != nil {
@@ -147,6 +147,7 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 			return ctrlreconcile.Result{}, err
 		}
 
+		log.V(2).Info("checking if a syncer exists")
 		if syncerExists {
 			s.Stop()
 			r.mu.Lock()
@@ -158,8 +159,9 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 		return ctrlreconcile.Result{}, nil
 	}
 
-	if sa.Spec.MaxScaleDownNodes == nil || *sa.Spec.MaxScaleDownNodes == 0 {
-		sa.Spec.MaxScaleDownNodes = pointer.Int32(defaultMaxScaleDownNodes)
+	// TODO: move this to the defaulting webhook
+	if sa.Spec.ScaleConfig.ScaledownStepSize == 0 {
+		sa.Spec.ScaleConfig.ScaledownStepSize = defaultScaledownStepSize
 	}
 
 	log.V(1).Info("resource status", "spannerautoscaler", sa)
@@ -173,9 +175,10 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 
 	// If the syncer does not exist, start a syncer.
 	if !syncerExists {
+		log.V(2).Info("syncer does not exist, starting a new syncer")
 		ctx = logging.WithContext(ctx, log)
 
-		if err := r.startSyncer(ctx, nn, *sa.Spec.ScaleTargetRef.ProjectID, *sa.Spec.ScaleTargetRef.InstanceID, credentials); err != nil {
+		if err := r.startSyncer(ctx, nn, sa.Spec.TargetInstance.ProjectID, sa.Spec.TargetInstance.InstanceID, credentials); err != nil {
 			r.recorder.Event(&sa, corev1.EventTypeWarning, "FailedStartSyncer", err.Error())
 			log.Error(err, "failed to start syncer")
 			return ctrlreconcile.Result{}, err
@@ -185,13 +188,13 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 	}
 
 	// If target spanner instance or service account have been changed, then just replace syncer.
-	if s.UpdateTarget(*sa.Spec.ScaleTargetRef.ProjectID, *sa.Spec.ScaleTargetRef.InstanceID, credentials) {
+	if s.UpdateTarget(sa.Spec.TargetInstance.ProjectID, sa.Spec.TargetInstance.InstanceID, credentials) {
 		s.Stop()
 		r.mu.Lock()
 		delete(r.syncers, nn)
 		r.mu.Unlock()
 
-		if err := r.startSyncer(ctx, nn, *sa.Spec.ScaleTargetRef.ProjectID, *sa.Spec.ScaleTargetRef.InstanceID, credentials); err != nil {
+		if err := r.startSyncer(ctx, nn, sa.Spec.TargetInstance.ProjectID, sa.Spec.TargetInstance.InstanceID, credentials); err != nil {
 			r.recorder.Event(&sa, corev1.EventTypeWarning, "FailedStartSyncer", err.Error())
 			log.Error(err, "failed to start syncer")
 			return ctrlreconcile.Result{}, err
@@ -201,24 +204,23 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 		return ctrlreconcile.Result{}, nil
 	}
 
-	if sa.Status.LastScaleTime == nil {
-		sa.Status.LastScaleTime = &metav1.Time{}
-	}
-
+	log.V(1).Info("checking to see if we need to calculate processing units", "sa", sa)
 	if !r.needCalcProcessingUnits(&sa) {
 		return ctrlreconcile.Result{}, nil
 	}
 
+	// TODO: change this to pass the object instead of so many parameters
 	desiredProcessingUnits := calcDesiredProcessingUnits(
-		*sa.Status.CurrentHighPriorityCPUUtilization,
-		normalizeProcessingUnitsOrNodes(sa.Status.CurrentProcessingUnits, sa.Status.CurrentNodes),
-		*sa.Spec.TargetCPUUtilization.HighPriority,
-		normalizeProcessingUnitsOrNodes(sa.Spec.MinProcessingUnits, sa.Spec.MinNodes),
-		normalizeProcessingUnitsOrNodes(sa.Spec.MaxProcessingUnits, sa.Spec.MaxNodes),
-		*sa.Spec.MaxScaleDownNodes,
+		sa.Status.CurrentHighPriorityCPUUtilization,
+		normalizeProcessingUnitsOrNodes(sa.Status.CurrentProcessingUnits, sa.Status.CurrentNodes, sa.Spec.ScaleConfig.ComputeType),
+		sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority,
+		normalizeProcessingUnitsOrNodes(sa.Spec.ScaleConfig.ProcessingUnits.Min, sa.Spec.ScaleConfig.Nodes.Min, sa.Spec.ScaleConfig.ComputeType),
+		normalizeProcessingUnitsOrNodes(sa.Spec.ScaleConfig.ProcessingUnits.Max, sa.Spec.ScaleConfig.Nodes.Max, sa.Spec.ScaleConfig.ComputeType),
+		sa.Spec.ScaleConfig.ScaledownStepSize,
 	)
 
 	now := r.clock.Now()
+	log.V(1).Info("processing units need to be changed", "desiredProcessingUnits", desiredProcessingUnits, "sa.Status", sa.Status)
 
 	if !r.needUpdateProcessingUnits(&sa, desiredProcessingUnits, now) {
 		return ctrlreconcile.Result{}, nil
@@ -230,15 +232,15 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 		return ctrlreconcile.Result{}, err
 	}
 
-	r.recorder.Eventf(&sa, corev1.EventTypeNormal, "Updated", "Updated processing units of %s/%s from %d to %d", *sa.Spec.ScaleTargetRef.ProjectID, *sa.Spec.ScaleTargetRef.InstanceID,
-		normalizeProcessingUnitsOrNodes(sa.Status.CurrentProcessingUnits, sa.Status.CurrentNodes), desiredProcessingUnits)
+	r.recorder.Eventf(&sa, corev1.EventTypeNormal, "Updated", "Updated processing units of %s/%s from %d to %d", sa.Spec.TargetInstance.ProjectID, sa.Spec.TargetInstance.InstanceID,
+		normalizeProcessingUnitsOrNodes(sa.Status.CurrentProcessingUnits, sa.Status.CurrentNodes, sa.Spec.ScaleConfig.ComputeType), desiredProcessingUnits)
 
-	log.Info("updated nodes via google cloud api", "before", normalizeProcessingUnitsOrNodes(sa.Status.CurrentProcessingUnits, sa.Status.CurrentNodes), "after", desiredProcessingUnits)
+	log.Info("updated nodes via google cloud api", "before", normalizeProcessingUnitsOrNodes(sa.Status.CurrentProcessingUnits, sa.Status.CurrentNodes, sa.Spec.ScaleConfig.ComputeType), "after", desiredProcessingUnits)
 
 	saCopy := sa.DeepCopy()
-	saCopy.Status.DesiredProcessingUnits = &desiredProcessingUnits
-	saCopy.Status.DesiredNodes = pointer.Int32(desiredProcessingUnits / 1000)
-	saCopy.Status.LastScaleTime = &metav1.Time{Time: now}
+	saCopy.Status.DesiredProcessingUnits = desiredProcessingUnits
+	saCopy.Status.DesiredNodes = desiredProcessingUnits / 1000
+	saCopy.Status.LastScaleTime = metav1.Time{Time: now}
 
 	if err = r.ctrlClient.Status().Update(ctx, saCopy); err != nil {
 		r.recorder.Event(&sa, corev1.EventTypeWarning, "FailedUpdateStatus", err.Error())
@@ -249,14 +251,16 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 	return ctrlreconcile.Result{}, nil
 }
 
-func normalizeProcessingUnitsOrNodes(processingUnits, nodes *int32) int32 {
-	if processingUnits != nil {
-		return *processingUnits
+// TODO: convert all internal computations to processing units only
+func normalizeProcessingUnitsOrNodes(pu, nodes int, computeType spannerv1beta1.ComputeType) int {
+	switch computeType {
+	case spannerv1beta1.ComputeTypePU:
+		return pu
+	case spannerv1beta1.ComputeTypeNode:
+		return nodes * 1000
+	default:
+		return -1
 	}
-	if nodes != nil {
-		return *nodes * 1000
-	}
-	return 0
 }
 
 // SetupWithManager sets up the controller with ctrlmanager.Manager.
@@ -266,7 +270,7 @@ func (r *SpannerAutoscalerReconciler) SetupWithManager(mgr ctrlmanager.Manager) 
 	}
 
 	return ctrlbuilder.ControllerManagedBy(mgr).
-		For(&spannerv1alpha1.SpannerAutoscaler{}).
+		For(&spannerv1beta1.SpannerAutoscaler{}).
 		WithOptions(opts).
 		Complete(r)
 }
@@ -289,11 +293,12 @@ func (r *SpannerAutoscalerReconciler) startSyncer(ctx context.Context, nn types.
 	return nil
 }
 
-func (r *SpannerAutoscalerReconciler) needCalcProcessingUnits(sa *spannerv1alpha1.SpannerAutoscaler) bool {
+func (r *SpannerAutoscalerReconciler) needCalcProcessingUnits(sa *spannerv1beta1.SpannerAutoscaler) bool {
 	log := r.log
 
 	switch {
-	case sa.Status.CurrentProcessingUnits == nil && sa.Status.CurrentNodes == nil:
+	// TODO: Fix this to use only processing units
+	case sa.Status.CurrentProcessingUnits == 0 && sa.Status.CurrentNodes == 0:
 		log.Info("current processing units have not fetched yet")
 		return false
 
@@ -305,10 +310,10 @@ func (r *SpannerAutoscalerReconciler) needCalcProcessingUnits(sa *spannerv1alpha
 	}
 }
 
-func (r *SpannerAutoscalerReconciler) needUpdateProcessingUnits(sa *spannerv1alpha1.SpannerAutoscaler, desiredProcessingUnits int32, now time.Time) bool {
+func (r *SpannerAutoscalerReconciler) needUpdateProcessingUnits(sa *spannerv1beta1.SpannerAutoscaler, desiredProcessingUnits int, now time.Time) bool {
 	log := r.log
 
-	currentProcessingUnits := normalizeProcessingUnitsOrNodes(sa.Status.CurrentProcessingUnits, sa.Status.CurrentNodes)
+	currentProcessingUnits := normalizeProcessingUnitsOrNodes(sa.Status.CurrentProcessingUnits, sa.Status.CurrentNodes, sa.Spec.ScaleConfig.ComputeType)
 
 	switch {
 	case desiredProcessingUnits == currentProcessingUnits:
@@ -337,8 +342,8 @@ func (r *SpannerAutoscalerReconciler) needUpdateProcessingUnits(sa *spannerv1alp
 }
 
 // For testing purpose only
-func calcDesiredNodes(currentCPU, currentNodes, targetCPU, minNodes, maxNodes, maxScaleDownNodes int32) int32 {
-	return calcDesiredProcessingUnits(currentCPU, currentNodes*1000, targetCPU, minNodes*1000, maxNodes*1000, maxScaleDownNodes) / 1000
+func calcDesiredNodes(currentCPU, currentNodes, targetCPU, minNodes, maxNodes, scaledownStepSize int) int {
+	return calcDesiredProcessingUnits(currentCPU, currentNodes*1000, targetCPU, minNodes*1000, maxNodes*1000, scaledownStepSize) / 1000
 }
 
 // nextValidProcessingUnits finds next valid value in processing units.
@@ -346,14 +351,14 @@ func calcDesiredNodes(currentCPU, currentNodes, targetCPU, minNodes, maxNodes, m
 // Valid values are
 // If processingUnits < 1000, processing units must be multiples of 100.
 // If processingUnits >= 1000, processing units must be multiples of 1000.
-func nextValidProcessingUnits(processingUnits int32) int32 {
+func nextValidProcessingUnits(processingUnits int) int {
 	if processingUnits < 1000 {
 		return ((processingUnits / 100) + 1) * 100
 	}
 	return ((processingUnits / 1000) + 1) * 1000
 }
 
-func maxInt32(first int32, rest ...int32) int32 {
+func maxInt(first int, rest ...int) int {
 	result := first
 	for _, v := range rest {
 		if result < v {
@@ -364,10 +369,10 @@ func maxInt32(first int32, rest ...int32) int32 {
 }
 
 // calcDesiredProcessingUnits calculates the values needed to keep CPU utilization below TargetCPU.
-func calcDesiredProcessingUnits(currentCPU, currentProcessingUnits, targetCPU, minProcessingUnits, maxProcessingUnits, maxScaleDownNodes int32) int32 {
+func calcDesiredProcessingUnits(currentCPU, currentProcessingUnits, targetCPU, minProcessingUnits, maxProcessingUnits, scaledownStepSize int) int {
 	totalCPUProduct1000 := currentCPU * currentProcessingUnits
 
-	desiredProcessingUnits := maxInt32(nextValidProcessingUnits(totalCPUProduct1000/targetCPU), currentProcessingUnits-maxScaleDownNodes*1000)
+	desiredProcessingUnits := maxInt(nextValidProcessingUnits(totalCPUProduct1000/targetCPU), currentProcessingUnits-scaledownStepSize*1000)
 
 	switch {
 	case desiredProcessingUnits < minProcessingUnits:
@@ -381,33 +386,36 @@ func calcDesiredProcessingUnits(currentCPU, currentProcessingUnits, targetCPU, m
 	}
 }
 
-func (r *SpannerAutoscalerReconciler) fetchCredentials(ctx context.Context, sa *spannerv1alpha1.SpannerAutoscaler) (*syncer.Credentials, error) {
-	secretRef := sa.Spec.ServiceAccountSecretRef
-	impersonateConfig := sa.Spec.ImpersonateConfig
+func (r *SpannerAutoscalerReconciler) fetchCredentials(ctx context.Context, sa *spannerv1beta1.SpannerAutoscaler) (*syncer.Credentials, error) {
+	iamKeySecret := sa.Spec.Authentication.IAMKeySecret
+	impersonateConfig := sa.Spec.Authentication.ImpersonateConfig
 
-	if secretRef != nil && impersonateConfig != nil {
+	// TODO: move this to 'validating' webhook
+	if iamKeySecret != nil && impersonateConfig != nil {
 		return nil, errInvalidExclusiveCredentials
 	}
 
-	if secretRef != nil {
-		if secretRef.Name == nil || *secretRef.Name == "" {
+	switch sa.Spec.Authentication.Type {
+	case spannerv1beta1.AuthTypeSA:
+		if iamKeySecret.Name == "" {
 			return nil, errFetchServiceAccountJSONNoNameSpecified
 		}
 
-		if secretRef.Key == nil || *secretRef.Key == "" {
+		if iamKeySecret.Key == "" {
 			return nil, errFetchServiceAccountJSONNoKeySpecified
 		}
 
 		var namespace string
-		if secretRef.Namespace == nil || *secretRef.Namespace == "" {
+		// TODO: move this to 'defaulting' webhook
+		if iamKeySecret.Namespace == "" {
 			namespace = sa.Namespace
 		} else {
-			namespace = *secretRef.Namespace
+			namespace = iamKeySecret.Namespace
 		}
 
 		var secret corev1.Secret
 		key := ctrlclient.ObjectKey{
-			Name:      *secretRef.Name,
+			Name:      iamKeySecret.Name,
 			Namespace: namespace,
 		}
 		if err := r.apiReader.Get(ctx, key, &secret); err != nil {
@@ -417,17 +425,17 @@ func (r *SpannerAutoscalerReconciler) fetchCredentials(ctx context.Context, sa *
 			return nil, err
 		}
 
-		serviceAccountJSON, ok := secret.Data[*secretRef.Key]
+		serviceAccountJSON, ok := secret.Data[iamKeySecret.Key]
 		if !ok {
 			return nil, errFetchServiceAccountJSONNoSecretDataFound
 		}
 
 		return syncer.NewServiceAccountJSONCredentials(serviceAccountJSON), nil
-	}
 
-	if impersonateConfig != nil {
+	case spannerv1beta1.AuthTypeImpersonation:
 		return syncer.NewServiceAccountImpersonate(impersonateConfig.TargetServiceAccount, impersonateConfig.Delegates), nil
-	}
 
-	return syncer.NewADCCredentials(), nil
+	default:
+		return syncer.NewADCCredentials(), nil
+	}
 }
