@@ -21,6 +21,8 @@ import (
 )
 
 // TODO: Add comments for describing each of the structs
+
+// +kubebuilder:validation:Enum=gcp-sa-key;impersonation;adc
 type AuthType string
 
 const (
@@ -29,6 +31,7 @@ const (
 	AuthTypeADC           AuthType = "adc"
 )
 
+// +kubebuilder:validation:Enum=nodes;processing-units
 type ComputeType string
 
 const (
@@ -42,7 +45,7 @@ type TargetInstance struct {
 }
 
 type Authentication struct {
-	Type AuthType `json:"type"`
+	Type AuthType `json:"type,omitempty"`
 
 	// This is a pointer because structs with string slices can not be compared for zero values
 	ImpersonateConfig *ImpersonateConfig `json:"impersonateConfig,omitempty"`
@@ -61,20 +64,27 @@ type IAMKeySecret struct {
 }
 
 type ScaleConfig struct {
-	ComputeType          ComputeType          `json:"computeType"`
-	Nodes                ScaleConfigNodes     `json:"nodes,omitempty"`
-	ProcessingUnits      ScaleConfigPUs       `json:"processingUnits,omitempty"`
-	ScaledownStepSize    int                  `json:"scaledownStepSize,omitempty"`
+	ComputeType     ComputeType      `json:"computeType,omitempty"`
+	Nodes           ScaleConfigNodes `json:"nodes,omitempty"`
+	ProcessingUnits ScaleConfigPUs   `json:"processingUnits,omitempty"`
+
+	// +kubebuilder:default=2
+	ScaledownStepSize int `json:"scaledownStepSize,omitempty"`
+
 	TargetCPUUtilization TargetCPUUtilization `json:"targetCPUUtilization"`
 }
 
 type ScaleConfigNodes struct {
-	Min int `json:"min"`
-	Max int `json:"max"`
+	Min int `json:"min,omitempty"`
+	Max int `json:"max,omitempty"`
 }
 
 type ScaleConfigPUs struct {
+
+	// +kubebuilder:validation:MultipleOf=100
 	Min int `json:"min"`
+
+	// +kubebuilder:validation:MultipleOf=100
 	Max int `json:"max"`
 }
 
