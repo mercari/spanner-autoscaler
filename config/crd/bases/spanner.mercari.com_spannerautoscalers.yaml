@@ -258,8 +258,13 @@ spec:
             description: SpannerAutoscalerSpec defines the desired state of SpannerAutoscaler
             properties:
               authentication:
+                description: Authentication details for the Spanner instance
                 properties:
                   iamKeySecret:
+                    description: 'Details of the k8s secret which contains the GCP
+                      service account authentication key (in JSON). Ref: https://cloud.google.com/kubernetes-engine/docs/tutorials/authenticating-to-cloud-platform
+                      This is a pointer because structs with string slices can not
+                      be compared for zero values'
                     properties:
                       key:
                         type: string
@@ -272,8 +277,11 @@ spec:
                     - name
                     type: object
                   impersonateConfig:
-                    description: This is a pointer because structs with string slices
-                      can not be compared for zero values
+                    description: 'Details of the GCP service account which will be
+                      impersonated, for authentication to GCP. This can used only
+                      on GKE clusters, when workload identity is enabled. Ref: https://cloud.google.com/kubernetes-engine/docs/how-to/workload-identity
+                      This is a pointer because structs with string slices can not
+                      be compared for zero values'
                     properties:
                       delegates:
                         items:
@@ -285,6 +293,9 @@ spec:
                     - targetServiceAccount
                     type: object
                   type:
+                    description: Authentication method to be used for GCP authentication.
+                      If `ImpersonateConfig` as well as `IAMKeySecret` is nil, this
+                      will be set to use ADC be default.
                     enum:
                     - gcp-sa-key
                     - impersonation
@@ -292,13 +303,24 @@ spec:
                     type: string
                 type: object
               scaleConfig:
+                description: Details of the autoscaling parameters for the Spanner
+                  instance
                 properties:
                   computeType:
+                    description: Whether to use `nodes` or `processing-units` for
+                      scaling. This is only used at the time of CustomResource creation.
+                      If compute capacity is provided in `nodes`, then it is automatically
+                      converted to `processing-units` at the time of resource creation,
+                      and internally, only `ProcessingUnits` are used for computations
+                      and scaling.
                     enum:
                     - nodes
                     - processing-units
                     type: string
                   nodes:
+                    description: If `nodes` are provided at the time of resource creation,
+                      then they are automatically converted to `processing-units`.
+                      So it is recommended to use only the processing units.
                     properties:
                       max:
                         type: integer
@@ -306,6 +328,8 @@ spec:
                         type: integer
                     type: object
                   processingUnits:
+                    description: 'ProcessingUnits for scaling of the Spanner instance:
+                      https://cloud.google.com/spanner/docs/compute-capacity#compute_capacity'
                     properties:
                       max:
                         multipleOf: 100
@@ -318,9 +342,14 @@ spec:
                     - min
                     type: object
                   scaledownStepSize:
-                    default: 2
+                    default: 2000
+                    description: The maximum number of processing units which can
+                      be deleted in one scale-down operation
+                    multipleOf: 1000
                     type: integer
                   targetCPUUtilization:
+                    description: The CPU utilization which the autoscaling will try
+                      to achieve
                     properties:
                       highPriority:
                         type: integer
@@ -331,10 +360,13 @@ spec:
                 - targetCPUUtilization
                 type: object
               targetInstance:
+                description: The Spanner instance which will be managed for autoscaling
                 properties:
                   instanceId:
+                    description: The instance id of the Spanner instance
                     type: string
                   projectId:
+                    description: The GCP Project id of the Spanner instance
                     type: string
                 required:
                 - instanceId

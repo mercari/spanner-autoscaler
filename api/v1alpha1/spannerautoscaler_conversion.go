@@ -59,7 +59,7 @@ func (src *SpannerAutoscaler) ConvertTo(dstRaw conversion.Hub) error {
 			Max: int(*src.Spec.MaxProcessingUnits),
 		}
 	}
-	scaleConfig.ScaledownStepSize = int(*src.Spec.MaxScaleDownNodes)
+	scaleConfig.ScaledownStepSize = int(*src.Spec.MaxScaleDownNodes) * 1000
 	scaleConfig.TargetCPUUtilization = v1beta1.TargetCPUUtilization{
 		HighPriority: int(*src.Spec.TargetCPUUtilization.HighPriority),
 	}
@@ -132,7 +132,7 @@ func (dst *SpannerAutoscaler) ConvertFrom(srcRaw conversion.Hub) error {
 		dst.Spec.MaxProcessingUnits = pointer.Int32(int32(src.Spec.ScaleConfig.ProcessingUnits.Max))
 	}
 
-	dst.Spec.MaxScaleDownNodes = pointer.Int32(int32(src.Spec.ScaleConfig.ScaledownStepSize))
+	dst.Spec.MaxScaleDownNodes = pointer.Int32(int32(src.Spec.ScaleConfig.ScaledownStepSize / 1000))
 	dst.Spec.TargetCPUUtilization = TargetCPUUtilization{
 		HighPriority: pointer.Int32(int32(src.Spec.ScaleConfig.TargetCPUUtilization.HighPriority)),
 	}
