@@ -2,14 +2,13 @@ package spanner
 
 import (
 	"context"
-	"fmt"
 	"sync"
 )
 
 // FakeClient implements Client but operates fake objects for testing.
 // This ensure thread-safety.
 type FakeClient struct {
-	instances map[string]*Instance
+	instance *Instance
 
 	mu sync.RWMutex
 }
@@ -18,31 +17,24 @@ type FakeClient struct {
 var _ Client = (*FakeClient)(nil)
 
 // NewFakeClient returns a new *FakeClient initialized with the given fake objects.
-func NewFakeClient(instances map[string]*Instance) *FakeClient {
+func NewFakeClient(instance *Instance) *FakeClient {
 	return &FakeClient{
-		instances: instances,
-		mu:        sync.RWMutex{},
+		instance: instance,
+		mu:       sync.RWMutex{},
 	}
 }
 
 // GetInstance implements Client.
-func (c *FakeClient) GetInstance(ctx context.Context, instanceID string) (*Instance, error) {
+func (c *FakeClient) GetInstance(ctx context.Context) (*Instance, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	instance, ok := c.instances[instanceID]
-	if !ok {
-		return nil, fmt.Errorf("instance %q not found", instanceID)
-	}
-	return instance, nil
+	return c.instance, nil
 }
 
 // UpdateInstance implements Client.
-func (c *FakeClient) UpdateInstance(ctx context.Context, instanceID string, instance *Instance) error {
+func (c *FakeClient) UpdateInstance(ctx context.Context, instance *Instance) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if _, ok := c.instances[instanceID]; !ok {
-		return fmt.Errorf("instance %q not found", instanceID)
-	}
-	c.instances[instanceID] = instance
+	c.instance = instance
 	return nil
 }

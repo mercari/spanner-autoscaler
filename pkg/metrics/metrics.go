@@ -34,15 +34,16 @@ type InstanceMetrics struct {
 // Client is a client for manipulation of InstanceMetrics.
 type Client interface {
 	// GetInstanceMetrics gets the instance metrics by instance id.
-	GetInstanceMetrics(ctx context.Context, instanceID string) (*InstanceMetrics, error)
+	GetInstanceMetrics(ctx context.Context) (*InstanceMetrics, error)
 }
 
 // client is a client for Stackdriver Monitoring.
 type client struct {
 	monitoringMetricClient *monitoring.MetricClient
 
-	projectID string
-	term      time.Duration
+	projectID  string
+	instanceID string
+	term       time.Duration
 
 	tokenSource oauth2.TokenSource
 
@@ -79,12 +80,13 @@ func WithLog(log logr.Logger) Option {
 }
 
 // NewClient returns a new Client.
-func NewClient(ctx context.Context, projectID string, opts ...Option) (Client, error) {
+func NewClient(ctx context.Context, projectID, instanceID string, opts ...Option) (Client, error) {
 	c := &client{
-		projectID: projectID,
-		term:      10 * time.Minute,
-		clock:     utilclock.RealClock{},
-		log:       zapr.NewLogger(zap.NewNop()),
+		projectID:  projectID,
+		instanceID: instanceID,
+		term:       10 * time.Minute,
+		clock:      utilclock.RealClock{},
+		log:        zapr.NewLogger(zap.NewNop()),
 	}
 
 	for _, opt := range opts {
@@ -109,12 +111,12 @@ func NewClient(ctx context.Context, projectID string, opts ...Option) (Client, e
 
 // GetInstanceMetrics implements Client.
 // https://cloud.google.com/monitoring/custom-metrics/reading-metrics#monitoring_read_timeseries_fields-go
-func (c *client) GetInstanceMetrics(ctx context.Context, instanceID string) (*InstanceMetrics, error) {
-	log := c.log.WithValues("instance id", instanceID)
+func (c *client) GetInstanceMetrics(ctx context.Context) (*InstanceMetrics, error) {
+	log := c.log.WithValues("instance id", c.instanceID)
 
 	req := &monitoringpb.ListTimeSeriesRequest{
 		Name:   fmt.Sprintf("projects/%s", c.projectID),
-		Filter: fmt.Sprintf(metricsFilterFormat, instanceID),
+		Filter: fmt.Sprintf(metricsFilterFormat, c.instanceID),
 		Interval: &monitoringpb.TimeInterval{
 			StartTime: &timestamp.Timestamp{
 				Seconds: c.clock.Now().UTC().Add(-c.term).Unix(),
