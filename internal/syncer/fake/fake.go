@@ -3,7 +3,7 @@ package fake
 import (
 	"context"
 
-	"github.com/mercari/spanner-autoscaler/pkg/syncer"
+	"github.com/mercari/spanner-autoscaler/internal/syncer"
 )
 
 type Syncer struct {

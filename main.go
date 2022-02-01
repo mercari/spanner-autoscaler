@@ -70,9 +70,7 @@ const (
 
 func main() {
 	zapOptions := zap.Options{
-		// TODO: `DestWritter` is deprecated (because of typo).
-		// Switch to `DestWriter` after controller-runtime or kubebuilder version upgrade
-		DestWritter: os.Stdout, // default is os.Stderr
+		DestWriter: os.Stdout, // default is os.Stderr
 	}
 
 	zapOptions.BindFlags(flag.CommandLine)

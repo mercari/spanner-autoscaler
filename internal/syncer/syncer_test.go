@@ -21,8 +21,8 @@ import (
 	ctrlzap "sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
-	"github.com/mercari/spanner-autoscaler/pkg/metrics"
-	"github.com/mercari/spanner-autoscaler/pkg/spanner"
+	"github.com/mercari/spanner-autoscaler/internal/metrics"
+	"github.com/mercari/spanner-autoscaler/internal/spanner"
 )
 
 var scheme = runtime.NewScheme()
