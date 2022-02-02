@@ -6,13 +6,10 @@ import (
 	"fmt"
 	"time"
 
-	// TODO: Lint suggests that this api is deprecated in favor of 'monitoring/v2', confirm and update
-	monitoring "cloud.google.com/go/monitoring/apiv3" // nolint:staticcheck
+	monitoring "cloud.google.com/go/monitoring/apiv3/v2"
 	"github.com/go-logr/logr"
-	"github.com/go-logr/zapr"
 	"github.com/golang/protobuf/ptypes/duration"
 	"github.com/golang/protobuf/ptypes/timestamp"
-	"go.uber.org/zap"
 	"golang.org/x/oauth2"
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
@@ -86,7 +83,7 @@ func NewClient(ctx context.Context, projectID, instanceID string, opts ...Option
 		instanceID: instanceID,
 		term:       10 * time.Minute,
 		clock:      utilclock.RealClock{},
-		log:        zapr.NewLogger(zap.NewNop()),
+		log:        logr.Discard(),
 	}
 
 	for _, opt := range opts {
@@ -112,7 +109,9 @@ func NewClient(ctx context.Context, projectID, instanceID string, opts ...Option
 // GetInstanceMetrics implements Client.
 // https://cloud.google.com/monitoring/custom-metrics/reading-metrics#monitoring_read_timeseries_fields-go
 func (c *client) GetInstanceMetrics(ctx context.Context) (*InstanceMetrics, error) {
-	log := c.log.WithValues("instance id", c.instanceID)
+	log := c.log.WithValues("instance-id", c.instanceID, "project-id", c.projectID)
+
+	log.V(1).Info("getting monitoring time series data")
 
 	req := &monitoringpb.ListTimeSeriesRequest{
 		Name:   fmt.Sprintf("projects/%s", c.projectID),
@@ -146,6 +145,8 @@ func (c *client) GetInstanceMetrics(ctx context.Context) (*InstanceMetrics, erro
 			return nil, err
 		}
 
+		log.V(1).Info("got time series data points", "points", resp.GetPoints())
+
 		// monitoringpb.Point.GetValue().GetDoubleValue() for CPU is in [0, 1].
 		cpuPercent, err := firstPointAsPercent(resp.GetPoints())
 		if err != nil {
@@ -157,6 +158,8 @@ func (c *client) GetInstanceMetrics(ctx context.Context) (*InstanceMetrics, erro
 			CurrentHighPriorityCPUUtilization: cpuPercent,
 		}, nil
 	}
+
+	log.V(1).Info("could not get any time series metrics")
 
 	return nil, errors.New("no such spanner instance metrics")
 }

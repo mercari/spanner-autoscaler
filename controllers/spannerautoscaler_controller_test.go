@@ -3,17 +3,16 @@ package controllers
 import (
 	"time"
 
-	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/clock"
 
-	"github.com/go-logr/zapr"
+	"github.com/go-logr/logr"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/google/uuid"
 	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
-	"github.com/mercari/spanner-autoscaler/pkg/syncer"
+	"github.com/mercari/spanner-autoscaler/internal/syncer"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -129,7 +128,7 @@ var _ = Describe("Check Update Nodes", func() {
 		testReconciler = &SpannerAutoscalerReconciler{
 			scaleDownInterval: time.Hour,
 			clock:             clock.NewFakeClock(fakeTime),
-			log:               zapr.NewLogger(zap.NewNop()),
+			log:               logr.Discard(),
 		}
 	})
 
@@ -142,7 +141,7 @@ var _ = Describe("Check Update Nodes", func() {
 				InstanceState:          spannerv1beta1.InstanceStateReady,
 			},
 		}
-		got := testReconciler.needUpdateProcessingUnits(sa, sa.Status.DesiredProcessingUnits, fakeTime)
+		got := testReconciler.needUpdateProcessingUnits(testReconciler.log, sa, sa.Status.DesiredProcessingUnits, fakeTime)
 		Expect(got).To(BeFalse())
 	})
 
@@ -160,7 +159,7 @@ var _ = Describe("Check Update Nodes", func() {
 				InstanceState:          spannerv1beta1.InstanceStateReady,
 			},
 		}
-		got := testReconciler.needUpdateProcessingUnits(sa, sa.Status.DesiredProcessingUnits, fakeTime)
+		got := testReconciler.needUpdateProcessingUnits(testReconciler.log, sa, sa.Status.DesiredProcessingUnits, fakeTime)
 		Expect(got).To(BeTrue())
 	})
 })

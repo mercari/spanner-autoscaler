@@ -8,8 +8,6 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
-	"github.com/go-logr/zapr"
-	"go.uber.org/zap"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	"golang.org/x/sync/errgroup"
@@ -22,8 +20,8 @@ import (
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
-	"github.com/mercari/spanner-autoscaler/pkg/metrics"
-	"github.com/mercari/spanner-autoscaler/pkg/spanner"
+	"github.com/mercari/spanner-autoscaler/internal/metrics"
+	"github.com/mercari/spanner-autoscaler/internal/spanner"
 	"google.golang.org/api/impersonate"
 )
 
@@ -179,7 +177,7 @@ func New(
 		namespacedName: namespacedName,
 		interval:       time.Minute,
 		stopCh:         make(chan struct{}),
-		log:            zapr.NewLogger(zap.NewNop()),
+		log:            logr.Discard(),
 		clock:          utilclock.RealClock{},
 		recorder:       recorder,
 	}
@@ -222,12 +220,13 @@ func (s *syncer) Stop() {
 	close(s.stopCh)
 }
 
-// UpdateTarget updates target and returns wether did update or not.
+// HasCredentials checks whether the existing credentials of the syncer, match the provided one or not
 func (s *syncer) HasCredentials(credentials *Credentials) bool {
 	// TODO: Consider deepCopy
 	return reflect.DeepEqual(s.credentials, credentials)
 }
 
+// UpdateInstance updates the target Spanner instance withe the desired number of processing units
 func (s *syncer) UpdateInstance(ctx context.Context, desiredProcessingUnits int) error {
 	err := s.spannerClient.UpdateInstance(ctx, &spanner.Instance{
 		ProcessingUnits: desiredProcessingUnits,
@@ -282,12 +281,12 @@ func (s *syncer) syncResource(ctx context.Context) error {
 	saCopy.Status.LastSyncTime = metav1.Time{Time: s.clock.Now()}
 
 	if err := s.ctrlClient.Status().Update(ctx, saCopy); err != nil {
-		s.recorder.Event(&sa, corev1.EventTypeWarning, "FailedUpdateStatus", err.Error())
-		log.Error(err, "unable to update spanner status")
+		s.recorder.Event(&sa, corev1.EventTypeWarning, "FailedSyncStatus", err.Error())
+		log.Error(err, "unable to sync spanner status")
 		return err
 	}
 
-	log.V(0).Info("updated spannerautoscaler resource")
+	log.Info("synced spannerautoscaler resource status")
 
 	return nil
 }

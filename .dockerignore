@@ -9,7 +9,7 @@
 **
 
 # Only include Go files
-!pkg
+!internal
 !controllers
 !api
 !main.go

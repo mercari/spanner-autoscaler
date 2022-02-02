@@ -36,9 +36,9 @@ import (
 	ctrlreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
-	"github.com/mercari/spanner-autoscaler/pkg/metrics"
-	"github.com/mercari/spanner-autoscaler/pkg/spanner"
-	"github.com/mercari/spanner-autoscaler/pkg/syncer"
+	"github.com/mercari/spanner-autoscaler/internal/metrics"
+	"github.com/mercari/spanner-autoscaler/internal/spanner"
+	"github.com/mercari/spanner-autoscaler/internal/syncer"
 )
 
 var (
@@ -169,7 +169,7 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 	if !syncerExists {
 		log.V(2).Info("syncer does not exist, starting a new syncer")
 
-		if err := r.startSyncer(ctx, nn, sa.Spec.TargetInstance.ProjectID, sa.Spec.TargetInstance.InstanceID, credentials); err != nil {
+		if err := r.startSyncer(ctx, log, nn, sa.Spec.TargetInstance.ProjectID, sa.Spec.TargetInstance.InstanceID, credentials); err != nil {
 			r.recorder.Event(&sa, corev1.EventTypeWarning, "FailedStartSyncer", err.Error())
 			log.Error(err, "failed to start syncer")
 			return ctrlreconcile.Result{}, err
@@ -185,7 +185,7 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 		delete(r.syncers, nn)
 		r.mu.Unlock()
 
-		if err := r.startSyncer(ctx, nn, sa.Spec.TargetInstance.ProjectID, sa.Spec.TargetInstance.InstanceID, credentials); err != nil {
+		if err := r.startSyncer(ctx, log, nn, sa.Spec.TargetInstance.ProjectID, sa.Spec.TargetInstance.InstanceID, credentials); err != nil {
 			r.recorder.Event(&sa, corev1.EventTypeWarning, "FailedStartSyncer", err.Error())
 			log.Error(err, "failed to start syncer")
 			return ctrlreconcile.Result{}, err
@@ -208,12 +208,12 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 	desiredProcessingUnits := calcDesiredProcessingUnits(sa)
 
 	now := r.clock.Now()
-	log.V(1).Info("processing units need to be changed", "desiredProcessingUnits", desiredProcessingUnits, "sa.Status", sa.Status)
 
-	if !r.needUpdateProcessingUnits(&sa, desiredProcessingUnits, now) {
+	if !r.needUpdateProcessingUnits(log, &sa, desiredProcessingUnits, now) {
 		return ctrlreconcile.Result{}, nil
 	}
 
+	log.V(1).Info("processing units need to be changed", "desiredProcessingUnits", desiredProcessingUnits, "sa.Status", sa.Status)
 	if err := s.UpdateInstance(ctx, desiredProcessingUnits); err != nil {
 		r.recorder.Event(&sa, corev1.EventTypeWarning, "FailedUpdateInstance", err.Error())
 		log.Error(err, "failed to update spanner instance status")
@@ -251,9 +251,7 @@ func (r *SpannerAutoscalerReconciler) SetupWithManager(mgr ctrlmanager.Manager) 
 		Complete(r)
 }
 
-func (r *SpannerAutoscalerReconciler) startSyncer(ctx context.Context, nn types.NamespacedName, projectID, instanceID string, credentials *syncer.Credentials) error {
-	log := r.log
-
+func (r *SpannerAutoscalerReconciler) startSyncer(ctx context.Context, log logr.Logger, nn types.NamespacedName, projectID, instanceID string, credentials *syncer.Credentials) error {
 	ts, err := credentials.TokenSource(ctx)
 	if err != nil {
 		return err
@@ -296,18 +294,17 @@ func (r *SpannerAutoscalerReconciler) startSyncer(ctx context.Context, nn types.
 	return nil
 }
 
-func (r *SpannerAutoscalerReconciler) needUpdateProcessingUnits(sa *spannerv1beta1.SpannerAutoscaler, desiredProcessingUnits int, now time.Time) bool {
-	log := r.log
-
+func (r *SpannerAutoscalerReconciler) needUpdateProcessingUnits(log logr.Logger, sa *spannerv1beta1.SpannerAutoscaler, desiredProcessingUnits int, now time.Time) bool {
 	currentProcessingUnits := sa.Status.CurrentProcessingUnits
 
 	switch {
 	case desiredProcessingUnits == currentProcessingUnits:
-		log.Info("the desired number of processing units is equal to that of the current; no need to scale")
+		log.Info("no need to scale", "current-processing-units", currentProcessingUnits, "current-cpu", sa.Status.CurrentHighPriorityCPUUtilization)
 		return false
 
 	case desiredProcessingUnits > currentProcessingUnits && r.clock.Now().Before(sa.Status.LastScaleTime.Time.Add(10*time.Second)):
 		log.Info("too short to scale up since last scale-up event",
+			"time gap", now.Sub(sa.Status.LastScaleTime.Time),
 			"now", now.String(),
 			"last scale time", sa.Status.LastScaleTime,
 		)
@@ -316,6 +313,7 @@ func (r *SpannerAutoscalerReconciler) needUpdateProcessingUnits(sa *spannerv1bet
 
 	case desiredProcessingUnits < currentProcessingUnits && r.clock.Now().Before(sa.Status.LastScaleTime.Time.Add(r.scaleDownInterval)):
 		log.Info("too short to scale down since last scale-up event",
+			"time gap", now.Sub(sa.Status.LastScaleTime.Time),
 			"now", now.String(),
 			"last scale time", sa.Status.LastScaleTime,
 		)

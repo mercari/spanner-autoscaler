@@ -40,8 +40,8 @@ import (
 
 	spannerv1alpha1 "github.com/mercari/spanner-autoscaler/api/v1alpha1"
 	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
-	"github.com/mercari/spanner-autoscaler/pkg/syncer"
-	fakesyncer "github.com/mercari/spanner-autoscaler/pkg/syncer/fake"
+	"github.com/mercari/spanner-autoscaler/internal/syncer"
+	fakesyncer "github.com/mercari/spanner-autoscaler/internal/syncer/fake"
 	//+kubebuilder:scaffold:imports
 )
 
