@@ -21,8 +21,8 @@ func (s *Syncer) Stop() {
 	s.FakeStop()
 }
 
-func (s *Syncer) UpdateTarget(projectID, instanceID string, credentials *syncer.Credentials) bool {
-	return false
+func (s *Syncer) HasCredentials(credentials *syncer.Credentials) bool {
+	return true
 }
 
 func (s *Syncer) UpdateInstance(context.Context, int) error {

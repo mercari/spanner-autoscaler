@@ -22,7 +22,6 @@ import (
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
-	"github.com/mercari/spanner-autoscaler/pkg/logging"
 	"github.com/mercari/spanner-autoscaler/pkg/metrics"
 	"github.com/mercari/spanner-autoscaler/pkg/spanner"
 	"google.golang.org/api/impersonate"
@@ -34,7 +33,9 @@ type Syncer interface {
 	Start()
 	// Stop stops synchronization of resource status.
 	Stop()
-	UpdateTarget(projectID, instanceID string, credentials *Credentials) bool
+
+	// HasCredentials checks whether the existing credentials of the syncer, match the provided one or not
+	HasCredentials(credentials *Credentials) bool
 	UpdateInstance(ctx context.Context, desiredProcessingUnits int) error
 }
 
@@ -119,8 +120,6 @@ func (c *Credentials) TokenSource(ctx context.Context) (oauth2.TokenSource, erro
 
 // syncer synchronizes SpannerAutoscalerStatus.
 type syncer struct {
-	projectID   string
-	instanceID  string
 	credentials *Credentials
 
 	ctrlClient    ctrlclient.Client
@@ -165,40 +164,13 @@ func New(
 	ctx context.Context,
 	ctrlClient ctrlclient.Client,
 	namespacedName types.NamespacedName,
-	projectID string,
-	instanceID string,
 	credentials *Credentials,
 	recorder record.EventRecorder,
+	spannerClient spanner.Client,
+	metricsClient metrics.Client,
 	opts ...Option,
 ) (Syncer, error) {
-	ts, err := credentials.TokenSource(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	log := logging.FromContext(ctx)
-	spannerClient, err := spanner.NewClient(
-		ctx,
-		projectID,
-		spanner.WithTokenSource(ts),
-		spanner.WithLog(log),
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	metricsClient, err := metrics.NewClient(
-		ctx,
-		projectID,
-		metrics.WithTokenSource(ts),
-	)
-	if err != nil {
-		return nil, err
-	}
-
 	s := &syncer{
-		projectID:   projectID,
-		instanceID:  instanceID,
 		credentials: credentials,
 
 		ctrlClient:     ctrlClient,
@@ -251,30 +223,13 @@ func (s *syncer) Stop() {
 }
 
 // UpdateTarget updates target and returns wether did update or not.
-func (s *syncer) UpdateTarget(projectID, instanceID string, credentials *Credentials) bool {
-	updated := false
-
-	if s.projectID != projectID {
-		updated = true
-		s.projectID = projectID
-	}
-
-	if s.instanceID != instanceID {
-		updated = true
-		s.instanceID = instanceID
-	}
-
+func (s *syncer) HasCredentials(credentials *Credentials) bool {
 	// TODO: Consider deepCopy
-	if !reflect.DeepEqual(s.credentials, credentials) {
-		updated = true
-		s.credentials = credentials
-	}
-
-	return updated
+	return reflect.DeepEqual(s.credentials, credentials)
 }
 
 func (s *syncer) UpdateInstance(ctx context.Context, desiredProcessingUnits int) error {
-	err := s.spannerClient.UpdateInstance(ctx, s.instanceID, &spanner.Instance{
+	err := s.spannerClient.UpdateInstance(ctx, &spanner.Instance{
 		ProcessingUnits: desiredProcessingUnits,
 	})
 	if err != nil {
@@ -306,7 +261,7 @@ func (s *syncer) syncResource(ctx context.Context) error {
 		"spannerautoscaler", sa,
 	)
 
-	instance, instanceMetrics, err := s.getInstanceInfo(ctx, sa.Spec.TargetInstance.InstanceID)
+	instance, instanceMetrics, err := s.getInstanceInfo(ctx)
 	if err != nil {
 		s.recorder.Eventf(&sa, corev1.EventTypeWarning, "FailedSpannerAPICall", err.Error())
 		log.Error(err, "unable to get instance info")
@@ -337,7 +292,7 @@ func (s *syncer) syncResource(ctx context.Context) error {
 	return nil
 }
 
-func (s *syncer) getInstanceInfo(ctx context.Context, instanceID string) (*spanner.Instance, *metrics.InstanceMetrics, error) {
+func (s *syncer) getInstanceInfo(ctx context.Context) (*spanner.Instance, *metrics.InstanceMetrics, error) {
 	log := s.log
 	eg, ctx := errgroup.WithContext(ctx)
 
@@ -348,7 +303,7 @@ func (s *syncer) getInstanceInfo(ctx context.Context, instanceID string) (*spann
 
 	eg.Go(func() error {
 		var err error
-		instance, err = s.spannerClient.GetInstance(ctx, instanceID)
+		instance, err = s.spannerClient.GetInstance(ctx)
 		if err != nil {
 			log.Error(err, "unable to get spanner instance with spanner client")
 			return err
@@ -362,7 +317,7 @@ func (s *syncer) getInstanceInfo(ctx context.Context, instanceID string) (*spann
 
 	eg.Go(func() error {
 		var err error
-		instanceMetrics, err = s.metricsClient.GetInstanceMetrics(ctx, instanceID)
+		instanceMetrics, err = s.metricsClient.GetInstanceMetrics(ctx)
 		if err != nil {
 			log.Error(err, "unable to get spanner instance metrics with client")
 			return err

@@ -36,7 +36,7 @@ import (
 	ctrlreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
-	"github.com/mercari/spanner-autoscaler/pkg/logging"
+	"github.com/mercari/spanner-autoscaler/pkg/metrics"
 	"github.com/mercari/spanner-autoscaler/pkg/spanner"
 	"github.com/mercari/spanner-autoscaler/pkg/syncer"
 )
@@ -168,7 +168,6 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 	// If the syncer does not exist, start a syncer.
 	if !syncerExists {
 		log.V(2).Info("syncer does not exist, starting a new syncer")
-		ctx = logging.WithContext(ctx, log)
 
 		if err := r.startSyncer(ctx, nn, sa.Spec.TargetInstance.ProjectID, sa.Spec.TargetInstance.InstanceID, credentials); err != nil {
 			r.recorder.Event(&sa, corev1.EventTypeWarning, "FailedStartSyncer", err.Error())
@@ -179,8 +178,8 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 		return ctrlreconcile.Result{}, nil
 	}
 
-	// If target spanner instance or service account have been changed, then just replace syncer.
-	if s.UpdateTarget(sa.Spec.TargetInstance.ProjectID, sa.Spec.TargetInstance.InstanceID, credentials) {
+	// If credentials have been changed, then just replace syncer.
+	if !s.HasCredentials(credentials) {
 		s.Stop()
 		r.mu.Lock()
 		delete(r.syncers, nn)
@@ -253,9 +252,36 @@ func (r *SpannerAutoscalerReconciler) SetupWithManager(mgr ctrlmanager.Manager) 
 }
 
 func (r *SpannerAutoscalerReconciler) startSyncer(ctx context.Context, nn types.NamespacedName, projectID, instanceID string, credentials *syncer.Credentials) error {
-	log := logging.FromContext(ctx)
+	log := r.log
 
-	s, err := syncer.New(ctx, r.ctrlClient, nn, projectID, instanceID, credentials, r.recorder, syncer.WithLog(log))
+	ts, err := credentials.TokenSource(ctx)
+	if err != nil {
+		return err
+	}
+
+	spannerClient, err := spanner.NewClient(
+		ctx,
+		projectID,
+		instanceID,
+		spanner.WithTokenSource(ts),
+		spanner.WithLog(log),
+	)
+	if err != nil {
+		return err
+	}
+
+	metricsClient, err := metrics.NewClient(
+		ctx,
+		projectID,
+		instanceID,
+		metrics.WithTokenSource(ts),
+		metrics.WithLog(log),
+	)
+	if err != nil {
+		return err
+	}
+
+	s, err := syncer.New(ctx, r.ctrlClient, nn, credentials, r.recorder, spannerClient, metricsClient, syncer.WithLog(log))
 	if err != nil {
 		return err
 	}

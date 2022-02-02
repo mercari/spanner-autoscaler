@@ -84,24 +84,20 @@ func Test_syncer_syncResource(t *testing.T) {
 
 	tests := []struct {
 		name           string
-		fakeInstances  map[string]*spanner.Instance
-		fakeMetrics    map[string]*metrics.InstanceMetrics
+		fakeInstance   *spanner.Instance
+		fakeMetrics    *metrics.InstanceMetrics
 		targetResource *spannerv1beta1.SpannerAutoscaler
 		want           *spannerv1beta1.SpannerAutoscaler
 		wantErr        bool
 	}{
 		{
 			name: "sync and update instance",
-			fakeInstances: map[string]*spanner.Instance{
-				fakeInstanceID: {
-					ProcessingUnits: 3000,
-					InstanceState:   spanner.StateReady,
-				},
+			fakeInstance: &spanner.Instance{
+				ProcessingUnits: 3000,
+				InstanceState:   spanner.StateReady,
 			},
-			fakeMetrics: map[string]*metrics.InstanceMetrics{
-				fakeInstanceID: {
-					CurrentHighPriorityCPUUtilization: 30,
-				},
+			fakeMetrics: &metrics.InstanceMetrics{
+				CurrentHighPriorityCPUUtilization: 30,
 			},
 			targetResource: func() *spannerv1beta1.SpannerAutoscaler {
 				o := fakeSpannerAutoscaler.DeepCopy()
@@ -160,7 +156,7 @@ func Test_syncer_syncResource(t *testing.T) {
 
 			s := &syncer{
 				ctrlClient:     ctrlClient,
-				spannerClient:  spanner.NewFakeClient(tt.fakeInstances),
+				spannerClient:  spanner.NewFakeClient(tt.fakeInstance),
 				metricsClient:  metrics.NewFakeClient(tt.fakeMetrics),
 				namespacedName: fakeNamespacedName,
 				log: func() logr.Logger {
@@ -188,28 +184,22 @@ func Test_syncer_syncResource(t *testing.T) {
 }
 
 func Test_syncer_getInstanceInfo(t *testing.T) {
-	fakeInstanceID := "fake-instance-id"
-
 	tests := []struct {
 		name                string
-		fakeInstances       map[string]*spanner.Instance
-		fakeMetrics         map[string]*metrics.InstanceMetrics
+		fakeInstance        *spanner.Instance
+		fakeMetrics         *metrics.InstanceMetrics
 		wantInstance        *spanner.Instance
 		wantInstanceMetrics *metrics.InstanceMetrics
 		wantErr             bool
 	}{
 		{
 			name: "get instance info",
-			fakeInstances: map[string]*spanner.Instance{
-				fakeInstanceID: {
-					ProcessingUnits: 1000,
-					InstanceState:   spanner.StateReady,
-				},
+			fakeInstance: &spanner.Instance{
+				ProcessingUnits: 1000,
+				InstanceState:   spanner.StateReady,
 			},
-			fakeMetrics: map[string]*metrics.InstanceMetrics{
-				fakeInstanceID: {
-					CurrentHighPriorityCPUUtilization: 50,
-				},
+			fakeMetrics: &metrics.InstanceMetrics{
+				CurrentHighPriorityCPUUtilization: 50,
 			},
 			wantInstance: &spanner.Instance{
 				ProcessingUnits: 1000,
@@ -225,7 +215,7 @@ func Test_syncer_getInstanceInfo(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := &syncer{
-				spannerClient: spanner.NewFakeClient(tt.fakeInstances),
+				spannerClient: spanner.NewFakeClient(tt.fakeInstance),
 				metricsClient: metrics.NewFakeClient(tt.fakeMetrics),
 				log: func() logr.Logger {
 					l := zap.NewAtomicLevelAt(zap.DebugLevel)
@@ -234,7 +224,7 @@ func Test_syncer_getInstanceInfo(t *testing.T) {
 			}
 
 			ctx := context.Background()
-			gotInstance, gotInstanceMetrics, err := s.getInstanceInfo(ctx, fakeInstanceID)
+			gotInstance, gotInstanceMetrics, err := s.getInstanceInfo(ctx)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("getInstanceInfo() error = %v, wantErr %v", err, tt.wantErr)
 				return
