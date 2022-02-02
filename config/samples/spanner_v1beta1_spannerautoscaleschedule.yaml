@@ -1,0 +1,6 @@
+apiVersion: spanner.mercari.com/v1beta1
+kind: SpannerAutoscaleSchedule
+metadata:
+  name: spannerautoscaleschedule-sample
+spec:
+  # TODO(user): Add fields here

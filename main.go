@@ -146,6 +146,13 @@ func main() {
 	// 	os.Exit(exitCode)
 	// }
 
+	if err = (&controllers.SpannerAutoscaleScheduleReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "SpannerAutoscaleSchedule")
+		os.Exit(1)
+	}
 	//+kubebuilder:scaffold:builder
 
 	setupLog.Info("starting manager")
