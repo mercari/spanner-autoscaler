@@ -1,0 +1,24 @@
+# permissions for end users to edit spannerautoscaleschedules.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: spannerautoscaleschedule-editor-role
+rules:
+- apiGroups:
+  - spanner.mercari.com
+  resources:
+  - spannerautoscaleschedules
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - spanner.mercari.com
+  resources:
+  - spannerautoscaleschedules/status
+  verbs:
+  - get

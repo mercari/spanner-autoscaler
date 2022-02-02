@@ -29,4 +29,13 @@ resources:
     defaulting: true
     validation: true
     webhookVersion: v1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: mercari.com
+  group: spanner
+  kind: SpannerAutoscaleSchedule
+  path: github.com/mercari/spanner-autoscaler/api/v1beta1
+  version: v1beta1
 version: "3"
