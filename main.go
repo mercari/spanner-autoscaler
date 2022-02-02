@@ -147,8 +147,8 @@ func main() {
 	// }
 
 	if err = (&controllers.SpannerAutoscaleScheduleReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		ctrlClient: mgr.GetClient(),
+		scheme:     mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "SpannerAutoscaleSchedule")
 		os.Exit(1)

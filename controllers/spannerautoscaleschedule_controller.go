@@ -20,36 +20,67 @@ import (
 	"context"
 
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/log"
+	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
+	ctrlreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	"github.com/go-logr/logr"
 	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
 )
 
 // SpannerAutoscaleScheduleReconciler reconciles a SpannerAutoscaleSchedule object
 type SpannerAutoscaleScheduleReconciler struct {
-	client.Client
-	Scheme *runtime.Scheme
+	ctrlClient ctrlclient.Client
+	scheme     *runtime.Scheme
+	log        logr.Logger
 }
 
 //+kubebuilder:rbac:groups=spanner.mercari.com,resources=spannerautoscaleschedules,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=spanner.mercari.com,resources=spannerautoscaleschedules/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=spanner.mercari.com,resources=spannerautoscaleschedules/finalizers,verbs=update
 
+//+kubebuilder:rbac:groups=spanner.mercari.com,resources=spannerautoscaler/status,verbs=get;update;patch
+
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the SpannerAutoscaleSchedule object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.10.0/pkg/reconcile
 func (r *SpannerAutoscaleScheduleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = log.FromContext(ctx)
+	nn := req.NamespacedName
+	log := r.log.WithValues("namespaced-name", nn)
 
-	// TODO(user): your logic here
+	var sas spannerv1beta1.SpannerAutoscaleSchedule
+	if err := r.ctrlClient.Get(ctx, nn, &sas); err != nil {
+		err = ctrlclient.IgnoreNotFound(err)
+		if err != nil {
+			log.Error(err, "failed to get spanner-autoscale-schedule")
+			return ctrlreconcile.Result{}, err
+		}
+
+		return ctrlreconcile.Result{}, nil
+	}
+
+	var sa spannerv1beta1.SpannerAutoscaler
+	nnsa := types.NamespacedName{
+		Name:      sas.Spec.TargetResource,
+		Namespace: nn.Namespace,
+	}
+	if err := r.ctrlClient.Get(ctx, nnsa, &sa); err != nil {
+		err = ctrlclient.IgnoreNotFound(err)
+		if err != nil {
+			log.Error(err, "failed to get spanner-autoscaler")
+			return ctrlreconcile.Result{}, err
+		}
+
+		return ctrlreconcile.Result{}, nil
+	}
+
+	if _, ok := findInArray(sa.Status.Schedules, nn.Name); !ok {
+		sa.Status.Schedules = append(sa.Status.Schedules, nn.Name)
+
+		if err := r.ctrlClient.Status().Update(ctx, &sa); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
 
 	return ctrl.Result{}, nil
 }
@@ -59,4 +90,17 @@ func (r *SpannerAutoscaleScheduleReconciler) SetupWithManager(mgr ctrl.Manager) 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&spannerv1beta1.SpannerAutoscaleSchedule{}).
 		Complete(r)
+}
+
+func findInArray(array []string, item string) (int, bool) {
+	found := false
+	index := -1
+	for i, v := range array {
+		if v == item {
+			found = true
+			index = i
+			break
+		}
+	}
+	return index, found
 }
