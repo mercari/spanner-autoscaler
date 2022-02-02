@@ -180,7 +180,7 @@ func NewSpannerAutoscalerReconciler(
 // Reconcile implements ctrlreconcile.Reconciler.
 func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlreconcile.Request) (ctrlreconcile.Result, error) {
 	nn := req.NamespacedName
-	log := r.log.WithValues("namespaced name", nn)
+	log := r.log.WithValues("namespaced name", nn, "emitter", "autoscaler")
 
 	r.mu.RLock()
 	s, syncerExists := r.syncers[nn]

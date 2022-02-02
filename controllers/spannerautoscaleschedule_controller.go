@@ -73,7 +73,7 @@ func NewSpannerAutoscaleScheduleReconciler(
 // move the current state of the cluster closer to the desired state.
 func (r *SpannerAutoscaleScheduleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	nn := req.NamespacedName
-	log := r.log.WithValues("namespaced-name", nn)
+	log := r.log.WithValues("namespaced-name", nn, "emitter", "schedule")
 
 	var sas spannerv1beta1.SpannerAutoscaleSchedule
 	if err := r.ctrlClient.Get(ctx, nn, &sas); err != nil {
@@ -101,12 +101,15 @@ func (r *SpannerAutoscaleScheduleReconciler) Reconcile(ctx context.Context, req 
 		return ctrlreconcile.Result{}, nil
 	}
 
+	log.Info("registering schedule with spanner-autoscaler", "schedule", sas.Name, "autoscaler", sa.Name)
+	log.V(1).Info("registering schedule with spanner-autoscaler", "schedule", sas, "autoscaler", sa)
+
 	if _, ok := findInArray(sa.Status.Schedules, nn.Name); !ok {
 		sa.Status.Schedules = append(sa.Status.Schedules, nn.Name)
-
 		if err := r.ctrlClient.Status().Update(ctx, &sa); err != nil {
 			return ctrl.Result{}, err
 		}
+		log.V(1).Info("successfully registered schedule with spanner-autoscaler", "schedule", sas, "autoscaler", sa)
 	}
 
 	return ctrl.Result{}, nil

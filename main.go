@@ -121,16 +121,16 @@ func main() {
 		os.Exit(exitCode)
 	}
 
-	r := controllers.NewSpannerAutoscalerReconciler(
+	sar := controllers.NewSpannerAutoscalerReconciler(
 		mgr.GetClient(),
 		mgr.GetAPIReader(),
 		mgr.GetScheme(),
 		mgr.GetEventRecorderFor("spannerautoscaler-controller"),
 		log,
-		controllers.WithLog(log.WithName("controllers")),
+		controllers.WithLog(log),
 		controllers.WithScaleDownInterval(*scaleDownInterval),
 	)
-	if err := r.SetupWithManager(mgr); err != nil {
+	if err := sar.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "SpannerAutoscaler")
 		os.Exit(exitCode)
 	}
@@ -140,18 +140,15 @@ func main() {
 		os.Exit(exitCode)
 	}
 
-	// TODO: Enable this after implementing the webhooks for `v1alpha1` with deprecation notice
-	// if err = (&spannerv1alpha1.SpannerAutoscaler{}).SetupWebhookWithManager(mgr); err != nil {
-	// 	setupLog.Error(err, "unable to create webhook", "webhook", "SpannerAutoscaler")
-	// 	os.Exit(exitCode)
-	// }
+	sasr := controllers.NewSpannerAutoscaleScheduleReconciler(
+		mgr.GetClient(),
+		mgr.GetScheme(),
+		controllers.WithLog(log),
+	)
 
-	if err = (&controllers.SpannerAutoscaleScheduleReconciler{
-		ctrlClient: mgr.GetClient(),
-		scheme:     mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
+	if err = sasr.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "SpannerAutoscaleSchedule")
-		os.Exit(1)
+		os.Exit(exitCode)
 	}
 	//+kubebuilder:scaffold:builder
 
