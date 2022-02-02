@@ -20,6 +20,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// TODO: Add comments for each struct
+
 type Schedule struct {
 	Cron     string `json:"cron"`
 	Duration string `json:"duration"`
@@ -27,22 +29,13 @@ type Schedule struct {
 
 // SpannerAutoscaleScheduleSpec defines the desired state of SpannerAutoscaleSchedule
 type SpannerAutoscaleScheduleSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
-	// Foo is an example field of SpannerAutoscaleSchedule. Edit spannerautoscaleschedule_types.go to remove/update
-	Foo string `json:"foo,omitempty"`
-
 	TargetResource            string   `json:"targetResource"`
 	AdditionalProcessingUnits int      `json:"additionalProcessingUnits"`
 	Schedule                  Schedule `json:"schedule"`
 }
 
 // SpannerAutoscaleScheduleStatus defines the observed state of SpannerAutoscaleSchedule
-type SpannerAutoscaleScheduleStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-}
+type SpannerAutoscaleScheduleStatus struct{}
 
 //+kubebuilder:object:root=true
 //+kubebuilder:subresource:status
