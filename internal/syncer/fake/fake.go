@@ -3,7 +3,7 @@ package fake
 import (
 	"context"
 
-	"github.com/mercari/spanner-autoscaler/pkg/syncer"
+	"github.com/mercari/spanner-autoscaler/internal/syncer"
 )
 
 type Syncer struct {
@@ -21,8 +21,8 @@ func (s *Syncer) Stop() {
 	s.FakeStop()
 }
 
-func (s *Syncer) UpdateTarget(projectID, instanceID string, credentials *syncer.Credentials) bool {
-	return false
+func (s *Syncer) HasCredentials(credentials *syncer.Credentials) bool {
+	return true
 }
 
 func (s *Syncer) UpdateInstance(context.Context, int) error {

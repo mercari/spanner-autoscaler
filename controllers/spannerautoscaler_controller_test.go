@@ -3,17 +3,16 @@ package controllers
 import (
 	"time"
 
-	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/clock"
 
-	"github.com/go-logr/zapr"
+	"github.com/go-logr/logr"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/google/uuid"
 	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
-	"github.com/mercari/spanner-autoscaler/pkg/syncer"
+	"github.com/mercari/spanner-autoscaler/internal/syncer"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -46,12 +45,12 @@ var _ = Describe("SpannerAutoscaler controller", func() {
 					},
 				},
 				ScaleConfig: spannerv1beta1.ScaleConfig{
-					ComputeType: spannerv1beta1.ComputeTypeNode,
-					Nodes: spannerv1beta1.ScaleConfigNodes{
-						Min: 1,
-						Max: 10,
+					ComputeType: spannerv1beta1.ComputeTypePU,
+					ProcessingUnits: spannerv1beta1.ScaleConfigPUs{
+						Min: 1000,
+						Max: 10000,
 					},
-					ScaledownStepSize: 2,
+					ScaledownStepSize: 2000,
 					TargetCPUUtilization: spannerv1beta1.TargetCPUUtilization{
 						HighPriority: 30,
 					},
@@ -86,7 +85,7 @@ var _ = Describe("SpannerAutoscaler controller", func() {
 
 			By("Updating the status of SpannerAutoscaler resource")
 			initialStatus := spannerv1beta1.SpannerAutoscalerStatus{
-				CurrentNodes:                      3,
+				CurrentProcessingUnits:            3000,
 				InstanceState:                     spannerv1beta1.InstanceStateReady,
 				LastScaleTime:                     metav1.Time{Time: fakeTime.Add(-2 * time.Hour)}, // more than scaleDownInterval
 				CurrentHighPriorityCPUUtilization: 50,
@@ -111,53 +110,13 @@ var _ = Describe("SpannerAutoscaler controller", func() {
 				LastScaleTime:          metav1.Time{Time: fakeTime},
 			}
 			diff := cmp.Diff(wantStatus, got.Status,
-				// Ignore CurrentNodes because syncer.Syncer updates it.
-				cmpopts.IgnoreFields(wantStatus, "CurrentNodes"),
+				// Ignore CurrentProcessingUnits because syncer.Syncer updates it.
+				cmpopts.IgnoreFields(wantStatus, "CurrentProcessingUnits"),
 				// Ignore CurrentHighPriorityCPUUtilization because controller doesn't update it.
 				cmpopts.IgnoreFields(wantStatus, "CurrentHighPriorityCPUUtilization"),
 			)
 			Expect(diff).To(BeEmpty())
 		})
-	})
-})
-
-var _ = Describe("Check Processing Units", func() {
-	var testReconciler *SpannerAutoscalerReconciler
-
-	BeforeEach(func() {
-		By("Creating a test reconciler")
-		testReconciler = &SpannerAutoscalerReconciler{
-			scaleDownInterval: time.Hour,
-			clock:             clock.NewFakeClock(fakeTime),
-			log:               zapr.NewLogger(zap.NewNop()),
-		}
-		Expect(testReconciler).NotTo(BeNil())
-	})
-
-	It("needs to calculate processing units", func() {
-		sa := &spannerv1beta1.SpannerAutoscaler{
-			Status: spannerv1beta1.SpannerAutoscalerStatus{
-				LastScaleTime: metav1.Time{Time: fakeTime.Add(-2 * time.Hour)},
-				CurrentNodes:  1,
-				InstanceState: spannerv1beta1.InstanceStateReady,
-			},
-		}
-		Expect(testReconciler.needCalcProcessingUnits(sa)).To(BeTrue())
-	})
-
-	It("does not need to calculate processing units because current nodes have not been fetched yet", func() {
-		sa := &spannerv1beta1.SpannerAutoscaler{}
-		Expect(testReconciler.needCalcProcessingUnits(sa)).To(BeFalse())
-	})
-
-	It("does not need to calculate processing units because instance state is not ready yet", func() {
-		sa := &spannerv1beta1.SpannerAutoscaler{
-			Status: spannerv1beta1.SpannerAutoscalerStatus{
-				CurrentNodes:  1,
-				InstanceState: spannerv1beta1.InstanceStateCreating,
-			},
-		}
-		Expect(testReconciler.needCalcProcessingUnits(sa)).To(BeFalse())
 	})
 })
 
@@ -169,20 +128,20 @@ var _ = Describe("Check Update Nodes", func() {
 		testReconciler = &SpannerAutoscalerReconciler{
 			scaleDownInterval: time.Hour,
 			clock:             clock.NewFakeClock(fakeTime),
-			log:               zapr.NewLogger(zap.NewNop()),
+			log:               logr.Discard(),
 		}
 	})
 
 	It("does not need to scale down nodes because enough time has not elapsed since last update", func() {
 		sa := &spannerv1beta1.SpannerAutoscaler{
 			Status: spannerv1beta1.SpannerAutoscalerStatus{
-				LastScaleTime: metav1.Time{Time: fakeTime.Add(-time.Minute)},
-				CurrentNodes:  2,
-				DesiredNodes:  1,
-				InstanceState: spannerv1beta1.InstanceStateReady,
+				LastScaleTime:          metav1.Time{Time: fakeTime.Add(-time.Minute)},
+				CurrentProcessingUnits: 2000,
+				DesiredProcessingUnits: 1000,
+				InstanceState:          spannerv1beta1.InstanceStateReady,
 			},
 		}
-		got := testReconciler.needUpdateProcessingUnits(sa, normalizeProcessingUnitsOrNodes(sa.Status.DesiredProcessingUnits, sa.Status.DesiredNodes, sa.Spec.ScaleConfig.ComputeType), fakeTime)
+		got := testReconciler.needUpdateProcessingUnits(testReconciler.log, sa, sa.Status.DesiredProcessingUnits, fakeTime)
 		Expect(got).To(BeFalse())
 	})
 
@@ -194,76 +153,48 @@ var _ = Describe("Check Update Nodes", func() {
 				},
 			},
 			Status: spannerv1beta1.SpannerAutoscalerStatus{
-				LastScaleTime: metav1.Time{Time: fakeTime.Add(-time.Minute)},
-				CurrentNodes:  1,
-				DesiredNodes:  2,
-				InstanceState: spannerv1beta1.InstanceStateReady,
+				LastScaleTime:          metav1.Time{Time: fakeTime.Add(-time.Minute)},
+				CurrentProcessingUnits: 1000,
+				DesiredProcessingUnits: 2000,
+				InstanceState:          spannerv1beta1.InstanceStateReady,
 			},
 		}
-		got := testReconciler.needUpdateProcessingUnits(sa, normalizeProcessingUnitsOrNodes(sa.Status.DesiredProcessingUnits, sa.Status.DesiredNodes, sa.Spec.ScaleConfig.ComputeType), fakeTime)
+		got := testReconciler.needUpdateProcessingUnits(testReconciler.log, sa, sa.Status.DesiredProcessingUnits, fakeTime)
 		Expect(got).To(BeTrue())
 	})
 })
 
-var _ = DescribeTable("Calculate Desired Nodes",
-	func(currentCPU, currentNodes, targetCPU, minNodes, maxNodes, maxScaleDownNodes, want int) {
-		got := calcDesiredNodes(
-			currentCPU,
-			currentNodes,
-			targetCPU,
-			minNodes,
-			maxNodes,
-			maxScaleDownNodes,
-		)
-		Expect(got).To(Equal(want))
-	},
-	Entry("should not scale", 25, 2, 30, 1, 10, 2, 2),
-	Entry("should scale up", 50, 3, 30, 1, 10, 2, 6),
-	Entry("should scale down", 30, 5, 50, 1, 10, 2, 4),
-	Entry("should scale up to max nodes", 50, 3, 30, 1, 4, 2, 4),
-	Entry("should scale down to min nodes", 30, 5, 50, 5, 10, 2, 5),
-	Entry("should scale down with MaxScaleDownNodes", 30, 10, 50, 5, 10, 2, 8),
-)
-
 var _ = DescribeTable("Calculate Desired Processing Units",
-	func(currentCPU, currentProcessingUnits, targetCPU, minProcessingUnits, maxProcessingUnits, maxScaleDownNodes, want int) {
-		got := calcDesiredProcessingUnits(
-			currentCPU,
-			currentProcessingUnits,
-			targetCPU,
-			minProcessingUnits,
-			maxProcessingUnits,
-			maxScaleDownNodes,
-		)
+	func(currentCPU, currentProcessingUnits, targetCPU, minProcessingUnits, maxProcessingUnits, scaledownStepSize, want int) {
+		baseObj := spannerv1beta1.SpannerAutoscaler{}
+		baseObj.Status.CurrentProcessingUnits = currentProcessingUnits
+		baseObj.Status.CurrentHighPriorityCPUUtilization = currentCPU
+		baseObj.Spec.ScaleConfig = spannerv1beta1.ScaleConfig{
+			ComputeType: spannerv1beta1.ComputeTypePU,
+			ProcessingUnits: spannerv1beta1.ScaleConfigPUs{
+				Min: minProcessingUnits,
+				Max: maxProcessingUnits,
+			},
+			ScaledownStepSize: scaledownStepSize,
+			TargetCPUUtilization: spannerv1beta1.TargetCPUUtilization{
+				HighPriority: targetCPU,
+			},
+		}
+		got := calcDesiredProcessingUnits(baseObj)
 		Expect(got).To(Equal(want))
 	},
-	Entry("should not scale", 25, 200, 30, 100, 1000, 2, 200),
-	Entry("should scale up", 50, 300, 30, 100, 1000, 2, 600),
-	Entry("should scale up 2", 50, 3000, 30, 1000, 10000, 2, 6000),
-	Entry("should scale up 3", 50, 900, 40, 100, 5000, 2, 2000),
-	Entry("should scale down", 30, 500, 50, 100, 10000, 2, 400),
-	Entry("should scale down 2", 30, 5000, 50, 1000, 10000, 2, 4000),
-	Entry("should scale up to max PUs", 50, 300, 30, 100, 400, 2, 400),
-	Entry("should scale up to max PUs 2", 50, 3000, 30, 1000, 4000, 2, 4000),
-	Entry("should scale down to min PUs", 0, 500, 50, 100, 1000, 2, 100),
-	Entry("should scale down to min PUs 2", 0, 5000, 50, 1000, 10000, 5, 1000),
-	Entry("should scale down to min PUs 3", 0, 5000, 50, 100, 10000, 5, 100),
-	Entry("should scale down with MaxScaleDownNodes", 30, 10000, 50, 5000, 10000, 2, 8000),
-)
-
-var _ = DescribeTable("Next Valid ProcessingUnits",
-	func(input, want int) {
-		got := nextValidProcessingUnits(input)
-		Expect(got).To(Equal(want))
-	},
-	EntryDescription("Next valid ProcessingUnit for %d is %d"),
-	Entry(nil, 0, 100),
-	Entry(nil, 99, 100),
-	Entry(nil, 100, 200),
-	Entry(nil, 900, 1000),
-	Entry(nil, 1000, 2000),
-	Entry(nil, 1999, 2000),
-	Entry(nil, 2000, 3000),
+	Entry("should not scale", 25, 200, 30, 100, 1000, 2000, 200),
+	Entry("should scale up", 50, 300, 30, 100, 1000, 2000, 600),
+	Entry("should scale up 2", 50, 3000, 30, 1000, 10000, 2000, 6000),
+	Entry("should scale up 3", 50, 900, 40, 100, 5000, 2000, 2000),
+	Entry("should scale down", 30, 500, 50, 100, 10000, 2000, 400),
+	Entry("should scale down 2", 30, 5000, 50, 1000, 10000, 2000, 4000),
+	Entry("should scale up to max PUs", 50, 300, 30, 100, 400, 2000, 400),
+	Entry("should scale up to max PUs 2", 50, 3000, 30, 1000, 4000, 2000, 4000),
+	Entry("should scale down to min PUs", 0, 500, 50, 100, 1000, 2000, 100),
+	Entry("should scale down to min PUs 2", 0, 5000, 50, 1000, 10000, 5000, 1000),
+	Entry("should scale down to min PUs 3", 0, 5000, 50, 100, 10000, 5000, 100),
+	Entry("should scale down with MaxScaleDownNodes", 30, 10000, 50, 5000, 10000, 2000, 8000),
 )
 
 var _ = Describe("Fetch Credentials", func() {

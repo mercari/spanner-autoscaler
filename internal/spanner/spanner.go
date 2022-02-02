@@ -6,8 +6,6 @@ import (
 
 	spanneradmin "cloud.google.com/go/spanner/admin/instance/apiv1"
 	"github.com/go-logr/logr"
-	"github.com/go-logr/zapr"
-	"go.uber.org/zap"
 	"golang.org/x/oauth2"
 	"google.golang.org/api/option"
 	instancepb "google.golang.org/genproto/googleapis/spanner/admin/instance/v1"
@@ -35,15 +33,16 @@ type Instance struct {
 // Client is a client for manipulation of Instance.
 type Client interface {
 	// GetInstance gets the instance by instance id.
-	GetInstance(ctx context.Context, instanceID string) (*Instance, error)
+	GetInstance(ctx context.Context) (*Instance, error)
 	// GetInstanceMetrics updates the instance whose provided instance id.
-	UpdateInstance(ctx context.Context, instanceID string, instance *Instance) error
+	UpdateInstance(ctx context.Context, instance *Instance) error
 }
 
 type client struct {
 	spannerInstanceAdminClient *spanneradmin.InstanceAdminClient
 
-	projectID string
+	projectID  string
+	instanceID string
 
 	tokenSource oauth2.TokenSource
 	log         logr.Logger
@@ -66,10 +65,11 @@ func WithLog(log logr.Logger) Option {
 }
 
 // NewClient returns a new Client.
-func NewClient(ctx context.Context, projectID string, opts ...Option) (Client, error) {
+func NewClient(ctx context.Context, projectID, instanceID string, opts ...Option) (Client, error) {
 	c := &client{
-		projectID: projectID,
-		log:       zapr.NewLogger(zap.NewNop()),
+		projectID:  projectID,
+		instanceID: instanceID,
+		log:        logr.Discard(),
 	}
 
 	for _, opt := range opts {
@@ -93,17 +93,20 @@ func NewClient(ctx context.Context, projectID string, opts ...Option) (Client, e
 }
 
 // GetInstance implements Client.
-func (c *client) GetInstance(ctx context.Context, instanceID string) (*Instance, error) {
-	log := c.log.WithValues("instance id", instanceID)
+func (c *client) GetInstance(ctx context.Context) (*Instance, error) {
+	log := c.log.WithValues("instance-id", c.instanceID, "project-id", c.projectID)
+
+	log.V(1).Info("getting spanner instance")
 
 	i, err := c.spannerInstanceAdminClient.GetInstance(ctx, &instancepb.GetInstanceRequest{
-		Name: fmt.Sprintf(instanceNameFormat, c.projectID, instanceID),
+		Name: fmt.Sprintf(instanceNameFormat, c.projectID, c.instanceID),
 	})
 	if err != nil {
 		log.Error(err, "unable to get spanner instance")
 		return nil, err
 	}
 
+	log.V(1).Info("got spanner instance", "received instance", i)
 	return &Instance{
 		ProcessingUnits: int(i.ProcessingUnits),
 		InstanceState:   instanceState(i.State),
@@ -111,18 +114,22 @@ func (c *client) GetInstance(ctx context.Context, instanceID string) (*Instance,
 }
 
 // UpdateInstance implements Client.
-func (c *client) UpdateInstance(ctx context.Context, instanceID string, instance *Instance) error {
-	log := c.log.WithValues("instance id", instanceID, "instance", instance)
+func (c *client) UpdateInstance(ctx context.Context, instance *Instance) error {
+	log := c.log.WithValues("instance-id", c.instanceID, "project-id", c.projectID)
 
+	log.V(1).Info("getting spanner instance")
 	i, err := c.spannerInstanceAdminClient.GetInstance(ctx, &instancepb.GetInstanceRequest{
-		Name: fmt.Sprintf(instanceNameFormat, c.projectID, instanceID),
+		Name: fmt.Sprintf(instanceNameFormat, c.projectID, c.instanceID),
 	})
 	if err != nil {
 		log.Error(err, "unable to get spanner instance")
 		return err
 	}
 
+	log.V(1).Info("got spanner instance", "received instance", i, "patch", instance)
+
 	i.ProcessingUnits = int32(instance.ProcessingUnits)
+	log.V(1).Info("updating spanner instance", "desired instance", i, "patch", instance)
 
 	_, err = c.spannerInstanceAdminClient.UpdateInstance(ctx, &instancepb.UpdateInstanceRequest{
 		Instance: i,
@@ -134,6 +141,7 @@ func (c *client) UpdateInstance(ctx context.Context, instanceID string, instance
 		log.Error(err, "unable to update spanner instance")
 		return err
 	}
+	log.V(1).Info("updated spanner instance", "desired instance", i, "applied patch", instance)
 
 	return nil
 }

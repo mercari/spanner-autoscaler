@@ -20,7 +20,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// TODO: Add comments for describing each of the structs
+// Type for specifying authentication methods
+// +kubebuilder:validation:Enum=gcp-sa-key;impersonation;adc
 type AuthType string
 
 const (
@@ -29,6 +30,8 @@ const (
 	AuthTypeADC           AuthType = "adc"
 )
 
+// Type for specifying compute capacity categories
+// +kubebuilder:validation:Enum=nodes;processing-units
 type ComputeType string
 
 const (
@@ -36,49 +39,85 @@ const (
 	ComputeTypePU   ComputeType = "processing-units"
 )
 
+// The Spanner instance which will be managed for autoscaling
 type TargetInstance struct {
-	ProjectID  string `json:"projectId"`
+	// The GCP Project id of the Spanner instance
+	ProjectID string `json:"projectId"`
+
+	// The instance id of the Spanner instance
 	InstanceID string `json:"instanceId"`
 }
 
+// Authentication details for the Spanner instance
 type Authentication struct {
-	Type AuthType `json:"type"`
+	// Authentication method to be used for GCP authentication.
+	// If `ImpersonateConfig` as well as `IAMKeySecret` is nil, this will be set to use ADC be default.
+	Type AuthType `json:"type,omitempty"`
 
+	// Details of the GCP service account which will be impersonated, for authentication to GCP.
+	// This can used only on GKE clusters, when workload identity is enabled.
+	// Ref: https://cloud.google.com/kubernetes-engine/docs/how-to/workload-identity
 	// This is a pointer because structs with string slices can not be compared for zero values
 	ImpersonateConfig *ImpersonateConfig `json:"impersonateConfig,omitempty"`
-	IAMKeySecret      *IAMKeySecret      `json:"iamKeySecret,omitempty"`
+
+	// Details of the k8s secret which contains the GCP service account authentication key (in JSON).
+	// Ref: https://cloud.google.com/kubernetes-engine/docs/tutorials/authenticating-to-cloud-platform
+	// This is a pointer because structs with string slices can not be compared for zero values
+	IAMKeySecret *IAMKeySecret `json:"iamKeySecret,omitempty"`
 }
 
+// Details of the impersonation service account for GCP authentication
 type ImpersonateConfig struct {
 	TargetServiceAccount string   `json:"targetServiceAccount"`
 	Delegates            []string `json:"delegates,omitempty"`
 }
 
+// Details of the secret which has the GCP service account key for authentication
 type IAMKeySecret struct {
 	Name      string `json:"name"`
 	Namespace string `json:"namespace,omitempty"`
 	Key       string `json:"key"`
 }
 
+// Details of the autoscaling parameters for the Spanner instance
 type ScaleConfig struct {
-	ComputeType          ComputeType          `json:"computeType"`
-	Nodes                ScaleConfigNodes     `json:"nodes,omitempty"`
-	ProcessingUnits      ScaleConfigPUs       `json:"processingUnits,omitempty"`
-	ScaledownStepSize    int                  `json:"scaledownStepSize,omitempty"`
+	// Whether to use `nodes` or `processing-units` for scaling.
+	// This is only used at the time of CustomResource creation. If compute capacity is provided in `nodes`, then it is automatically converted to `processing-units` at the time of resource creation, and internally, only `ProcessingUnits` are used for computations and scaling.
+	ComputeType ComputeType `json:"computeType,omitempty"`
+
+	// If `nodes` are provided at the time of resource creation, then they are automatically converted to `processing-units`. So it is recommended to use only the processing units.
+	Nodes ScaleConfigNodes `json:"nodes,omitempty"`
+
+	// ProcessingUnits for scaling of the Spanner instance: https://cloud.google.com/spanner/docs/compute-capacity#compute_capacity
+	ProcessingUnits ScaleConfigPUs `json:"processingUnits,omitempty"`
+
+	// The maximum number of processing units which can be deleted in one scale-down operation
+	// +kubebuilder:default=2000
+	// +kubebuilder:validation:MultipleOf=1000
+	ScaledownStepSize int `json:"scaledownStepSize,omitempty"`
+
+	// The CPU utilization which the autoscaling will try to achieve
 	TargetCPUUtilization TargetCPUUtilization `json:"targetCPUUtilization"`
 }
 
 type ScaleConfigNodes struct {
-	Min int `json:"min"`
-	Max int `json:"max"`
+	Min int `json:"min,omitempty"`
+	Max int `json:"max,omitempty"`
 }
 
 type ScaleConfigPUs struct {
+	// +kubebuilder:validation:MultipleOf=100
 	Min int `json:"min"`
+
+	// +kubebuilder:validation:MultipleOf=100
 	Max int `json:"max"`
 }
 
 type TargetCPUUtilization struct {
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=100
+	// +kubebuilder:validation:ExclusiveMinimum=true
+	// +kubebuilder:validation:ExclusiveMaximum=true
 	HighPriority int `json:"highPriority"`
 }
 

@@ -36,9 +36,9 @@ import (
 	ctrlreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
-	"github.com/mercari/spanner-autoscaler/pkg/logging"
-	"github.com/mercari/spanner-autoscaler/pkg/spanner"
-	"github.com/mercari/spanner-autoscaler/pkg/syncer"
+	"github.com/mercari/spanner-autoscaler/internal/metrics"
+	"github.com/mercari/spanner-autoscaler/internal/spanner"
+	"github.com/mercari/spanner-autoscaler/internal/syncer"
 )
 
 var (
@@ -48,9 +48,6 @@ var (
 	errFetchServiceAccountJSONNoSecretDataFound = errors.New("no secret found by specified key")
 	errInvalidExclusiveCredentials              = errors.New("impersonateConfig and iamKeySecret are mutually exclusive")
 )
-
-// TODO: move this to 'defaulting' webhook
-const defaultScaledownStepSize = 2
 
 // SpannerAutoscalerReconciler reconciles a SpannerAutoscaler object.
 type SpannerAutoscalerReconciler struct {
@@ -159,11 +156,6 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 		return ctrlreconcile.Result{}, nil
 	}
 
-	// TODO: move this to the defaulting webhook
-	if sa.Spec.ScaleConfig.ScaledownStepSize == 0 {
-		sa.Spec.ScaleConfig.ScaledownStepSize = defaultScaledownStepSize
-	}
-
 	log.V(1).Info("resource status", "spannerautoscaler", sa)
 
 	credentials, err := r.fetchCredentials(ctx, &sa)
@@ -176,9 +168,8 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 	// If the syncer does not exist, start a syncer.
 	if !syncerExists {
 		log.V(2).Info("syncer does not exist, starting a new syncer")
-		ctx = logging.WithContext(ctx, log)
 
-		if err := r.startSyncer(ctx, nn, sa.Spec.TargetInstance.ProjectID, sa.Spec.TargetInstance.InstanceID, credentials); err != nil {
+		if err := r.startSyncer(ctx, log, nn, sa.Spec.TargetInstance.ProjectID, sa.Spec.TargetInstance.InstanceID, credentials); err != nil {
 			r.recorder.Event(&sa, corev1.EventTypeWarning, "FailedStartSyncer", err.Error())
 			log.Error(err, "failed to start syncer")
 			return ctrlreconcile.Result{}, err
@@ -187,14 +178,14 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 		return ctrlreconcile.Result{}, nil
 	}
 
-	// If target spanner instance or service account have been changed, then just replace syncer.
-	if s.UpdateTarget(sa.Spec.TargetInstance.ProjectID, sa.Spec.TargetInstance.InstanceID, credentials) {
+	// If credentials have been changed, then just replace syncer.
+	if !s.HasCredentials(credentials) {
 		s.Stop()
 		r.mu.Lock()
 		delete(r.syncers, nn)
 		r.mu.Unlock()
 
-		if err := r.startSyncer(ctx, nn, sa.Spec.TargetInstance.ProjectID, sa.Spec.TargetInstance.InstanceID, credentials); err != nil {
+		if err := r.startSyncer(ctx, log, nn, sa.Spec.TargetInstance.ProjectID, sa.Spec.TargetInstance.InstanceID, credentials); err != nil {
 			r.recorder.Event(&sa, corev1.EventTypeWarning, "FailedStartSyncer", err.Error())
 			log.Error(err, "failed to start syncer")
 			return ctrlreconcile.Result{}, err
@@ -204,28 +195,25 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 		return ctrlreconcile.Result{}, nil
 	}
 
-	log.V(1).Info("checking to see if we need to calculate processing units", "sa", sa)
-	if !r.needCalcProcessingUnits(&sa) {
+	if sa.Status.InstanceState != spanner.StateReady {
+		log.Info("instance state is not ready")
 		return ctrlreconcile.Result{}, nil
 	}
 
-	// TODO: change this to pass the object instead of so many parameters
-	desiredProcessingUnits := calcDesiredProcessingUnits(
-		sa.Status.CurrentHighPriorityCPUUtilization,
-		normalizeProcessingUnitsOrNodes(sa.Status.CurrentProcessingUnits, sa.Status.CurrentNodes, sa.Spec.ScaleConfig.ComputeType),
-		sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority,
-		normalizeProcessingUnitsOrNodes(sa.Spec.ScaleConfig.ProcessingUnits.Min, sa.Spec.ScaleConfig.Nodes.Min, sa.Spec.ScaleConfig.ComputeType),
-		normalizeProcessingUnitsOrNodes(sa.Spec.ScaleConfig.ProcessingUnits.Max, sa.Spec.ScaleConfig.Nodes.Max, sa.Spec.ScaleConfig.ComputeType),
-		sa.Spec.ScaleConfig.ScaledownStepSize,
-	)
+	if sa.Status.CurrentProcessingUnits == 0 {
+		log.Info("current processing units have not fetched yet")
+		return ctrlreconcile.Result{}, nil
+	}
+
+	desiredProcessingUnits := calcDesiredProcessingUnits(sa)
 
 	now := r.clock.Now()
-	log.V(1).Info("processing units need to be changed", "desiredProcessingUnits", desiredProcessingUnits, "sa.Status", sa.Status)
 
-	if !r.needUpdateProcessingUnits(&sa, desiredProcessingUnits, now) {
+	if !r.needUpdateProcessingUnits(log, &sa, desiredProcessingUnits, now) {
 		return ctrlreconcile.Result{}, nil
 	}
 
+	log.V(1).Info("processing units need to be changed", "desiredProcessingUnits", desiredProcessingUnits, "sa.Status", sa.Status)
 	if err := s.UpdateInstance(ctx, desiredProcessingUnits); err != nil {
 		r.recorder.Event(&sa, corev1.EventTypeWarning, "FailedUpdateInstance", err.Error())
 		log.Error(err, "failed to update spanner instance status")
@@ -233,9 +221,9 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 	}
 
 	r.recorder.Eventf(&sa, corev1.EventTypeNormal, "Updated", "Updated processing units of %s/%s from %d to %d", sa.Spec.TargetInstance.ProjectID, sa.Spec.TargetInstance.InstanceID,
-		normalizeProcessingUnitsOrNodes(sa.Status.CurrentProcessingUnits, sa.Status.CurrentNodes, sa.Spec.ScaleConfig.ComputeType), desiredProcessingUnits)
+		sa.Status.CurrentProcessingUnits, desiredProcessingUnits)
 
-	log.Info("updated nodes via google cloud api", "before", normalizeProcessingUnitsOrNodes(sa.Status.CurrentProcessingUnits, sa.Status.CurrentNodes, sa.Spec.ScaleConfig.ComputeType), "after", desiredProcessingUnits)
+	log.Info("updated processing units via google cloud api", "before", sa.Status.CurrentProcessingUnits, "after", desiredProcessingUnits)
 
 	saCopy := sa.DeepCopy()
 	saCopy.Status.DesiredProcessingUnits = desiredProcessingUnits
@@ -251,18 +239,6 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 	return ctrlreconcile.Result{}, nil
 }
 
-// TODO: convert all internal computations to processing units only
-func normalizeProcessingUnitsOrNodes(pu, nodes int, computeType spannerv1beta1.ComputeType) int {
-	switch computeType {
-	case spannerv1beta1.ComputeTypePU:
-		return pu
-	case spannerv1beta1.ComputeTypeNode:
-		return nodes * 1000
-	default:
-		return -1
-	}
-}
-
 // SetupWithManager sets up the controller with ctrlmanager.Manager.
 func (r *SpannerAutoscalerReconciler) SetupWithManager(mgr ctrlmanager.Manager) error {
 	opts := ctrlcontroller.Options{
@@ -275,10 +251,35 @@ func (r *SpannerAutoscalerReconciler) SetupWithManager(mgr ctrlmanager.Manager) 
 		Complete(r)
 }
 
-func (r *SpannerAutoscalerReconciler) startSyncer(ctx context.Context, nn types.NamespacedName, projectID, instanceID string, credentials *syncer.Credentials) error {
-	log := logging.FromContext(ctx)
+func (r *SpannerAutoscalerReconciler) startSyncer(ctx context.Context, log logr.Logger, nn types.NamespacedName, projectID, instanceID string, credentials *syncer.Credentials) error {
+	ts, err := credentials.TokenSource(ctx)
+	if err != nil {
+		return err
+	}
 
-	s, err := syncer.New(ctx, r.ctrlClient, nn, projectID, instanceID, credentials, r.recorder, syncer.WithLog(log))
+	spannerClient, err := spanner.NewClient(
+		ctx,
+		projectID,
+		instanceID,
+		spanner.WithTokenSource(ts),
+		spanner.WithLog(log),
+	)
+	if err != nil {
+		return err
+	}
+
+	metricsClient, err := metrics.NewClient(
+		ctx,
+		projectID,
+		instanceID,
+		metrics.WithTokenSource(ts),
+		metrics.WithLog(log),
+	)
+	if err != nil {
+		return err
+	}
+
+	s, err := syncer.New(ctx, r.ctrlClient, nn, credentials, r.recorder, spannerClient, metricsClient, syncer.WithLog(log))
 	if err != nil {
 		return err
 	}
@@ -293,35 +294,17 @@ func (r *SpannerAutoscalerReconciler) startSyncer(ctx context.Context, nn types.
 	return nil
 }
 
-func (r *SpannerAutoscalerReconciler) needCalcProcessingUnits(sa *spannerv1beta1.SpannerAutoscaler) bool {
-	log := r.log
-
-	switch {
-	// TODO: Fix this to use only processing units
-	case sa.Status.CurrentProcessingUnits == 0 && sa.Status.CurrentNodes == 0:
-		log.Info("current processing units have not fetched yet")
-		return false
-
-	case sa.Status.InstanceState != spanner.StateReady:
-		log.Info("instance state is not ready")
-		return false
-	default:
-		return true
-	}
-}
-
-func (r *SpannerAutoscalerReconciler) needUpdateProcessingUnits(sa *spannerv1beta1.SpannerAutoscaler, desiredProcessingUnits int, now time.Time) bool {
-	log := r.log
-
-	currentProcessingUnits := normalizeProcessingUnitsOrNodes(sa.Status.CurrentProcessingUnits, sa.Status.CurrentNodes, sa.Spec.ScaleConfig.ComputeType)
+func (r *SpannerAutoscalerReconciler) needUpdateProcessingUnits(log logr.Logger, sa *spannerv1beta1.SpannerAutoscaler, desiredProcessingUnits int, now time.Time) bool {
+	currentProcessingUnits := sa.Status.CurrentProcessingUnits
 
 	switch {
 	case desiredProcessingUnits == currentProcessingUnits:
-		log.V(0).Info("the desired number of processing units is equal to that of the current; no need to scale")
+		log.Info("no need to scale", "current-processing-units", currentProcessingUnits, "current-cpu", sa.Status.CurrentHighPriorityCPUUtilization)
 		return false
 
 	case desiredProcessingUnits > currentProcessingUnits && r.clock.Now().Before(sa.Status.LastScaleTime.Time.Add(10*time.Second)):
-		log.Info("too short to scale up since instance scaled last",
+		log.Info("too short to scale up since last scale-up event",
+			"time gap", now.Sub(sa.Status.LastScaleTime.Time),
 			"now", now.String(),
 			"last scale time", sa.Status.LastScaleTime,
 		)
@@ -329,7 +312,8 @@ func (r *SpannerAutoscalerReconciler) needUpdateProcessingUnits(sa *spannerv1bet
 		return false
 
 	case desiredProcessingUnits < currentProcessingUnits && r.clock.Now().Before(sa.Status.LastScaleTime.Time.Add(r.scaleDownInterval)):
-		log.Info("too short to scale down since instance scaled nodes last",
+		log.Info("too short to scale down since last scale-up event",
+			"time gap", now.Sub(sa.Status.LastScaleTime.Time),
 			"now", now.String(),
 			"last scale time", sa.Status.LastScaleTime,
 		)
@@ -341,49 +325,42 @@ func (r *SpannerAutoscalerReconciler) needUpdateProcessingUnits(sa *spannerv1bet
 	}
 }
 
-// For testing purpose only
-func calcDesiredNodes(currentCPU, currentNodes, targetCPU, minNodes, maxNodes, scaledownStepSize int) int {
-	return calcDesiredProcessingUnits(currentCPU, currentNodes*1000, targetCPU, minNodes*1000, maxNodes*1000, scaledownStepSize) / 1000
-}
-
-// nextValidProcessingUnits finds next valid value in processing units.
-// https://cloud.google.com/spanner/docs/compute-capacity?hl=en
-// Valid values are
-// If processingUnits < 1000, processing units must be multiples of 100.
-// If processingUnits >= 1000, processing units must be multiples of 1000.
-func nextValidProcessingUnits(processingUnits int) int {
-	if processingUnits < 1000 {
-		return ((processingUnits / 100) + 1) * 100
-	}
-	return ((processingUnits / 1000) + 1) * 1000
-}
-
-func maxInt(first int, rest ...int) int {
-	result := first
-	for _, v := range rest {
-		if result < v {
-			result = v
-		}
-	}
-	return result
-}
-
 // calcDesiredProcessingUnits calculates the values needed to keep CPU utilization below TargetCPU.
-func calcDesiredProcessingUnits(currentCPU, currentProcessingUnits, targetCPU, minProcessingUnits, maxProcessingUnits, scaledownStepSize int) int {
-	totalCPUProduct1000 := currentCPU * currentProcessingUnits
+func calcDesiredProcessingUnits(sa spannerv1beta1.SpannerAutoscaler) int {
+	totalCPU := sa.Status.CurrentHighPriorityCPUUtilization * sa.Status.CurrentProcessingUnits
 
-	desiredProcessingUnits := maxInt(nextValidProcessingUnits(totalCPUProduct1000/targetCPU), currentProcessingUnits-scaledownStepSize*1000)
+	requiredPU := totalCPU / sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority
 
-	switch {
-	case desiredProcessingUnits < minProcessingUnits:
-		return minProcessingUnits
+	var desiredPU int
 
-	case desiredProcessingUnits > maxProcessingUnits:
-		return maxProcessingUnits
-
-	default:
-		return desiredProcessingUnits
+	// https://cloud.google.com/spanner/docs/compute-capacity?hl=en
+	// Valid values for processing units are:
+	// If processingUnits < 1000, processing units must be multiples of 100.
+	// If processingUnits >= 1000, processing units must be multiples of 1000.
+	//
+	// Round up the requiredPU value to make it valid
+	// If it is already a valid PU, increment to next unit to keep CPU usage below desired threshold
+	if requiredPU < 1000 {
+		desiredPU = ((requiredPU / 100) + 1) * 100
+	} else {
+		desiredPU = ((requiredPU / 1000) + 1) * 1000
 	}
+
+	// in case of scaling down, check that we don't scale down beyond the ScaledownStepSize
+	if scaledDownPU := (sa.Status.CurrentProcessingUnits - sa.Spec.ScaleConfig.ScaledownStepSize); desiredPU < scaledDownPU {
+		desiredPU = scaledDownPU
+	}
+
+	// keep the scaling between the specified min/max range
+	if desiredPU < sa.Spec.ScaleConfig.ProcessingUnits.Min {
+		desiredPU = sa.Spec.ScaleConfig.ProcessingUnits.Min
+	}
+
+	if desiredPU > sa.Spec.ScaleConfig.ProcessingUnits.Max {
+		desiredPU = sa.Spec.ScaleConfig.ProcessingUnits.Max
+	}
+
+	return desiredPU
 }
 
 func (r *SpannerAutoscalerReconciler) fetchCredentials(ctx context.Context, sa *spannerv1beta1.SpannerAutoscaler) (*syncer.Credentials, error) {
