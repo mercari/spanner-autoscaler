@@ -88,7 +88,7 @@ var _ webhook.Validator = &SpannerAutoscaler{}
 // ValidateCreate implements webhook.Validator so a webhook will be registered for the type
 func (r *SpannerAutoscaler) ValidateCreate() error {
 	log.Info("validate create", "name", r.Name)
-	log.V(1).Info("validating cration of SpannerAutoscaler resource", "name", r.Name, "resource", r)
+	log.V(1).Info("validating creation of SpannerAutoscaler resource", "name", r.Name, "resource", r)
 
 	allErrs := r.validateSpec()
 
