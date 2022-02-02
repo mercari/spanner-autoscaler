@@ -307,7 +307,7 @@ func calcDesiredProcessingUnits(sa spannerv1beta1.SpannerAutoscaler) int {
 
 	requiredPU := totalCPU / sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority
 
-	var nextPU int
+	var desiredPU int
 
 	// https://cloud.google.com/spanner/docs/compute-capacity?hl=en
 	// Valid values for processing units are:
@@ -317,12 +317,10 @@ func calcDesiredProcessingUnits(sa spannerv1beta1.SpannerAutoscaler) int {
 	// Round up the requiredPU value to make it valid
 	// If it is already a valid PU, increment to next unit to keep CPU usage below desired threshold
 	if requiredPU < 1000 {
-		nextPU = ((requiredPU / 100) + 1) * 100
+		desiredPU = ((requiredPU / 100) + 1) * 100
 	} else {
-		nextPU = ((requiredPU / 1000) + 1) * 1000
+		desiredPU = ((requiredPU / 1000) + 1) * 1000
 	}
-
-	desiredPU := nextPU
 
 	// in case of scaling down, check that we don't scale down beyond the ScaledownStepSize
 	if scaledDownPU := (sa.Status.CurrentProcessingUnits - sa.Spec.ScaleConfig.ScaledownStepSize); desiredPU < scaledDownPU {

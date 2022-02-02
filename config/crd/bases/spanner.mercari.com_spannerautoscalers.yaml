@@ -352,6 +352,10 @@ spec:
                       to achieve
                     properties:
                       highPriority:
+                        exclusiveMaximum: true
+                        exclusiveMinimum: true
+                        maximum: 100
+                        minimum: 0
                         type: integer
                     required:
                     - highPriority

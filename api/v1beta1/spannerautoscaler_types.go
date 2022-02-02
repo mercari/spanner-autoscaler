@@ -114,6 +114,10 @@ type ScaleConfigPUs struct {
 }
 
 type TargetCPUUtilization struct {
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=100
+	// +kubebuilder:validation:ExclusiveMinimum=true
+	// +kubebuilder:validation:ExclusiveMaximum=true
 	HighPriority int `json:"highPriority"`
 }
 
