@@ -20,8 +20,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
+type Schedule struct {
+	Cron     string `json:"cron"`
+	Duration string `json:"duration"`
+}
 
 // SpannerAutoscaleScheduleSpec defines the desired state of SpannerAutoscaleSchedule
 type SpannerAutoscaleScheduleSpec struct {
@@ -30,6 +32,10 @@ type SpannerAutoscaleScheduleSpec struct {
 
 	// Foo is an example field of SpannerAutoscaleSchedule. Edit spannerautoscaleschedule_types.go to remove/update
 	Foo string `json:"foo,omitempty"`
+
+	TargetResource            string   `json:"targetResource"`
+	AdditionalProcessingUnits int      `json:"additionalProcessingUnits"`
+	Schedule                  Schedule `json:"schedule"`
 }
 
 // SpannerAutoscaleScheduleStatus defines the observed state of SpannerAutoscaleSchedule
