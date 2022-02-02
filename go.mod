@@ -6,7 +6,6 @@ require (
 	cloud.google.com/go/monitoring v1.2.0
 	cloud.google.com/go/spanner v1.25.0
 	github.com/go-logr/logr v0.4.0
-	github.com/go-logr/zapr v0.4.0
 	github.com/golang/protobuf v1.5.2
 	github.com/google/go-cmp v0.5.6
 	github.com/google/uuid v1.3.0
@@ -38,6 +37,7 @@ require (
 	github.com/envoyproxy/protoc-gen-validate v0.1.0 // indirect
 	github.com/evanphx/json-patch v4.11.0+incompatible // indirect
 	github.com/fsnotify/fsnotify v1.4.9 // indirect
+	github.com/go-logr/zapr v0.4.0 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
 	github.com/google/gofuzz v1.1.0 // indirect

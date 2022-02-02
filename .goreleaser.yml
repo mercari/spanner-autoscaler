@@ -1,5 +1,9 @@
 changelog:
   use: github-native
+before:
+  hooks:
+  - go mod tidy
+  - go mod download
 builds:
 - goos:
   - linux
