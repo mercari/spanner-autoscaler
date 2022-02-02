@@ -285,14 +285,18 @@ spec:
                     - targetServiceAccount
                     type: object
                   type:
-                    description: 'TODO: Add comments for describing each of the structs'
+                    enum:
+                    - gcp-sa-key
+                    - impersonation
+                    - adc
                     type: string
-                required:
-                - type
                 type: object
               scaleConfig:
                 properties:
                   computeType:
+                    enum:
+                    - nodes
+                    - processing-units
                     type: string
                   nodes:
                     properties:
@@ -300,21 +304,21 @@ spec:
                         type: integer
                       min:
                         type: integer
-                    required:
-                    - max
-                    - min
                     type: object
                   processingUnits:
                     properties:
                       max:
+                        multipleOf: 100
                         type: integer
                       min:
+                        multipleOf: 100
                         type: integer
                     required:
                     - max
                     - min
                     type: object
                   scaledownStepSize:
+                    default: 2
                     type: integer
                   targetCPUUtilization:
                     properties:
@@ -324,7 +328,6 @@ spec:
                     - highPriority
                     type: object
                 required:
-                - computeType
                 - targetCPUUtilization
                 type: object
               targetInstance:

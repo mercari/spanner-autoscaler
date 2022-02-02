@@ -1,0 +1,60 @@
+resources:
+- ../default
+
+patches:
+- target:
+    version: v1
+    kind: Certificate
+    name: spanner-autoscaler-serving-cert
+  patch: |-
+    - op: add
+      path: /spec/dnsNames/0
+      value: dummy.local
+- target:
+    version: v1
+    kind: Deployment
+    name: spanner-autoscaler-controller-manager
+  patch: |-
+    - op: replace
+      path: /spec/replicas
+      value: 0
+- target:
+    version: v1
+    kind: Service
+    name: spanner-autoscaler-webhook-service
+  patch: |-
+    - op: replace
+      path: /spec
+      value:
+        type: ExternalName
+        externalName: dummy.local
+- target:
+    version: v1
+    kind: CustomResourceDefinition
+    name: spannerautoscalers.spanner.mercari.com
+  patch: |-
+    - op: add
+      path: /spec/conversion/webhook/clientConfig/service/port
+      value: 9443
+- target:
+    version: v1
+    kind: MutatingWebhookConfiguration
+    name: spanner-autoscaler-mutating-webhook-configuration
+  patch: |-
+    - op: add
+      path: /webhooks/0/clientConfig/service/port
+      value: 9443
+    - op: add
+      path: /webhooks/0/timeoutSeconds
+      value: 30
+- target:
+    version: v1
+    kind: ValidatingWebhookConfiguration
+    name: spanner-autoscaler-validating-webhook-configuration
+  patch: |-
+    - op: add
+      path: /webhooks/0/clientConfig/service/port
+      value: 9443
+    - op: add
+      path: /webhooks/0/timeoutSeconds
+      value: 30
