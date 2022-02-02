@@ -72,7 +72,7 @@ func Test_syncer_syncResource(t *testing.T) {
 						Min: 1,
 						Max: 3,
 					},
-					ScaledownStepSize: 1,
+					ScaledownStepSize: 1000,
 					TargetCPUUtilization: spannerv1beta1.TargetCPUUtilization{
 						HighPriority: 50,
 					},

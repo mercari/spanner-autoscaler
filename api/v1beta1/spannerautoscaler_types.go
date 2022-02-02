@@ -93,6 +93,7 @@ type ScaleConfig struct {
 
 	// The maximum number of processing units which can be deleted in one scale-down operation
 	// +kubebuilder:default=2000
+	// +kubebuilder:validation:MultipleOf=1000
 	ScaledownStepSize int `json:"scaledownStepSize,omitempty"`
 
 	// The CPU utilization which the autoscaling will try to achieve
@@ -113,6 +114,10 @@ type ScaleConfigPUs struct {
 }
 
 type TargetCPUUtilization struct {
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=100
+	// +kubebuilder:validation:ExclusiveMinimum=true
+	// +kubebuilder:validation:ExclusiveMaximum=true
 	HighPriority int `json:"highPriority"`
 }
 

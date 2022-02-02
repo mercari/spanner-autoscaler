@@ -48,12 +48,11 @@ var _ = Describe("SpannerAutoscaler validation", func() {
 					},
 				},
 				ScaleConfig: ScaleConfig{
-					ComputeType: ComputeTypeNode,
-					Nodes: ScaleConfigNodes{
-						Min: 1,
-						Max: 10,
+					ProcessingUnits: ScaleConfigPUs{
+						Min: 1000,
+						Max: 10000,
 					},
-					ScaledownStepSize: 2,
+					ScaledownStepSize: 2000,
 					TargetCPUUtilization: TargetCPUUtilization{
 						HighPriority: 30,
 					},
