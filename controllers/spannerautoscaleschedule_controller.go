@@ -36,6 +36,33 @@ type SpannerAutoscaleScheduleReconciler struct {
 	log        logr.Logger
 }
 
+type SpannerAutoscaleScheduleReconcilerOption interface {
+	applySpannerAutoscaleScheduleReconciler(r *SpannerAutoscaleScheduleReconciler)
+}
+
+func (o withLog) applySpannerAutoscaleScheduleReconciler(r *SpannerAutoscaleScheduleReconciler) {
+	r.log = o.logger.WithName("schedule")
+}
+
+func NewSpannerAutoscaleScheduleReconciler(
+	ctrlClient ctrlclient.Client,
+	scheme *runtime.Scheme,
+	opts ...Option,
+) *SpannerAutoscaleScheduleReconciler {
+	r := &SpannerAutoscaleScheduleReconciler{
+		ctrlClient: ctrlClient,
+		scheme:     scheme,
+	}
+
+	for _, option := range opts {
+		if opt, ok := option.(SpannerAutoscaleScheduleReconcilerOption); ok {
+			opt.applySpannerAutoscaleScheduleReconciler(r)
+		}
+	}
+
+	return r
+}
+
 //+kubebuilder:rbac:groups=spanner.mercari.com,resources=spannerautoscaleschedules,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=spanner.mercari.com,resources=spannerautoscaleschedules/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=spanner.mercari.com,resources=spannerautoscaleschedules/finalizers,verbs=update

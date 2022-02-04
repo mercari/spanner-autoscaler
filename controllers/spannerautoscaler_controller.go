@@ -68,30 +68,78 @@ type SpannerAutoscalerReconciler struct {
 
 var _ ctrlreconcile.Reconciler = (*SpannerAutoscalerReconciler)(nil)
 
-type Option func(*SpannerAutoscalerReconciler)
+// Functional options used in this package, follow the last pattern shown here:
+// https://sagikazarmark.hu/blog/functional-options-on-steroids/
 
-func WithSyncers(syncers map[types.NamespacedName]syncer.Syncer) Option {
-	return func(r *SpannerAutoscalerReconciler) {
-		r.syncers = syncers
-	}
+// Option provides an extensible set of functional options for configuring autoscaler-reconciler
+// as well as schedule-reconciler
+type Option interface {
+	// Uncomment the following 2 lines only if the schedule-reconciler and the autoscaler-reconciler
+	// consume same options. But since schedule-reconciler implements only a subset of the autoscaler-reconciler
+	// options (only WithLog), it can not be embedded in this interface.
+
+	// This can be uncommented (because schedule-reconciler is a subset of this), but has been
+	// kept so, just for reducing complexity and for increasing readability
+	// SpannerAutoscalerReconcilerOption
+
+	// SpannerAutoscaleScheduleReconcilerOption
 }
 
-func WithScaleDownInterval(scaleDownInterval time.Duration) Option {
-	return func(r *SpannerAutoscalerReconciler) {
-		r.scaleDownInterval = scaleDownInterval
-	}
+// SpannerAutoscalerReconcilerOption is a subset the Option interface, for autoscaler-reconciler
+type SpannerAutoscalerReconcilerOption interface {
+	applySpannerAutoscalerReconciler(r *SpannerAutoscalerReconciler)
 }
 
-func WithClock(clock utilclock.Clock) Option {
-	return func(r *SpannerAutoscalerReconciler) {
-		r.clock = clock
-	}
-}
-
+// Add logger option for the autoscaler-reconciler
 func WithLog(log logr.Logger) Option {
-	return func(r *SpannerAutoscalerReconciler) {
-		r.log = log.WithName("spannerautoscaler")
-	}
+	return withLog{logger: log}
+}
+
+type withLog struct {
+	logger logr.Logger
+}
+
+func (o withLog) applySpannerAutoscalerReconciler(r *SpannerAutoscalerReconciler) {
+	r.log = o.logger.WithName("spannerautoscaler")
+}
+
+// Add syncer option for the autoscaler-reconciler
+func WithSyncers(syncers map[types.NamespacedName]syncer.Syncer) Option {
+	return withSyncers{syncers: syncers}
+}
+
+type withSyncers struct {
+	syncers map[types.NamespacedName]syncer.Syncer
+}
+
+func (o withSyncers) applySpannerAutoscalerReconciler(r *SpannerAutoscalerReconciler) {
+	r.syncers = o.syncers
+}
+
+// Add clock option for the autoscaler-reconciler
+func WithClock(clock utilclock.Clock) Option {
+	return withClock{clock: clock}
+}
+
+type withClock struct {
+	clock utilclock.Clock
+}
+
+func (o withClock) applySpannerAutoscalerReconciler(r *SpannerAutoscalerReconciler) {
+	r.clock = o.clock
+}
+
+// Add scale-down-interval option for the autoscaler-reconciler
+func WithScaleDownInterval(scaleDownInterval time.Duration) Option {
+	return withScaleDownInterval{scaleDownInterval: scaleDownInterval}
+}
+
+type withScaleDownInterval struct {
+	scaleDownInterval time.Duration
+}
+
+func (o withScaleDownInterval) applySpannerAutoscalerReconciler(r *SpannerAutoscalerReconciler) {
+	r.scaleDownInterval = o.scaleDownInterval
 }
 
 // NewSpannerAutoscalerReconciler returns a new SpannerAutoscalerReconciler.
@@ -114,8 +162,10 @@ func NewSpannerAutoscalerReconciler(
 		log:               logger,
 	}
 
-	for _, opt := range opts {
-		opt(r)
+	for _, option := range opts {
+		if opt, ok := option.(SpannerAutoscalerReconcilerOption); ok {
+			opt.applySpannerAutoscalerReconciler(r)
+		}
 	}
 
 	return r
