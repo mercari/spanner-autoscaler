@@ -19,10 +19,13 @@ package controllers
 import (
 	"context"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
+	ctrlutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	ctrlreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/go-logr/logr"
@@ -33,6 +36,7 @@ import (
 type SpannerAutoscaleScheduleReconciler struct {
 	ctrlClient ctrlclient.Client
 	scheme     *runtime.Scheme
+	recorder   record.EventRecorder
 	log        logr.Logger
 }
 
@@ -47,10 +51,12 @@ func (o withLog) applySpannerAutoscaleScheduleReconciler(r *SpannerAutoscaleSche
 func NewSpannerAutoscaleScheduleReconciler(
 	ctrlClient ctrlclient.Client,
 	scheme *runtime.Scheme,
+	recorder record.EventRecorder,
 	opts ...Option,
 ) *SpannerAutoscaleScheduleReconciler {
 	r := &SpannerAutoscaleScheduleReconciler{
 		ctrlClient: ctrlClient,
+		recorder:   recorder,
 		scheme:     scheme,
 	}
 
@@ -72,11 +78,11 @@ func NewSpannerAutoscaleScheduleReconciler(
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 func (r *SpannerAutoscaleScheduleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	nn := req.NamespacedName
-	log := r.log.WithValues("namespaced-name", nn, "emitter", "schedule")
+	log := r.log.WithValues("namespaced-name", req.NamespacedName, "emitter", "schedule")
 
 	var sas spannerv1beta1.SpannerAutoscaleSchedule
-	if err := r.ctrlClient.Get(ctx, nn, &sas); err != nil {
+	if err := r.ctrlClient.Get(ctx, req.NamespacedName, &sas); err != nil {
+		// Ignore NotFound error, the resource might have been deleted
 		err = ctrlclient.IgnoreNotFound(err)
 		if err != nil {
 			log.Error(err, "failed to get spanner-autoscale-schedule")
@@ -86,29 +92,64 @@ func (r *SpannerAutoscaleScheduleReconciler) Reconcile(ctx context.Context, req 
 		return ctrlreconcile.Result{}, nil
 	}
 
+	sasFinalizerName := "spannerautoscaleschedule.spanner.mercari.com/finalizer"
+
+	// register our finalizer if the object is not being deleted
+	if sas.ObjectMeta.DeletionTimestamp.IsZero() && !ctrlutil.ContainsFinalizer(&sas, sasFinalizerName) {
+		log.V(1).Info("adding finalizer to schedule", "schedule", sas, "finalizer", sasFinalizerName)
+		ctrlutil.AddFinalizer(&sas, sasFinalizerName)
+		if err := r.ctrlClient.Update(ctx, &sas); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
 	var sa spannerv1beta1.SpannerAutoscaler
 	nnsa := types.NamespacedName{
 		Name:      sas.Spec.TargetResource,
-		Namespace: nn.Namespace,
+		Namespace: req.NamespacedName.Namespace,
 	}
-	if err := r.ctrlClient.Get(ctx, nnsa, &sa); err != nil {
-		err = ctrlclient.IgnoreNotFound(err)
-		if err != nil {
-			log.Error(err, "failed to get spanner-autoscaler")
-			return ctrlreconcile.Result{}, err
+	err := r.ctrlClient.Get(ctx, nnsa, &sa)
+	if err != nil && sas.ObjectMeta.DeletionTimestamp.IsZero() {
+		// Do not ignore NotFound error, we need a valid SpannerAutoscaler
+		log.Error(err, "failed to get spanner-autoscaler")
+		r.recorder.Event(&sas, corev1.EventTypeWarning, "SpannerAutoscalerNotFound", err.Error())
+
+		return ctrlreconcile.Result{}, err
+	}
+
+	// if the object is being deleted, perform clean up
+	if !sas.ObjectMeta.DeletionTimestamp.IsZero() {
+		// The object is being deleted
+		if ctrlutil.ContainsFinalizer(&sas, sasFinalizerName) {
+			// our finalizer is present, so if we found any autoscaler resource, then remove the schedule from the autoscaler list
+			if len(sa.Status.Schedules) != 0 {
+				sa.Status.Schedules = deleteFromArray(sa.Status.Schedules, req.NamespacedName.Name)
+				log.Info("deleting schedule from spanner-autoscaler", "schedule", sas.Name, "autoscaler", sa.Name)
+				if err := r.ctrlClient.Status().Update(ctx, &sa); err != nil {
+					return ctrl.Result{}, err
+				}
+			}
+
+			// remove our finalizer from the list and update it.
+			ctrlutil.RemoveFinalizer(&sas, sasFinalizerName)
+			if err := r.ctrlClient.Update(ctx, &sas); err != nil {
+				return ctrl.Result{}, err
+			}
 		}
 
-		return ctrlreconcile.Result{}, nil
+		// Stop reconciliation as the item is being deleted
+		return ctrl.Result{}, nil
 	}
 
 	log.Info("registering schedule with spanner-autoscaler", "schedule", sas.Name, "autoscaler", sa.Name)
 
-	if _, ok := findInArray(sa.Status.Schedules, nn.Name); !ok {
-		sa.Status.Schedules = append(sa.Status.Schedules, nn.Name)
+	if _, ok := findInArray(sa.Status.Schedules, req.NamespacedName.Name); !ok {
+		sa.Status.Schedules = append(sa.Status.Schedules, req.NamespacedName.Name)
 		if err := r.ctrlClient.Status().Update(ctx, &sa); err != nil {
 			return ctrl.Result{}, err
 		}
 		log.V(1).Info("successfully registered schedule with spanner-autoscaler", "schedule", sas, "autoscaler", sa)
+		r.recorder.Eventf(&sas, corev1.EventTypeNormal, "RegisteredWithSpannerAutoscaler", "successfully registered with spanner-autoscaler %q", sa.Name)
 	}
 
 	return ctrl.Result{}, nil
@@ -132,4 +173,15 @@ func findInArray(array []string, item string) (int, bool) {
 		}
 	}
 	return index, found
+}
+
+func deleteFromArray(array []string, item string) []string {
+	result := []string{}
+	for _, v := range array {
+		if v != item {
+			result = append(result, item)
+		}
+	}
+
+	return result
 }
