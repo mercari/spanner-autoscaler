@@ -1,7 +1,7 @@
 package v1alpha1
 
 import (
-	v1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
+	"github.com/mercari/spanner-autoscaler/api/v1beta1"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -59,7 +59,9 @@ func (src *SpannerAutoscaler) ConvertTo(dstRaw conversion.Hub) error {
 			Max: int(*src.Spec.MaxProcessingUnits),
 		}
 	}
-	scaleConfig.ScaledownStepSize = int(*src.Spec.MaxScaleDownNodes) * 1000
+	if src.Spec.MaxScaleDownNodes != nil {
+		scaleConfig.ScaledownStepSize = int(*src.Spec.MaxScaleDownNodes) * 1000
+	}
 	scaleConfig.TargetCPUUtilization = v1beta1.TargetCPUUtilization{
 		HighPriority: int(*src.Spec.TargetCPUUtilization.HighPriority),
 	}
