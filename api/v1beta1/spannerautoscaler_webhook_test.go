@@ -40,54 +40,159 @@ var _ = Describe("SpannerAutoscaler validation", func() {
 					ProjectID:  "test-project-id",
 					InstanceID: "test-instance-id",
 				},
-				Authentication: Authentication{
-					IAMKeySecret: &IAMKeySecret{
-						Name:      "test-service-account-secret",
-						Namespace: "",
-						Key:       "secret",
-					},
-				},
-				ScaleConfig: ScaleConfig{
-					ProcessingUnits: ScaleConfigPUs{
-						Min: 1000,
-						Max: 10000,
-					},
-					ScaledownStepSize: 2000,
-					TargetCPUUtilization: TargetCPUUtilization{
-						HighPriority: 30,
-					},
-				},
 			},
 		}
 	})
 
-	Context("Check default settings", func() {
-		It("should set authentication type 'gcp-sa-key' automatically", func() {
-			result, err := createResource(testResource)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(result.Spec.Authentication.Type).To(Equal(AuthTypeSA))
+	Describe("Check default settings", func() {
+
+		Describe("Authentication", func() {
+			BeforeEach(func() {
+				testResource.Spec.ScaleConfig = ScaleConfig{
+					ProcessingUnits: ScaleConfigPUs{
+						Min: 1000,
+						Max: 10000,
+					},
+					TargetCPUUtilization: TargetCPUUtilization{
+						HighPriority: 30,
+					},
+				}
+			})
+
+			Context("IAM key secret is set", func() {
+				BeforeEach(func() {
+					testResource.Spec.Authentication = Authentication{
+						IAMKeySecret: &IAMKeySecret{
+							Name: "test-service-account-secret",
+							Key:  "secret",
+						},
+					}
+				})
+
+				Context("namespace exists", func() {
+					BeforeEach(func() {
+						testResource.Spec.Authentication.IAMKeySecret.Namespace = "default"
+					})
+
+					It("should set authentication type 'gcp-sa-key' automatically", func() {
+						result, err := createResource(testResource)
+						Expect(err).ToNot(HaveOccurred())
+						Expect(result.Spec.Authentication.Type).To(Equal(AuthTypeSA))
+						Expect(result.Spec.Authentication.IAMKeySecret.Namespace).To(Equal("default"))
+					})
+				})
+
+				Context("namespace does not exist", func() {
+					It("should set authentication type 'gcp-sa-key' and namespace automatically", func() {
+						result, err := createResource(testResource)
+						Expect(err).ToNot(HaveOccurred())
+						Expect(result.Spec.Authentication.Type).To(Equal(AuthTypeSA))
+						Expect(result.Spec.Authentication.IAMKeySecret.Namespace).To(Equal(namespace))
+					})
+				})
+			})
+
+			Context("impersonate config is set", func() {
+				BeforeEach(func() {
+					testResource.Spec.Authentication = Authentication{
+						ImpersonateConfig: &ImpersonateConfig{
+							TargetServiceAccount: "test-service-account",
+							Delegates:            []string{"test-delegate"},
+						},
+					}
+				})
+
+				It("should set authentication type 'impersonation' automatically", func() {
+					result, err := createResource(testResource)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(result.Spec.Authentication.Type).To(Equal(AuthTypeImpersonation))
+				})
+			})
+
+			Context("no additional authentication config is set", func() {
+				It("should set authentication type 'adc' automatically", func() {
+					result, err := createResource(testResource)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(result.Spec.Authentication.Type).To(Equal(AuthTypeADC))
+				})
+			})
 		})
 
-		It("should set authentication type 'impersonation' automatically", func() {
-			testResource.Spec.Authentication.IAMKeySecret = nil // unset the value set above
-			testResource.Spec.Authentication.ImpersonateConfig = &ImpersonateConfig{
-				TargetServiceAccount: "dummy@example.com",
-			}
+		Describe("ScaleConfig", func() {
+			BeforeEach(func() {
+				testResource.Spec.ScaleConfig = ScaleConfig{
+					TargetCPUUtilization: TargetCPUUtilization{
+						HighPriority: 30,
+					},
+				}
+			})
 
-			result, err := createResource(testResource)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(result.Spec.Authentication.Type).To(Equal(AuthTypeImpersonation))
+			Context("processing unit configuration is set", func() {
+				BeforeEach(func() {
+					testResource.Spec.ScaleConfig.ProcessingUnits = ScaleConfigPUs{
+						Min: 1000,
+						Max: 10000,
+					}
+				})
+
+				Context("scale down step size is set", func() {
+					BeforeEach(func() {
+						testResource.Spec.ScaleConfig.ScaledownStepSize = 1000
+					})
+
+					It("should set compute type 'processing-units' automatically", func() {
+						result, err := createResource(testResource)
+						Expect(err).ToNot(HaveOccurred())
+						Expect(result.Spec.ScaleConfig.ComputeType).To(Equal(ComputeTypePU))
+						Expect(result.Spec.ScaleConfig.ScaledownStepSize).To(Equal(1000))
+					})
+				})
+
+				Context("scale down step size is not set", func() {
+					It("should set compute type 'processing-units' and scale down step size automatically", func() {
+						result, err := createResource(testResource)
+						Expect(err).ToNot(HaveOccurred())
+						Expect(result.Spec.ScaleConfig.ComputeType).To(Equal(ComputeTypePU))
+						Expect(result.Spec.ScaleConfig.ScaledownStepSize).To(Equal(2000))
+					})
+				})
+			})
+
+			Context("processing unit node is set", func() {
+				BeforeEach(func() {
+					testResource.Spec.ScaleConfig.Nodes = ScaleConfigNodes{
+						Min: 1,
+						Max: 10,
+					}
+				})
+
+				Context("scale down step size is set", func() {
+					BeforeEach(func() {
+						testResource.Spec.ScaleConfig.ScaledownStepSize = 1000
+					})
+
+					It("should set compute type and processing unit configuration automatically", func() {
+						result, err := createResource(testResource)
+						Expect(err).ToNot(HaveOccurred())
+						Expect(result.Spec.ScaleConfig.ComputeType).To(Equal(ComputeTypeNode))
+						Expect(result.Spec.ScaleConfig.ProcessingUnits.Min).To(Equal(1000))
+						Expect(result.Spec.ScaleConfig.ProcessingUnits.Max).To(Equal(10000))
+						Expect(result.Spec.ScaleConfig.ScaledownStepSize).To(Equal(1000))
+					})
+				})
+
+				Context("scale down step size is not set", func() {
+					It("should set compute type, processing unit configuration, and scale down step size automatically", func() {
+						result, err := createResource(testResource)
+						Expect(err).ToNot(HaveOccurred())
+						Expect(result.Spec.ScaleConfig.ComputeType).To(Equal(ComputeTypeNode))
+						Expect(result.Spec.ScaleConfig.ProcessingUnits.Min).To(Equal(1000))
+						Expect(result.Spec.ScaleConfig.ProcessingUnits.Max).To(Equal(10000))
+						Expect(result.Spec.ScaleConfig.ScaledownStepSize).To(Equal(2000))
+					})
+				})
+			})
 		})
-
-		It("should set authentication type 'adc' automatically", func() {
-			testResource.Spec.Authentication.IAMKeySecret = nil // unset the value set above
-
-			result, err := createResource(testResource)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(result.Spec.Authentication.Type).To(Equal(AuthTypeADC))
-		})
-
-		// TODO: add more unit tests for verifying all the defaults
 		// TODO: add more unit tests for verifying all the validation conditions
 	})
 })
