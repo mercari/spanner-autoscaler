@@ -38,7 +38,7 @@ import (
 	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
 	"github.com/mercari/spanner-autoscaler/internal/metrics"
 	"github.com/mercari/spanner-autoscaler/internal/spanner"
-	"github.com/mercari/spanner-autoscaler/internal/syncer"
+	syncerpkg "github.com/mercari/spanner-autoscaler/internal/syncer"
 )
 
 var (
@@ -57,7 +57,7 @@ type SpannerAutoscalerReconciler struct {
 	scheme   *runtime.Scheme
 	recorder record.EventRecorder
 
-	syncers map[types.NamespacedName]syncer.Syncer
+	syncers map[types.NamespacedName]syncerpkg.Syncer
 
 	scaleDownInterval time.Duration
 
@@ -104,12 +104,12 @@ func (o withLog) applySpannerAutoscalerReconciler(r *SpannerAutoscalerReconciler
 }
 
 // Add syncer option for the autoscaler-reconciler
-func WithSyncers(syncers map[types.NamespacedName]syncer.Syncer) Option {
+func WithSyncers(syncers map[types.NamespacedName]syncerpkg.Syncer) Option {
 	return withSyncers{syncers: syncers}
 }
 
 type withSyncers struct {
-	syncers map[types.NamespacedName]syncer.Syncer
+	syncers map[types.NamespacedName]syncerpkg.Syncer
 }
 
 func (o withSyncers) applySpannerAutoscalerReconciler(r *SpannerAutoscalerReconciler) {
@@ -156,7 +156,7 @@ func NewSpannerAutoscalerReconciler(
 		apiReader:         apiReader,
 		scheme:            scheme,
 		recorder:          recorder,
-		syncers:           make(map[types.NamespacedName]syncer.Syncer),
+		syncers:           make(map[types.NamespacedName]syncerpkg.Syncer),
 		scaleDownInterval: 55 * time.Minute,
 		clock:             utilclock.RealClock{},
 		log:               logger,
@@ -183,7 +183,7 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 	log := r.log.WithValues("namespaced name", nn, "emitter", "autoscaler")
 
 	r.mu.RLock()
-	s, syncerExists := r.syncers[nn]
+	syncer, syncerExists := r.syncers[nn]
 	r.mu.RUnlock()
 
 	var sa spannerv1beta1.SpannerAutoscaler
@@ -196,7 +196,7 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 
 		log.V(2).Info("checking if a syncer exists")
 		if syncerExists {
-			s.Stop()
+			syncer.Stop()
 			r.mu.Lock()
 			delete(r.syncers, nn)
 			r.mu.Unlock()
@@ -229,8 +229,8 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 	}
 
 	// If credentials have been changed, then just replace syncer.
-	if !s.HasCredentials(credentials) {
-		s.Stop()
+	if !syncer.HasCredentials(credentials) {
+		syncer.Stop()
 		r.mu.Lock()
 		delete(r.syncers, nn)
 		r.mu.Unlock()
@@ -264,7 +264,7 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 	}
 
 	log.V(1).Info("processing units need to be changed", "desiredProcessingUnits", desiredProcessingUnits, "sa.Status", sa.Status)
-	if err := s.UpdateInstance(ctx, desiredProcessingUnits); err != nil {
+	if err := syncer.UpdateInstance(ctx, desiredProcessingUnits); err != nil {
 		r.recorder.Event(&sa, corev1.EventTypeWarning, "FailedUpdateInstance", err.Error())
 		log.Error(err, "failed to update spanner instance status")
 		return ctrlreconcile.Result{}, err
@@ -301,7 +301,7 @@ func (r *SpannerAutoscalerReconciler) SetupWithManager(mgr ctrlmanager.Manager) 
 		Complete(r)
 }
 
-func (r *SpannerAutoscalerReconciler) startSyncer(ctx context.Context, log logr.Logger, nn types.NamespacedName, projectID, instanceID string, credentials *syncer.Credentials) error {
+func (r *SpannerAutoscalerReconciler) startSyncer(ctx context.Context, log logr.Logger, nn types.NamespacedName, projectID, instanceID string, credentials *syncerpkg.Credentials) error {
 	ts, err := credentials.TokenSource(ctx)
 	if err != nil {
 		return err
@@ -329,7 +329,7 @@ func (r *SpannerAutoscalerReconciler) startSyncer(ctx context.Context, log logr.
 		return err
 	}
 
-	s, err := syncer.New(ctx, r.ctrlClient, nn, credentials, r.recorder, spannerClient, metricsClient, syncer.WithLog(log))
+	s, err := syncerpkg.New(ctx, r.ctrlClient, nn, credentials, r.recorder, spannerClient, metricsClient, syncerpkg.WithLog(log))
 	if err != nil {
 		return err
 	}
@@ -413,7 +413,7 @@ func calcDesiredProcessingUnits(sa spannerv1beta1.SpannerAutoscaler) int {
 	return desiredPU
 }
 
-func (r *SpannerAutoscalerReconciler) fetchCredentials(ctx context.Context, sa *spannerv1beta1.SpannerAutoscaler) (*syncer.Credentials, error) {
+func (r *SpannerAutoscalerReconciler) fetchCredentials(ctx context.Context, sa *spannerv1beta1.SpannerAutoscaler) (*syncerpkg.Credentials, error) {
 	iamKeySecret := sa.Spec.Authentication.IAMKeySecret
 	impersonateConfig := sa.Spec.Authentication.ImpersonateConfig
 
@@ -457,12 +457,12 @@ func (r *SpannerAutoscalerReconciler) fetchCredentials(ctx context.Context, sa *
 			return nil, errFetchServiceAccountJSONNoSecretDataFound
 		}
 
-		return syncer.NewServiceAccountJSONCredentials(serviceAccountJSON), nil
+		return syncerpkg.NewServiceAccountJSONCredentials(serviceAccountJSON), nil
 
 	case spannerv1beta1.AuthTypeImpersonation:
-		return syncer.NewServiceAccountImpersonate(impersonateConfig.TargetServiceAccount, impersonateConfig.Delegates), nil
+		return syncerpkg.NewServiceAccountImpersonate(impersonateConfig.TargetServiceAccount, impersonateConfig.Delegates), nil
 
 	default:
-		return syncer.NewADCCredentials(), nil
+		return syncerpkg.NewADCCredentials(), nil
 	}
 }
