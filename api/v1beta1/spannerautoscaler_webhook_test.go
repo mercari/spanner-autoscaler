@@ -40,6 +40,11 @@ var _ = Describe("SpannerAutoscaler validation", func() {
 					ProjectID:  "test-project-id",
 					InstanceID: "test-instance-id",
 				},
+				ScaleConfig: ScaleConfig{
+					TargetCPUUtilization: TargetCPUUtilization{
+						HighPriority: 30,
+					},
+				},
 			},
 		}
 	})
@@ -48,14 +53,9 @@ var _ = Describe("SpannerAutoscaler validation", func() {
 
 		Describe("Authentication", func() {
 			BeforeEach(func() {
-				testResource.Spec.ScaleConfig = ScaleConfig{
-					ProcessingUnits: ScaleConfigPUs{
-						Min: 1000,
-						Max: 10000,
-					},
-					TargetCPUUtilization: TargetCPUUtilization{
-						HighPriority: 30,
-					},
+				testResource.Spec.ScaleConfig.ProcessingUnits = ScaleConfigPUs{
+					Min: 1000,
+					Max: 10000,
 				}
 			})
 
@@ -119,14 +119,6 @@ var _ = Describe("SpannerAutoscaler validation", func() {
 		})
 
 		Describe("ScaleConfig", func() {
-			BeforeEach(func() {
-				testResource.Spec.ScaleConfig = ScaleConfig{
-					TargetCPUUtilization: TargetCPUUtilization{
-						HighPriority: 30,
-					},
-				}
-			})
-
 			Context("processing unit configuration is set", func() {
 				BeforeEach(func() {
 					testResource.Spec.ScaleConfig.ProcessingUnits = ScaleConfigPUs{
@@ -193,7 +185,94 @@ var _ = Describe("SpannerAutoscaler validation", func() {
 				})
 			})
 		})
-		// TODO: add more unit tests for verifying all the validation conditions
+	})
+
+	Describe("Check validation settings", func() {
+		Describe("Authentication", func() {
+			BeforeEach(func() {
+				testResource.Spec.ScaleConfig.ProcessingUnits = ScaleConfigPUs{
+					Min: 1000,
+					Max: 10000,
+				}
+			})
+
+			Context("both ImpersonateConfig and IAMKeySecret are set", func() {
+				BeforeEach(func() {
+					testResource.Spec.Authentication = Authentication{
+						ImpersonateConfig: &ImpersonateConfig{
+							TargetServiceAccount: "test-service-account",
+							Delegates:            []string{"test-delegate"},
+						},
+						IAMKeySecret: &IAMKeySecret{
+							Name: "test-service-account-secret",
+							Key:  "secret",
+						},
+					}
+				})
+
+				It("should return validation error", func() {
+					_, err := createResource(testResource)
+					Expect(err).To(HaveOccurred())
+					Expect(err.Error()).To(ContainSubstring("'impersonateConfig' and 'iamKeySecret' are mutually exclusive values"))
+				})
+			})
+		})
+
+		Describe("ScaleConfig", func() {
+			BeforeEach(func() {
+				testResource.Spec.Authentication = Authentication{
+					ImpersonateConfig: &ImpersonateConfig{
+						TargetServiceAccount: "test-service-account",
+						Delegates:            []string{"test-delegate"},
+					},
+				}
+			})
+
+			Context("max nodes are smaller than min nodes", func() {
+				BeforeEach(func() {
+					testResource.Spec.ScaleConfig.Nodes = ScaleConfigNodes{
+						Max: 1,
+						Min: 2,
+					}
+				})
+
+				It("should return validation error", func() {
+					_, err := createResource(testResource)
+					Expect(err).To(HaveOccurred())
+					Expect(err.Error()).To(ContainSubstring("'max' value must be less than 'min' value"))
+				})
+			})
+
+			Context("max processing units are smaller than min processing units", func() {
+				BeforeEach(func() {
+					testResource.Spec.ScaleConfig.ProcessingUnits = ScaleConfigPUs{
+						Max: 1000,
+						Min: 2000,
+					}
+				})
+
+				It("should return validation error", func() {
+					_, err := createResource(testResource)
+					Expect(err).To(HaveOccurred())
+					Expect(err.Error()).To(ContainSubstring("'max' value must be less than 'min' value"))
+				})
+			})
+
+			Context("processing units are greater than 1000 but not multiples of 1000", func() {
+				BeforeEach(func() {
+					testResource.Spec.ScaleConfig.ProcessingUnits = ScaleConfigPUs{
+						Max: 2000,
+						Min: 1500,
+					}
+				})
+
+				It("should return validation error", func() {
+					_, err := createResource(testResource)
+					Expect(err).To(HaveOccurred())
+					Expect(err.Error()).To(ContainSubstring("processing units which are greater than 1000, should be multiples of 1000"))
+				})
+			})
+		})
 	})
 })
 
