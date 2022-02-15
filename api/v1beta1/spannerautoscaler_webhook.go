@@ -192,20 +192,11 @@ func (r *SpannerAutoscaler) validateScaleConfig() *field.Error {
 }
 
 func validateProcessingUnits(pu int, fldPath *field.Path) *field.Error {
-	if pu < 1000 {
-		if pu%100 != 0 {
-			return field.Invalid(
-				fldPath,
-				pu,
-				"processing units which are less than 1000, should be multiples of 100")
-		}
-	} else {
-		if pu%1000 != 0 {
-			return field.Invalid(
-				fldPath,
-				pu,
-				"processing units which are greater than 1000, should be multiples of 1000")
-		}
+	if pu >= 1000 && pu%1000 != 0 {
+		return field.Invalid(
+			fldPath,
+			pu,
+			"processing units which are greater than 1000, should be multiples of 1000")
 	}
 
 	return nil
