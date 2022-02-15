@@ -102,7 +102,6 @@ func (r *SpannerAutoscaleScheduleReconciler) Reconcile(ctx context.Context, req 
 	}
 
 	log.Info("registering schedule with spanner-autoscaler", "schedule", sas.Name, "autoscaler", sa.Name)
-	log.V(1).Info("registering schedule with spanner-autoscaler", "schedule", sas, "autoscaler", sa)
 
 	if _, ok := findInArray(sa.Status.Schedules, nn.Name); !ok {
 		sa.Status.Schedules = append(sa.Status.Schedules, nn.Name)
