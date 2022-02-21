@@ -143,6 +143,7 @@ func main() {
 	sasr := controllers.NewSpannerAutoscaleScheduleReconciler(
 		mgr.GetClient(),
 		mgr.GetScheme(),
+		mgr.GetEventRecorderFor("spannerautoscaleschedule-controller"),
 		controllers.WithLog(log),
 	)
 
