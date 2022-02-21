@@ -78,7 +78,7 @@ func NewSpannerAutoscaleScheduleReconciler(
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 func (r *SpannerAutoscaleScheduleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := r.log.WithValues("namespaced-name", req.NamespacedName, "emitter", "schedule")
+	log := r.log.WithValues("namespaced-name", req.NamespacedName)
 
 	var sas spannerv1beta1.SpannerAutoscaleSchedule
 	if err := r.ctrlClient.Get(ctx, req.NamespacedName, &sas); err != nil {
@@ -99,6 +99,8 @@ func (r *SpannerAutoscaleScheduleReconciler) Reconcile(ctx context.Context, req 
 		log.V(1).Info("adding finalizer to schedule", "schedule", sas, "finalizer", sasFinalizerName)
 		ctrlutil.AddFinalizer(&sas, sasFinalizerName)
 		if err := r.ctrlClient.Update(ctx, &sas); err != nil {
+			log.Error(err, "failed to add finalizer to schedule", "schedule", sas.Name)
+			r.recorder.Event(&sas, corev1.EventTypeWarning, "AddFinalizerFailed", err.Error())
 			return ctrl.Result{}, err
 		}
 	}
@@ -126,6 +128,8 @@ func (r *SpannerAutoscaleScheduleReconciler) Reconcile(ctx context.Context, req 
 				sa.Status.Schedules = deleteFromArray(sa.Status.Schedules, req.NamespacedName.Name)
 				log.Info("deleting schedule from spanner-autoscaler", "schedule", sas.Name, "autoscaler", sa.Name)
 				if err := r.ctrlClient.Status().Update(ctx, &sa); err != nil {
+					log.Error(err, "failed to deregister schedule from spanner-autoscaler", "autoscaler", sa.Name, "schedule", sas.Name)
+					r.recorder.Event(&sas, corev1.EventTypeWarning, "ScheduleDeregisterFailed", err.Error())
 					return ctrl.Result{}, err
 				}
 			}
@@ -133,6 +137,8 @@ func (r *SpannerAutoscaleScheduleReconciler) Reconcile(ctx context.Context, req 
 			// remove our finalizer from the list and update it.
 			ctrlutil.RemoveFinalizer(&sas, sasFinalizerName)
 			if err := r.ctrlClient.Update(ctx, &sas); err != nil {
+				log.Error(err, "failed to remove finalier from schedule", "schedule", sas.Name)
+				r.recorder.Event(&sas, corev1.EventTypeWarning, "RemoveFinalizerFailed", err.Error())
 				return ctrl.Result{}, err
 			}
 		}
@@ -146,6 +152,8 @@ func (r *SpannerAutoscaleScheduleReconciler) Reconcile(ctx context.Context, req 
 	if _, ok := findInArray(sa.Status.Schedules, req.NamespacedName.Name); !ok {
 		sa.Status.Schedules = append(sa.Status.Schedules, req.NamespacedName.Name)
 		if err := r.ctrlClient.Status().Update(ctx, &sa); err != nil {
+			log.Error(err, "failed to register schedule with spanner-autoscaler", "schedule", sas.Name, "autoscaler", sa.Name)
+			r.recorder.Event(&sas, corev1.EventTypeWarning, "ScheduleRegisterFailed", err.Error())
 			return ctrl.Result{}, err
 		}
 		log.V(1).Info("successfully registered schedule with spanner-autoscaler", "schedule", sas, "autoscaler", sa)

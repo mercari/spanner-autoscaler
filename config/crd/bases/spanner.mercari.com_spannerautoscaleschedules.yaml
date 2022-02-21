@@ -40,10 +40,6 @@ spec:
             properties:
               additionalProcessingUnits:
                 type: integer
-              foo:
-                description: Foo is an example field of SpannerAutoscaleSchedule.
-                  Edit spannerautoscaleschedule_types.go to remove/update
-                type: string
               schedule:
                 properties:
                   cron:
