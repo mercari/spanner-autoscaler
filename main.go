@@ -20,6 +20,8 @@ import (
 	"os"
 	"time"
 
+	ctrl "sigs.k8s.io/controller-runtime"
+
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -57,6 +59,8 @@ var (
 	probeAddr            = flag.String("health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	enableLeaderElection = flag.Bool("leader-elect", false, "Enable leader election for controller manager. Enabling this will ensure there is only one active controller manager.")
 	scaleDownInterval    = flag.Duration("scale-down-interval", 55*time.Minute, "The scale down interval.")
+	configFile           = flag.String("config", "", "The controller will load its initial configuration from this file. "+
+		"Omit this flag to use the default configuration values. Command-line flags override configuration from this file.")
 )
 
 const (
@@ -93,7 +97,7 @@ func main() {
 		os.Exit(exitCode)
 	}
 
-	mgr, err := ctrlmanager.New(cfg, ctrlmanager.Options{
+	options := ctrlmanager.Options{
 		Scheme:                 scheme,
 		LeaderElection:         *enableLeaderElection,
 		LeaderElectionID:       leaderElectionID,
@@ -105,7 +109,16 @@ func main() {
 		// TODO: remove this when `v1beta1` is stable and tested
 		// Only for development
 		// CertDir: "./bin/dummytls",
-	})
+	}
+	if *configFile != "" {
+		options, err = options.AndFrom(ctrl.ConfigFile().AtPath(*configFile))
+		if err != nil {
+			setupLog.Error(err, "unable to load the config file")
+			os.Exit(exitCode)
+		}
+	}
+
+	mgr, err := ctrlmanager.New(cfg, options)
 	if err != nil {
 		setupLog.Error(err, "failed to create manager")
 		os.Exit(exitCode)
