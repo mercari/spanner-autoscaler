@@ -70,6 +70,9 @@ kind-cluster-delete: kind ## Delete the kind cluster created for development
 
 kind-cluster-reset: kind-cluster-delete kind-cluster-create ## Recreate the kind cluster for development
 
+kind-load-docker-image: kind ## Load a local Docker image to the kind cluster for development
+	@$(KIND) load docker-image --name $(KIND_CLUSTER_NAME) ${IMG}
+
 ##@ Build
 
 build: generate fmt vet ## Build manager binary.
