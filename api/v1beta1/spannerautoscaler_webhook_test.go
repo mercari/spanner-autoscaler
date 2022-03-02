@@ -50,7 +50,6 @@ var _ = Describe("SpannerAutoscaler validation", func() {
 	})
 
 	Describe("Check default settings", func() {
-
 		Describe("Authentication", func() {
 			BeforeEach(func() {
 				testResource.Spec.ScaleConfig.ProcessingUnits = ScaleConfigPUs{

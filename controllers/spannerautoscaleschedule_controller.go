@@ -23,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -78,7 +79,7 @@ func NewSpannerAutoscaleScheduleReconciler(
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 func (r *SpannerAutoscaleScheduleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := r.log.WithValues("namespaced-name", req.NamespacedName)
+	log := r.log.WithValues("schedule", req.NamespacedName.String())
 
 	var sas spannerv1beta1.SpannerAutoscaleSchedule
 	if err := r.ctrlClient.Get(ctx, req.NamespacedName, &sas); err != nil {
@@ -96,10 +97,10 @@ func (r *SpannerAutoscaleScheduleReconciler) Reconcile(ctx context.Context, req 
 
 	// register our finalizer if the object is not being deleted
 	if sas.ObjectMeta.DeletionTimestamp.IsZero() && !ctrlutil.ContainsFinalizer(&sas, sasFinalizerName) {
-		log.V(1).Info("adding finalizer to schedule", "schedule", sas, "finalizer", sasFinalizerName)
+		log.V(1).Info("adding finalizer to schedule", "finalizer", sasFinalizerName)
 		ctrlutil.AddFinalizer(&sas, sasFinalizerName)
 		if err := r.ctrlClient.Update(ctx, &sas); err != nil {
-			log.Error(err, "failed to add finalizer to schedule", "schedule", sas.Name)
+			log.Error(err, "failed to add finalizer to schedule")
 			r.recorder.Event(&sas, corev1.EventTypeWarning, "AddFinalizerFailed", err.Error())
 			return ctrl.Result{}, err
 		}
@@ -125,11 +126,19 @@ func (r *SpannerAutoscaleScheduleReconciler) Reconcile(ctx context.Context, req 
 		if ctrlutil.ContainsFinalizer(&sas, sasFinalizerName) {
 			// our finalizer is present, so if we found any autoscaler resource, then remove the schedule from the autoscaler list
 			if len(sa.Status.Schedules) != 0 {
-				sa.Status.Schedules = deleteFromArray(sa.Status.Schedules, req.NamespacedName.Name)
-				log.Info("deleting schedule from spanner-autoscaler", "schedule", sas.Name, "autoscaler", sa.Name)
-				if err := r.ctrlClient.Status().Update(ctx, &sa); err != nil {
-					log.Error(err, "failed to deregister schedule from spanner-autoscaler", "autoscaler", sa.Name, "schedule", sas.Name)
-					r.recorder.Event(&sas, corev1.EventTypeWarning, "ScheduleDeregisterFailed", err.Error())
+				log.Info("unregister schedule from spanner-autoscaler", "autoscaler", ctrlclient.ObjectKeyFromObject(&sa).String())
+				err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+					if err := r.ctrlClient.Get(ctx, nnsa, &sa); err != nil {
+						return err
+					}
+					sa.Status.Schedules = deleteFromArray(sa.Status.Schedules, req.NamespacedName.String())
+					return r.ctrlClient.Status().Update(ctx, &sa)
+				})
+				if err != nil {
+					// May be conflict if max retries were hit, or may be something unrelated
+					// like permissions or a network error
+					log.Error(err, "failed to unregister schedule from spanner-autoscaler", "autoscaler", ctrlclient.ObjectKeyFromObject(&sa).String())
+					r.recorder.Event(&sas, corev1.EventTypeWarning, "ScheduleUnregisterFailed", err.Error())
 					return ctrl.Result{}, err
 				}
 			}
@@ -137,7 +146,7 @@ func (r *SpannerAutoscaleScheduleReconciler) Reconcile(ctx context.Context, req 
 			// remove our finalizer from the list and update it.
 			ctrlutil.RemoveFinalizer(&sas, sasFinalizerName)
 			if err := r.ctrlClient.Update(ctx, &sas); err != nil {
-				log.Error(err, "failed to remove finalier from schedule", "schedule", sas.Name)
+				log.Error(err, "failed to remove finalier from schedule")
 				r.recorder.Event(&sas, corev1.EventTypeWarning, "RemoveFinalizerFailed", err.Error())
 				return ctrl.Result{}, err
 			}
@@ -147,17 +156,28 @@ func (r *SpannerAutoscaleScheduleReconciler) Reconcile(ctx context.Context, req 
 		return ctrl.Result{}, nil
 	}
 
-	log.Info("registering schedule with spanner-autoscaler", "schedule", sas.Name, "autoscaler", sa.Name)
+	log.Info("registering schedule with spanner-autoscaler", "autoscaler", ctrlclient.ObjectKeyFromObject(&sa).String())
 
-	if _, ok := findInArray(sa.Status.Schedules, req.NamespacedName.Name); !ok {
-		sa.Status.Schedules = append(sa.Status.Schedules, req.NamespacedName.Name)
-		if err := r.ctrlClient.Status().Update(ctx, &sa); err != nil {
-			log.Error(err, "failed to register schedule with spanner-autoscaler", "schedule", sas.Name, "autoscaler", sa.Name)
+	if _, ok := findInArray(sa.Status.Schedules, req.NamespacedName.String()); !ok {
+		err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+			if err := r.ctrlClient.Get(ctx, nnsa, &sa); err != nil {
+				return err
+			}
+			if _, found := findInArray(sa.Status.Schedules, req.NamespacedName.String()); !found {
+				sa.Status.Schedules = append(sa.Status.Schedules, req.NamespacedName.String())
+				return r.ctrlClient.Status().Update(ctx, &sa)
+			}
+			return nil
+		})
+		if err != nil {
+			// May be conflict if max retries were hit, or may be something unrelated
+			// like permissions or a network error
+			log.Error(err, "failed to register schedule with spanner-autoscaler", "autoscaler", ctrlclient.ObjectKeyFromObject(&sa).String())
 			r.recorder.Event(&sas, corev1.EventTypeWarning, "ScheduleRegisterFailed", err.Error())
 			return ctrl.Result{}, err
 		}
-		log.V(1).Info("successfully registered schedule with spanner-autoscaler", "schedule", sas, "autoscaler", sa)
-		r.recorder.Eventf(&sas, corev1.EventTypeNormal, "RegisteredWithSpannerAutoscaler", "successfully registered with spanner-autoscaler %q", sa.Name)
+		log.V(1).Info("successfully registered schedule with spanner-autoscaler", "autoscaler", ctrlclient.ObjectKeyFromObject(&sa).String())
+		r.recorder.Eventf(&sas, corev1.EventTypeNormal, "RegisteredWithSpannerAutoscaler", "successfully registered with spanner-autoscaler %q", ctrlclient.ObjectKeyFromObject(&sa).String())
 	}
 
 	return ctrl.Result{}, nil
@@ -187,9 +207,8 @@ func deleteFromArray(array []string, item string) []string {
 	result := []string{}
 	for _, v := range array {
 		if v != item {
-			result = append(result, item)
+			result = append(result, v)
 		}
 	}
-
 	return result
 }
