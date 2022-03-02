@@ -6,6 +6,18 @@ spec:
   targetResource: spannerautoscaler-sample-beta
   additionalProcessingUnits: 300
   schedule:
-    cron: "32 15 * * *"
-    duration: 2h15m
+    cron: "0 */3 * * *" ## Every 3 hours
+    duration: 2h10m
+
+---
+apiVersion: spanner.mercari.com/v1beta1
+kind: SpannerAutoscaleSchedule
+metadata:
+  name: another-sample
+spec:
+  targetResource: spannerautoscaler-sample-beta
+  additionalProcessingUnits: 3000
+  schedule:
+    cron: "*/25 * * * *" ## Every 25 minutes
+    duration: 15m30s
 
