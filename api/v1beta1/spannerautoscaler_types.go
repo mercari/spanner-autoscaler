@@ -143,10 +143,16 @@ const (
 	InstanceStateReady InstanceState = "ready"
 )
 
+type ActiveSchedule struct {
+	ScheduleName string      `json:"name"`
+	EndTime      metav1.Time `json:"endTime"`
+	AdditionalPU int         `json:"additionalPU"`
+}
+
 // SpannerAutoscalerStatus defines the observed state of SpannerAutoscaler
 type SpannerAutoscalerStatus struct {
-	Schedules                []string `json:"schedules,omitempty"`
-	CurrentlyActiveSchedules []string `json:"currentlyActiveSchedules,omitempty"`
+	Schedules                []string         `json:"schedules,omitempty"`
+	CurrentlyActiveSchedules []ActiveSchedule `json:"currentlyActiveSchedules,omitempty"`
 
 	// Last time the SpannerAutoscaler scaled the number of Spanner nodes
 	// Used by the autoscaler to control how often the number of nodes are changed
@@ -155,19 +161,19 @@ type SpannerAutoscalerStatus struct {
 	// Last time the SpannerAutoscaler fetched and synced this status
 	LastSyncTime metav1.Time `json:"lastSyncTime,omitempty"`
 
-	// Current number of nodes in the Spanner instance
-	CurrentNodes int `json:"currentNodes,omitempty"`
-
 	// Current number of processing-units in the Spanner instance
 	CurrentProcessingUnits int `json:"currentProcessingUnits,omitempty"`
-
-	// Desired number of nodes in the Spanner instance
-	DesiredNodes int `json:"desiredNodes,omitempty"`
 
 	// Desired number of processing-units in the Spanner instance
 	DesiredProcessingUnits int `json:"desiredProcessingUnits,omitempty"`
 
-	InstanceState InstanceState `json:"instanceState"`
+	// Minimum number of processing units based on the currently active schedules
+	DesiredMinPUs int `json:"desiredMinPUs,omitempty"`
+
+	// Maximum number of processing units based on the currently active schedules
+	DesiredMaxPUs int `json:"desiredMaxPUs,omitempty"`
+
+	InstanceState InstanceState `json:"instanceState,omitempty"`
 
 	// Current average CPU utilization for high priority task, represented as a percentage
 	CurrentHighPriorityCPUUtilization int `json:"currentHighPriorityCPUUtilization,omitempty"`
@@ -178,12 +184,10 @@ type SpannerAutoscalerStatus struct {
 //+kubebuilder:storageversion
 //+kubebuilder:printcolumn:name="Project Id",type="string",JSONPath=".spec.targetInstance.projectId"
 //+kubebuilder:printcolumn:name="Instance Id",type="string",JSONPath=".spec.targetInstance.instanceId"
-//+kubebuilder:printcolumn:name="Min Nodes",type="integer",JSONPath=".spec.scaleConfig.nodes.min"
-//+kubebuilder:printcolumn:name="Max Nodes",type="integer",JSONPath=".spec.scaleConfig.nodes.max"
-//+kubebuilder:printcolumn:name="Current Nodes",type="integer",JSONPath=".status.currentNodes"
-//+kubebuilder:printcolumn:name="Min PUs",type="integer",JSONPath=".spec.scaleConfig.processingUnits.min"
-//+kubebuilder:printcolumn:name="Max PUs",type="integer",JSONPath=".spec.scaleConfig.processingUnits.max"
 //+kubebuilder:printcolumn:name="Current PUs",type="integer",JSONPath=".status.currentProcessingUnits"
+//+kubebuilder:printcolumn:name="Desired PUs",type="integer",JSONPath=".status.desiredProcessingUnits"
+//+kubebuilder:printcolumn:name="Desired Min PUs",type="integer",JSONPath=".status.desiredMinPUs"
+//+kubebuilder:printcolumn:name="Desired Max PUs",type="integer",JSONPath=".status.desiredMaxPUs"
 //+kubebuilder:printcolumn:name="Target CPU",type="integer",JSONPath=".spec.scaleConfig.targetCPUUtilization.highPriority"
 //+kubebuilder:printcolumn:name="Current CPU",type="integer",JSONPath=".status.currentHighPriorityCPUUtilization"
 //+kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"

@@ -39,6 +39,8 @@ type SpannerAutoscaleScheduleStatus struct{}
 
 //+kubebuilder:object:root=true
 //+kubebuilder:subresource:status
+//+kubebuilder:printcolumn:name="Cron",type="string",JSONPath=".spec.schedule.cron"
+//+kubebuilder:printcolumn:name="Duration",type="string",JSONPath=".spec.schedule.duration"
 
 // SpannerAutoscaleSchedule is the Schema for the spannerautoscaleschedules API
 type SpannerAutoscaleSchedule struct {

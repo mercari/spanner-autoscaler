@@ -210,23 +210,17 @@ spec:
     - jsonPath: .spec.targetInstance.instanceId
       name: Instance Id
       type: string
-    - jsonPath: .spec.scaleConfig.nodes.min
-      name: Min Nodes
-      type: integer
-    - jsonPath: .spec.scaleConfig.nodes.max
-      name: Max Nodes
-      type: integer
-    - jsonPath: .status.currentNodes
-      name: Current Nodes
-      type: integer
-    - jsonPath: .spec.scaleConfig.processingUnits.min
-      name: Min PUs
-      type: integer
-    - jsonPath: .spec.scaleConfig.processingUnits.max
-      name: Max PUs
-      type: integer
     - jsonPath: .status.currentProcessingUnits
       name: Current PUs
+      type: integer
+    - jsonPath: .status.desiredProcessingUnits
+      name: Desired PUs
+      type: integer
+    - jsonPath: .status.desiredMinPUs
+      name: Desired Min PUs
+      type: integer
+    - jsonPath: .status.desiredMaxPUs
+      name: Desired Max PUs
       type: integer
     - jsonPath: .spec.scaleConfig.targetCPUUtilization.highPriority
       name: Target CPU
@@ -388,18 +382,32 @@ spec:
                 description: Current average CPU utilization for high priority task,
                   represented as a percentage
                 type: integer
-              currentNodes:
-                description: Current number of nodes in the Spanner instance
-                type: integer
               currentProcessingUnits:
                 description: Current number of processing-units in the Spanner instance
                 type: integer
               currentlyActiveSchedules:
                 items:
-                  type: string
+                  properties:
+                    additionalPU:
+                      type: integer
+                    endTime:
+                      format: date-time
+                      type: string
+                    name:
+                      type: string
+                  required:
+                  - additionalPU
+                  - endTime
+                  - name
+                  type: object
                 type: array
-              desiredNodes:
-                description: Desired number of nodes in the Spanner instance
+              desiredMaxPUs:
+                description: Maximum number of processing units based on the currently
+                  active schedules
+                type: integer
+              desiredMinPUs:
+                description: Minimum number of processing units based on the currently
+                  active schedules
                 type: integer
               desiredProcessingUnits:
                 description: Desired number of processing-units in the Spanner instance
@@ -421,8 +429,6 @@ spec:
                 items:
                   type: string
                 type: array
-            required:
-            - instanceState
             type: object
         type: object
     served: true

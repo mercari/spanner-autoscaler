@@ -105,7 +105,6 @@ func Test_syncer_syncResource(t *testing.T) {
 			}(),
 			want: func() *spannerv1beta1.SpannerAutoscaler {
 				o := fakeSpannerAutoscaler.DeepCopy()
-				o.Status.CurrentNodes = 3
 				o.Status.CurrentProcessingUnits = 3000
 				o.Status.InstanceState = spannerv1beta1.InstanceStateReady
 				o.Status.CurrentHighPriorityCPUUtilization = 30
