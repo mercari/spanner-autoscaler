@@ -140,7 +140,7 @@ func (j Job) Run() {
 		sas spannerv1beta1.SpannerAutoscaleSchedule
 	)
 
-	ctx := context.TODO()
+	ctx := context.Background()
 
 	if err := j.CtrlClient.Get(ctx, j.ScheduleName, &sas); err != nil {
 		j.Log.Error(err, "failed to get spanner-autoscale-schedule")

@@ -214,7 +214,9 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 
 			if cronExists {
 				cron.Stop()
+				r.mu.Lock()
 				delete(r.crons, nnsa)
+				r.mu.Unlock()
 				log.Info("removed cron")
 			}
 
