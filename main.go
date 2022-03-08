@@ -164,6 +164,10 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "SpannerAutoscaleSchedule")
 		os.Exit(exitCode)
 	}
+	if err = (&spannerv1beta1.SpannerAutoscaleSchedule{}).SetupWebhookWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create webhook", "webhook", "SpannerAutoscaleSchedule")
+		os.Exit(exitCode)
+	}
 	//+kubebuilder:scaffold:builder
 
 	setupLog.Info("starting manager")
