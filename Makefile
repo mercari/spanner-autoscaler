@@ -63,7 +63,10 @@ kind-cluster-create: kind ## Create a kind cluster for development
 	@if [ -z $(shell $(KIND) get clusters | grep $(KIND_CLUSTER_NAME)) ]; then \
 	  $(KIND) create cluster --name $(KIND_CLUSTER_NAME); \
 	fi
+	## Change context to use kind cluster as default
 	kubectl config use-context kind-$(KIND_CLUSTER_NAME)
+	## Install cert-manager for generating certifacetes for validation and defaulting webhooks
+	kubectl apply -f https://github.com/jetstack/cert-manager/releases/download/v1.6.1/cert-manager.yaml
 
 kind-cluster-delete: kind ## Delete the kind cluster created for development
 	@$(KIND) delete cluster --name $(KIND_CLUSTER_NAME)
