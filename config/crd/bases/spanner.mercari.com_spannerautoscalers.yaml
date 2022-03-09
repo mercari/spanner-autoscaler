@@ -312,23 +312,30 @@ spec:
                     - processing-units
                     type: string
                   nodes:
-                    description: If `nodes` are provided at the time of resource creation,
-                      then they are automatically converted to `processing-units`.
-                      So it is recommended to use only the processing units.
+                    description: 'If `nodes` are provided at the time of resource
+                      creation, then they are automatically converted to `processing-units`.
+                      So it is recommended to use only the processing units. Ref:
+                      [Spanner Compute Capacity](https://cloud.google.com/spanner/docs/compute-capacity#compute_capacity)'
                     properties:
                       max:
+                        description: Maximum number of Nodes for the autoscaling range
                         type: integer
                       min:
+                        description: Minimum number of Nodes for the autoscaling range
                         type: integer
                     type: object
                   processingUnits:
-                    description: 'ProcessingUnits for scaling of the Spanner instance:
-                      https://cloud.google.com/spanner/docs/compute-capacity#compute_capacity'
+                    description: 'ProcessingUnits for scaling of the Spanner instance.
+                      Ref: [Spanner Compute Capacity](https://cloud.google.com/spanner/docs/compute-capacity#compute_capacity)'
                     properties:
                       max:
+                        description: Maximum number of Processing Units for the autoscaling
+                          range
                         multipleOf: 100
                         type: integer
                       min:
+                        description: Minimum number of Processing Units for the autoscaling
+                          range
                         multipleOf: 100
                         type: integer
                     required:
@@ -342,10 +349,12 @@ spec:
                     multipleOf: 1000
                     type: integer
                   targetCPUUtilization:
-                    description: The CPU utilization which the autoscaling will try
-                      to achieve
+                    description: 'The CPU utilization which the autoscaling will try
+                      to achieve. Ref: [Spanner CPU utilization](https://cloud.google.com/spanner/docs/cpu-utilization#task-priority)'
                     properties:
                       highPriority:
+                        description: 'Desired CPU utilization for ''High Priority''
+                          CPU consumption category. Ref: [Spanner CPU utilization](https://cloud.google.com/spanner/docs/cpu-utilization#task-priority)'
                         exclusiveMaximum: true
                         exclusiveMinimum: true
                         maximum: 100
@@ -371,7 +380,6 @@ spec:
                 - projectId
                 type: object
             required:
-            - authentication
             - scaleConfig
             - targetInstance
             type: object
@@ -386,14 +394,22 @@ spec:
                 description: Current number of processing-units in the Spanner instance
                 type: integer
               currentlyActiveSchedules:
+                description: List of all the schedules which are currently active
+                  and will be used in calculating compute capacity
                 items:
+                  description: A `SpannerAutoscaleSchedule` which is currently active
+                    and will be used for calculating the autoscaling range.
                   properties:
                     additionalPU:
+                      description: The extra compute capacity which will be added
+                        because of this schedule
                       type: integer
                     endTime:
+                      description: The time until when this schedule will remain active
                       format: date-time
                       type: string
                     name:
+                      description: Name of the `SpannerAutoscaleSchedule`
                       type: string
                   required:
                   - additionalPU
@@ -413,19 +429,22 @@ spec:
                 description: Desired number of processing-units in the Spanner instance
                 type: integer
               instanceState:
+                description: State of the Cloud Spanner instance
                 type: string
               lastScaleTime:
-                description: Last time the SpannerAutoscaler scaled the number of
-                  Spanner nodes Used by the autoscaler to control how often the number
+                description: Last time the `SpannerAutoscaler` scaled the number of
+                  Spanner nodes. Used by the autoscaler to control how often the number
                   of nodes are changed
                 format: date-time
                 type: string
               lastSyncTime:
-                description: Last time the SpannerAutoscaler fetched and synced this
-                  status
+                description: Last time the `SpannerAutoscaler` fetched and synced
+                  the metrics from Spanner
                 format: date-time
                 type: string
               schedules:
+                description: List of schedules which are registered with this spanner-autoscaler
+                  instance
                 items:
                   type: string
                 type: array

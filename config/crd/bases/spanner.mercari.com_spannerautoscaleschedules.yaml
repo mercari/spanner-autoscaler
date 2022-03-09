@@ -46,18 +46,29 @@ spec:
               SpannerAutoscaleSchedule
             properties:
               additionalProcessingUnits:
+                description: The extra compute capacity which will be added when this
+                  schedule is active
                 type: integer
               schedule:
+                description: The details of when and for how long this schedule will
+                  be active
                 properties:
                   cron:
+                    description: 'The recurring frequency of the schedule in [standard
+                      cron](https://en.wikipedia.org/wiki/Cron) format. Examples and
+                      verification utility: https://crontab.guru'
                     type: string
                   duration:
+                    description: The length of time for which this schedule will remain
+                      active each time the cron is triggered.
                     type: string
                 required:
                 - cron
                 - duration
                 type: object
               targetResource:
+                description: The `SpannerAutoscaler` resource name with which this
+                  schedule will be registered
                 type: string
             required:
             - additionalProcessingUnits

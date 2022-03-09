@@ -1,0 +1,10 @@
+## config file for `crd-ref-docs`: https://github.com/elastic/crd-ref-docs#configuration
+
+processor:
+  ignoreTypes:
+    - "(SpannerAutoscaler|SpannerAutoscaleSchedule)List$"
+  ignoreFields:
+    - "TypeMeta$"
+
+render:
+  kubernetesVersion: 1.22
