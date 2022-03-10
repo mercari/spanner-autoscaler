@@ -15,6 +15,7 @@ apiVersion: spanner.mercari.com/v1beta1
 kind: SpannerAutoscaleSchedule
 metadata:
   name: another-sample
+  namespace: test
 spec:
   targetResource: spannerautoscaler-sample-beta
   additionalProcessingUnits: 3000
