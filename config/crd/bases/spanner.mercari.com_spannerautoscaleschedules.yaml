@@ -23,6 +23,9 @@ spec:
     - jsonPath: .spec.schedule.duration
       name: Duration
       type: string
+    - jsonPath: .spec.additionalProcessingUnits
+      name: Additional PU
+      type: integer
     name: v1beta1
     schema:
       openAPIV3Schema:
