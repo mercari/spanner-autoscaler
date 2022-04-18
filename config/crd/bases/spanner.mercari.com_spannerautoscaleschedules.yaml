@@ -16,7 +16,14 @@ spec:
     singular: spannerautoscaleschedule
   scope: Namespaced
   versions:
-  - name: v1beta1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.schedule.cron
+      name: Cron
+      type: string
+    - jsonPath: .spec.schedule.duration
+      name: Duration
+      type: string
+    name: v1beta1
     schema:
       openAPIV3Schema:
         description: SpannerAutoscaleSchedule is the Schema for the spannerautoscaleschedules

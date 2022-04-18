@@ -1,12 +1,13 @@
 package v1alpha1
 
 import (
+	"time"
+
 	"github.com/mercari/spanner-autoscaler/api/v1beta1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/pointer"
-	"time"
 )
 
 var _ = Describe("ConvertTo", func() {
@@ -170,18 +171,16 @@ var _ = Describe("ConvertTo", func() {
 		Entry("All statuses", SpannerAutoscalerStatus{
 			LastScaleTime:                     &metav1.Time{Time: timestamp},
 			LastSyncTime:                      &metav1.Time{Time: timestamp.Add(-1 * time.Hour)},
-			CurrentNodes:                      pointer.Int32(1),
+			CurrentNodes:                      pointer.Int32(0),
 			CurrentProcessingUnits:            pointer.Int32(100),
-			DesiredNodes:                      pointer.Int32(2),
+			DesiredNodes:                      pointer.Int32(0),
 			DesiredProcessingUnits:            pointer.Int32(200),
 			CurrentHighPriorityCPUUtilization: pointer.Int32(10),
 			InstanceState:                     InstanceStateReady,
 		}, v1beta1.SpannerAutoscalerStatus{
 			LastScaleTime:                     metav1.Time{Time: timestamp},
 			LastSyncTime:                      metav1.Time{Time: timestamp.Add(-1 * time.Hour)},
-			CurrentNodes:                      1,
 			CurrentProcessingUnits:            100,
-			DesiredNodes:                      2,
 			DesiredProcessingUnits:            200,
 			CurrentHighPriorityCPUUtilization: 10,
 			InstanceState:                     v1beta1.InstanceStateReady,
@@ -312,9 +311,7 @@ var _ = Describe("ConvertFrom", func() {
 			src.Status = v1beta1.SpannerAutoscalerStatus{
 				LastScaleTime:                     metav1.Time{Time: timestamp},
 				LastSyncTime:                      metav1.Time{Time: timestamp.Add(-1 * time.Hour)},
-				CurrentNodes:                      1,
 				CurrentProcessingUnits:            100,
-				DesiredNodes:                      2,
 				DesiredProcessingUnits:            200,
 				CurrentHighPriorityCPUUtilization: 10,
 				InstanceState:                     v1beta1.InstanceStateReady,
@@ -323,9 +320,9 @@ var _ = Describe("ConvertFrom", func() {
 			expectedStatus := SpannerAutoscalerStatus{
 				LastScaleTime:                     &metav1.Time{Time: timestamp},
 				LastSyncTime:                      &metav1.Time{Time: timestamp.Add(-1 * time.Hour)},
-				CurrentNodes:                      pointer.Int32(1),
+				CurrentNodes:                      pointer.Int32(0),
 				CurrentProcessingUnits:            pointer.Int32(100),
-				DesiredNodes:                      pointer.Int32(2),
+				DesiredNodes:                      pointer.Int32(0),
 				DesiredProcessingUnits:            pointer.Int32(200),
 				CurrentHighPriorityCPUUtilization: pointer.Int32(10),
 				InstanceState:                     InstanceStateReady,

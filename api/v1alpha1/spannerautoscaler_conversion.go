@@ -78,14 +78,8 @@ func (src *SpannerAutoscaler) ConvertTo(dstRaw conversion.Hub) error {
 	if !src.Status.LastSyncTime.IsZero() {
 		dst.Status.LastSyncTime = metav1.Time{Time: src.Status.LastSyncTime.Time}
 	}
-	if src.Status.CurrentNodes != nil {
-		dst.Status.CurrentNodes = int(*src.Status.CurrentNodes)
-	}
 	if src.Status.CurrentProcessingUnits != nil {
 		dst.Status.CurrentProcessingUnits = int(*src.Status.CurrentProcessingUnits)
-	}
-	if src.Status.DesiredNodes != nil {
-		dst.Status.DesiredNodes = int(*src.Status.DesiredNodes)
 	}
 	if src.Status.DesiredProcessingUnits != nil {
 		dst.Status.DesiredProcessingUnits = int(*src.Status.DesiredProcessingUnits)
@@ -145,9 +139,9 @@ func (dst *SpannerAutoscaler) ConvertFrom(srcRaw conversion.Hub) error {
 	// Copy the resource status
 	dst.Status.LastScaleTime = &metav1.Time{Time: src.Status.LastScaleTime.Time}
 	dst.Status.LastSyncTime = &metav1.Time{Time: src.Status.LastSyncTime.Time}
-	dst.Status.CurrentNodes = pointer.Int32(int32(src.Status.CurrentNodes))
+	dst.Status.CurrentNodes = pointer.Int32(int32(src.Status.CurrentProcessingUnits / 1000))
 	dst.Status.CurrentProcessingUnits = pointer.Int32(int32(src.Status.CurrentProcessingUnits))
-	dst.Status.DesiredNodes = pointer.Int32(int32(src.Status.DesiredNodes))
+	dst.Status.DesiredNodes = pointer.Int32(int32(src.Status.DesiredProcessingUnits / 1000))
 	dst.Status.DesiredProcessingUnits = pointer.Int32(int32(src.Status.DesiredProcessingUnits))
 	dst.Status.CurrentHighPriorityCPUUtilization = pointer.Int32(int32(src.Status.CurrentHighPriorityCPUUtilization))
 	dst.Status.InstanceState = InstanceState(src.Status.InstanceState)

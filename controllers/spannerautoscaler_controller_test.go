@@ -104,8 +104,9 @@ var _ = Describe("SpannerAutoscaler controller", func() {
 
 			By("Verifying the status of the fetched SpannerAutoscaler resource")
 			wantStatus := spannerv1beta1.SpannerAutoscalerStatus{
-				DesiredNodes:           6,
 				DesiredProcessingUnits: 6000,
+				DesiredMinPUs:          targetResource.Spec.ScaleConfig.ProcessingUnits.Min,
+				DesiredMaxPUs:          targetResource.Spec.ScaleConfig.ProcessingUnits.Max,
 				InstanceState:          spannerv1beta1.InstanceStateReady,
 				LastScaleTime:          metav1.Time{Time: fakeTime},
 			}

@@ -18,10 +18,12 @@ package controllers
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/go-logr/logr"
+	cronpkg "github.com/robfig/cron/v3"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -37,6 +39,7 @@ import (
 
 	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
 	"github.com/mercari/spanner-autoscaler/internal/metrics"
+	schedulerpkg "github.com/mercari/spanner-autoscaler/internal/scheduler"
 	"github.com/mercari/spanner-autoscaler/internal/spanner"
 	syncerpkg "github.com/mercari/spanner-autoscaler/internal/syncer"
 )
@@ -57,7 +60,9 @@ type SpannerAutoscalerReconciler struct {
 	scheme   *runtime.Scheme
 	recorder record.EventRecorder
 
-	syncers map[types.NamespacedName]syncerpkg.Syncer
+	syncers   map[types.NamespacedName]syncerpkg.Syncer
+	crons     map[types.NamespacedName]*cronpkg.Cron
+	scheduler schedulerpkg.Scheduler
 
 	scaleDownInterval time.Duration
 
@@ -157,6 +162,8 @@ func NewSpannerAutoscalerReconciler(
 		scheme:            scheme,
 		recorder:          recorder,
 		syncers:           make(map[types.NamespacedName]syncerpkg.Syncer),
+		scheduler:         nil,
+		crons:             make(map[types.NamespacedName]*cronpkg.Cron),
 		scaleDownInterval: 55 * time.Minute,
 		clock:             utilclock.RealClock{},
 		log:               logger,
@@ -167,7 +174,6 @@ func NewSpannerAutoscalerReconciler(
 			opt.applySpannerAutoscalerReconciler(r)
 		}
 	}
-
 	return r
 }
 
@@ -179,34 +185,47 @@ func NewSpannerAutoscalerReconciler(
 
 // Reconcile implements ctrlreconcile.Reconciler.
 func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlreconcile.Request) (ctrlreconcile.Result, error) {
-	nn := req.NamespacedName
-	log := r.log.WithValues("namespaced name", nn)
+	nnsa := req.NamespacedName
+	log := r.log.WithValues("autoscaler", nnsa)
+	statusChanged := false
 
 	r.mu.RLock()
-	syncer, syncerExists := r.syncers[nn]
+	if r.scheduler == nil {
+		r.scheduler = schedulerpkg.New(log, r.ctrlClient, r.crons)
+		go r.scheduler.Start()
+	}
+
+	syncer, syncerExists := r.syncers[nnsa]
+	cron, cronExists := r.crons[nnsa]
 	r.mu.RUnlock()
 
 	var sa spannerv1beta1.SpannerAutoscaler
-	if err := r.ctrlClient.Get(ctx, nn, &sa); err != nil {
-		err = ctrlclient.IgnoreNotFound(err)
-		if err != nil {
+	if err := r.ctrlClient.Get(ctx, nnsa, &sa); err != nil {
+		if apierrors.IsNotFound(err) {
+			// Remove cron and syncer if the resource does not exist
+			if syncerExists {
+				log.V(2).Info("removing syncer for non-existent resource")
+				syncer.Stop()
+				r.mu.Lock()
+				delete(r.syncers, nnsa)
+				r.mu.Unlock()
+				log.Info("stopped syncer")
+			}
+
+			if cronExists {
+				cron.Stop()
+				r.mu.Lock()
+				delete(r.crons, nnsa)
+				r.mu.Unlock()
+				log.Info("removed cron")
+			}
+
+			return ctrlreconcile.Result{}, nil
+		} else {
 			log.Error(err, "failed to get spanner-autoscaler")
 			return ctrlreconcile.Result{}, err
 		}
-
-		log.V(2).Info("checking if a syncer exists")
-		if syncerExists {
-			syncer.Stop()
-			r.mu.Lock()
-			delete(r.syncers, nn)
-			r.mu.Unlock()
-			log.Info("stopped syncer")
-		}
-
-		return ctrlreconcile.Result{}, nil
 	}
-
-	log.V(1).Info("resource status", "spannerautoscaler", sa)
 
 	credentials, err := r.fetchCredentials(ctx, &sa)
 	if err != nil {
@@ -219,7 +238,7 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 	if !syncerExists {
 		log.V(2).Info("syncer does not exist, starting a new syncer")
 
-		if err := r.startSyncer(ctx, log, nn, sa.Spec.TargetInstance.ProjectID, sa.Spec.TargetInstance.InstanceID, credentials); err != nil {
+		if err := r.startSyncer(ctx, log, nnsa, sa.Spec.TargetInstance.ProjectID, sa.Spec.TargetInstance.InstanceID, credentials); err != nil {
 			r.recorder.Event(&sa, corev1.EventTypeWarning, "FailedStartSyncer", err.Error())
 			log.Error(err, "failed to start syncer")
 			return ctrlreconcile.Result{}, err
@@ -232,10 +251,10 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 	if !syncer.HasCredentials(credentials) {
 		syncer.Stop()
 		r.mu.Lock()
-		delete(r.syncers, nn)
+		delete(r.syncers, nnsa)
 		r.mu.Unlock()
 
-		if err := r.startSyncer(ctx, log, nn, sa.Spec.TargetInstance.ProjectID, sa.Spec.TargetInstance.InstanceID, credentials); err != nil {
+		if err := r.startSyncer(ctx, log, nnsa, sa.Spec.TargetInstance.ProjectID, sa.Spec.TargetInstance.InstanceID, credentials); err != nil {
 			r.recorder.Event(&sa, corev1.EventTypeWarning, "FailedStartSyncer", err.Error())
 			log.Error(err, "failed to start syncer")
 			return ctrlreconcile.Result{}, err
@@ -243,6 +262,33 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 
 		log.Info("replaced syncer", "namespaced name", sa)
 		return ctrlreconcile.Result{}, nil
+	}
+
+	if !cronExists && len(sa.Status.Schedules) > 0 {
+		cron = cronpkg.New(cronpkg.WithChain(
+			cronpkg.Recover(log),
+		))
+		cron.Start()
+
+		r.mu.Lock()
+		r.crons[nnsa] = cron
+		cronExists = true
+		r.mu.Unlock()
+	}
+
+	if err := r.addCronJob(ctx, log, sa, cron); err != nil {
+		return ctrlreconcile.Result{}, err
+	}
+
+	// TODO: implement cronjob schedule update whenever SpannerAutoscaleSchedule cron is changed (or block changes to Schedule after creation)
+
+	if cronExists {
+		pruneCronJobs(log, sa, cron)
+	}
+
+	if newActiveSchedules, updated := pruneActiveSchedules(log, sa); updated {
+		sa.Status.CurrentlyActiveSchedules = newActiveSchedules
+		statusChanged = true
 	}
 
 	if sa.Status.InstanceState != spanner.StateReady {
@@ -255,35 +301,40 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 		return ctrlreconcile.Result{}, nil
 	}
 
+	if minPU, maxPU, updated := calcDesiredPURange(sa); updated {
+		sa.Status.DesiredMinPUs = minPU
+		sa.Status.DesiredMaxPUs = maxPU
+		statusChanged = true
+	}
+
 	desiredProcessingUnits := calcDesiredProcessingUnits(sa)
 
-	now := r.clock.Now()
+	if now := r.clock.Now(); r.needUpdateProcessingUnits(log, &sa, desiredProcessingUnits, now) {
+		log.V(1).Info("processing units need to be changed", "desiredProcessingUnits", desiredProcessingUnits, "sa.Status", sa.Status)
 
-	if !r.needUpdateProcessingUnits(log, &sa, desiredProcessingUnits, now) {
-		return ctrlreconcile.Result{}, nil
+		if err := syncer.UpdateInstance(ctx, desiredProcessingUnits); err != nil {
+			r.recorder.Event(&sa, corev1.EventTypeWarning, "FailedUpdateInstance", err.Error())
+			log.Error(err, "failed to update spanner instance")
+			return ctrlreconcile.Result{}, err
+		}
+
+		r.recorder.Eventf(&sa, corev1.EventTypeNormal, "Updated", "Updated processing units of %s/%s from %d to %d", sa.Spec.TargetInstance.ProjectID, sa.Spec.TargetInstance.InstanceID,
+			sa.Status.CurrentProcessingUnits, desiredProcessingUnits)
+
+		log.Info("updated processing units via google cloud api", "before", sa.Status.CurrentProcessingUnits, "after", desiredProcessingUnits)
+
+		statusChanged = true
+		sa.Status.LastScaleTime = metav1.Time{Time: now}
 	}
 
-	log.V(1).Info("processing units need to be changed", "desiredProcessingUnits", desiredProcessingUnits, "sa.Status", sa.Status)
-	if err := syncer.UpdateInstance(ctx, desiredProcessingUnits); err != nil {
-		r.recorder.Event(&sa, corev1.EventTypeWarning, "FailedUpdateInstance", err.Error())
-		log.Error(err, "failed to update spanner instance status")
-		return ctrlreconcile.Result{}, err
-	}
+	if statusChanged {
+		sa.Status.DesiredProcessingUnits = desiredProcessingUnits
 
-	r.recorder.Eventf(&sa, corev1.EventTypeNormal, "Updated", "Updated processing units of %s/%s from %d to %d", sa.Spec.TargetInstance.ProjectID, sa.Spec.TargetInstance.InstanceID,
-		sa.Status.CurrentProcessingUnits, desiredProcessingUnits)
-
-	log.Info("updated processing units via google cloud api", "before", sa.Status.CurrentProcessingUnits, "after", desiredProcessingUnits)
-
-	saCopy := sa.DeepCopy()
-	saCopy.Status.DesiredProcessingUnits = desiredProcessingUnits
-	saCopy.Status.DesiredNodes = desiredProcessingUnits / 1000
-	saCopy.Status.LastScaleTime = metav1.Time{Time: now}
-
-	if err = r.ctrlClient.Status().Update(ctx, saCopy); err != nil {
-		r.recorder.Event(&sa, corev1.EventTypeWarning, "FailedUpdateStatus", err.Error())
-		log.Error(err, "failed to update spanner autoscaler status")
-		return ctrlreconcile.Result{}, err
+		if err = r.ctrlClient.Status().Update(ctx, &sa); err != nil {
+			r.recorder.Event(&sa, corev1.EventTypeWarning, "FailedUpdateStatus", err.Error())
+			log.Error(err, "failed to update spanner autoscaler status")
+			return ctrlreconcile.Result{}, err
+		}
 	}
 
 	return ctrlreconcile.Result{}, nil
@@ -299,6 +350,80 @@ func (r *SpannerAutoscalerReconciler) SetupWithManager(mgr ctrlmanager.Manager) 
 		For(&spannerv1beta1.SpannerAutoscaler{}).
 		WithOptions(opts).
 		Complete(r)
+}
+
+func (r *SpannerAutoscalerReconciler) addCronJob(ctx context.Context, log logr.Logger, sa spannerv1beta1.SpannerAutoscaler, cron *cronpkg.Cron) error {
+	for _, v := range sa.Status.Schedules {
+		var sas spannerv1beta1.SpannerAutoscaleSchedule
+		nnsa := ctrlclient.ObjectKeyFromObject(&sa)
+		nnsas := parseNamespacedName(v, sa.ObjectMeta.Namespace)
+		if err := r.ctrlClient.Get(ctx, nnsas, &sas); err != nil {
+			log.Error(err, "failed to get spanner-autoscaler-schedule")
+			return err
+		} else {
+			job := schedulerpkg.Job{
+				ScheduleName:   nnsas,
+				AutoscalerName: nnsa,
+				Log:            log.WithName("job").WithValues("schedule", nnsas, "autoscaler", nnsa),
+				CtrlClient:     r.ctrlClient,
+			}
+			if !jobExists(cron, job) {
+				if _, err := cron.AddJob(sas.Spec.Schedule.Cron, job); err != nil {
+					log.Error(err, "failed to add cron job to the cron")
+				}
+				log.Info("new cron job has been registered", "cron", sas.Spec.Schedule.Cron, "schedule", nnsas.String())
+			}
+		}
+	}
+	return nil
+}
+
+func pruneCronJobs(log logr.Logger, sa spannerv1beta1.SpannerAutoscaler, cron *cronpkg.Cron) {
+	for _, entry := range cron.Entries() {
+		job := entry.Job.(schedulerpkg.Job)
+		if _, found := findInArray(sa.Status.Schedules, job.ScheduleName.String()); !found {
+			cron.Remove(entry.ID)
+			log.V(1).Info("removed cron job", "job", job, "cronjob-count", len(cron.Entries()))
+		}
+	}
+}
+
+func pruneActiveSchedules(log logr.Logger, sa spannerv1beta1.SpannerAutoscaler) ([]spannerv1beta1.ActiveSchedule, bool) {
+	result := []spannerv1beta1.ActiveSchedule{}
+	changed := false
+	for _, as := range sa.Status.CurrentlyActiveSchedules {
+		if _, found := findInArray(sa.Status.Schedules, as.ScheduleName); !found {
+			log.V(1).Info("removed currently active schedule", "ActiveSchedule", as)
+			changed = true
+			continue
+		}
+		result = append(result, as)
+	}
+	return result, changed
+}
+
+func jobExists(cron *cronpkg.Cron, job schedulerpkg.Job) bool {
+	for _, e := range cron.Entries() {
+		entryJob := e.Job.(schedulerpkg.Job)
+		if entryJob.ScheduleName == job.ScheduleName {
+			return true
+		}
+	}
+	return false
+}
+
+// TODO: move this (and other similar functions) to 'internal/util' package
+func parseNamespacedName(name string, defaultNamespace string) types.NamespacedName {
+	result := types.NamespacedName{}
+	arr := strings.SplitN(name, "/", 2)
+	if len(arr) == 2 {
+		result.Name = arr[1]
+		result.Namespace = arr[0]
+	} else {
+		result.Name = arr[0]
+		result.Namespace = defaultNamespace
+	}
+	return result
 }
 
 func (r *SpannerAutoscalerReconciler) startSyncer(ctx context.Context, log logr.Logger, nn types.NamespacedName, projectID, instanceID string, credentials *syncerpkg.Credentials) error {
@@ -358,7 +483,6 @@ func (r *SpannerAutoscalerReconciler) needUpdateProcessingUnits(log logr.Logger,
 			"now", now.String(),
 			"last scale time", sa.Status.LastScaleTime,
 		)
-
 		return false
 
 	case desiredProcessingUnits < currentProcessingUnits && r.clock.Now().Before(sa.Status.LastScaleTime.Time.Add(r.scaleDownInterval)):
@@ -367,7 +491,6 @@ func (r *SpannerAutoscalerReconciler) needUpdateProcessingUnits(log logr.Logger,
 			"now", now.String(),
 			"last scale time", sa.Status.LastScaleTime,
 		)
-
 		return false
 
 	default:
@@ -402,15 +525,47 @@ func calcDesiredProcessingUnits(sa spannerv1beta1.SpannerAutoscaler) int {
 	}
 
 	// keep the scaling between the specified min/max range
-	if desiredPU < sa.Spec.ScaleConfig.ProcessingUnits.Min {
-		desiredPU = sa.Spec.ScaleConfig.ProcessingUnits.Min
+	minPU := sa.Spec.ScaleConfig.ProcessingUnits.Min
+	maxPU := sa.Spec.ScaleConfig.ProcessingUnits.Max
+
+	if sa.Status.DesiredMinPUs > 0 {
+		minPU = sa.Status.DesiredMinPUs
+	}
+	if sa.Status.DesiredMaxPUs > 0 {
+		maxPU = sa.Status.DesiredMaxPUs
 	}
 
-	if desiredPU > sa.Spec.ScaleConfig.ProcessingUnits.Max {
-		desiredPU = sa.Spec.ScaleConfig.ProcessingUnits.Max
+	if desiredPU < minPU {
+		desiredPU = minPU
+	}
+
+	if desiredPU > maxPU {
+		desiredPU = maxPU
 	}
 
 	return desiredPU
+}
+
+func calcDesiredPURange(sa spannerv1beta1.SpannerAutoscaler) (int, int, bool) {
+	changed := false
+	var desiredMin, desiredMax int
+	for i, sched := range sa.Status.CurrentlyActiveSchedules {
+		if i == 0 {
+			desiredMin = sched.AdditionalPU
+		} else if sched.AdditionalPU < desiredMin {
+			desiredMin = sched.AdditionalPU
+		}
+		desiredMax += sched.AdditionalPU
+	}
+
+	desiredMin += sa.Spec.ScaleConfig.ProcessingUnits.Min
+	desiredMax += sa.Spec.ScaleConfig.ProcessingUnits.Max
+
+	if desiredMin != sa.Status.DesiredMinPUs || desiredMax != sa.Status.DesiredMaxPUs {
+		changed = true
+	}
+
+	return desiredMin, desiredMax, changed
 }
 
 func (r *SpannerAutoscalerReconciler) fetchCredentials(ctx context.Context, sa *spannerv1beta1.SpannerAutoscaler) (*syncerpkg.Credentials, error) {

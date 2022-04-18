@@ -17,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	utilclock "k8s.io/apimachinery/pkg/util/clock"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/retry"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
@@ -273,14 +274,20 @@ func (s *syncer) syncResource(ctx context.Context) error {
 		"high priority cpu utilization", instanceMetrics.CurrentHighPriorityCPUUtilization,
 	)
 
-	saCopy := sa.DeepCopy()
-	saCopy.Status.CurrentProcessingUnits = instance.ProcessingUnits
-	saCopy.Status.CurrentNodes = instance.ProcessingUnits / 1000
-	saCopy.Status.InstanceState = instance.InstanceState
-	saCopy.Status.CurrentHighPriorityCPUUtilization = instanceMetrics.CurrentHighPriorityCPUUtilization
-	saCopy.Status.LastSyncTime = metav1.Time{Time: s.clock.Now()}
+	err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		if err := s.ctrlClient.Get(ctx, s.namespacedName, &sa); err != nil {
+			return err
+		}
+		sa.Status.CurrentProcessingUnits = instance.ProcessingUnits
+		sa.Status.InstanceState = instance.InstanceState
+		sa.Status.CurrentHighPriorityCPUUtilization = instanceMetrics.CurrentHighPriorityCPUUtilization
+		sa.Status.LastSyncTime = metav1.Time{Time: s.clock.Now()}
 
-	if err := s.ctrlClient.Status().Update(ctx, saCopy); err != nil {
+		return s.ctrlClient.Status().Update(ctx, &sa)
+	})
+	if err != nil {
+		// May be conflict if max retries were hit, or may be something unrelated
+		// like permissions or a network error
 		s.recorder.Event(&sa, corev1.EventTypeWarning, "FailedSyncStatus", err.Error())
 		log.Error(err, "unable to sync spanner status")
 		return err
