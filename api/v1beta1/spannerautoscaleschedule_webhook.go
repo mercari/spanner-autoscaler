@@ -105,8 +105,8 @@ func (r *SpannerAutoscaleSchedule) ValidateDelete() error {
 
 func (r *SpannerAutoscaleSchedule) validateSchedule() field.ErrorList {
 	var allErrs field.ErrorList
-	cronSchedule, err := cronpkg.ParseStandard(r.Spec.Schedule.Cron)
-	if err != nil {
+
+	if _, err := cronpkg.ParseStandard(r.Spec.Schedule.Cron); err != nil {
 		fldErr := field.Invalid(
 			field.NewPath("spec").Child("schedule").Child("cron"),
 			r.Spec.Schedule.Cron,
@@ -114,29 +114,11 @@ func (r *SpannerAutoscaleSchedule) validateSchedule() field.ErrorList {
 		allErrs = append(allErrs, fldErr)
 	}
 
-	duration, err := time.ParseDuration(r.Spec.Schedule.Duration)
-	if err != nil {
+	if _, err := time.ParseDuration(r.Spec.Schedule.Duration); err != nil {
 		fldErr := field.Invalid(
 			field.NewPath("spec").Child("schedule").Child("duration"),
 			r.Spec.Schedule.Duration,
 			err.Error())
-		allErrs = append(allErrs, fldErr)
-	}
-
-	// return early if either the cron schedule or the duration can not be parsed
-	if len(allErrs) != 0 {
-		return allErrs
-	}
-
-	now := time.Now()
-	firstRun := cronSchedule.Next(now)
-	secondRun := cronSchedule.Next(firstRun)
-
-	if secondRun.Before(firstRun.Add(duration)) {
-		fldErr := field.Invalid(
-			field.NewPath("spec").Child("schedule").Child("duration"),
-			r.Spec.Schedule.Duration,
-			"'duration' is larger than the time period between cron jobs of 'schedule'")
 		allErrs = append(allErrs, fldErr)
 	}
 
