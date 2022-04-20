@@ -107,6 +107,9 @@ var _ = BeforeSuite(func() {
 	err = (&SpannerAutoscaler{}).SetupWebhookWithManager(mgr)
 	Expect(err).NotTo(HaveOccurred())
 
+	err = (&SpannerAutoscaleSchedule{}).SetupWebhookWithManager(mgr)
+	Expect(err).NotTo(HaveOccurred())
+
 	//+kubebuilder:scaffold:webhook
 
 	go func() {

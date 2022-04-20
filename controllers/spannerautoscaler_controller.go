@@ -60,9 +60,9 @@ type SpannerAutoscalerReconciler struct {
 	scheme   *runtime.Scheme
 	recorder record.EventRecorder
 
-	syncers   map[types.NamespacedName]syncerpkg.Syncer
-	crons     map[types.NamespacedName]*cronpkg.Cron
-	scheduler schedulerpkg.Scheduler
+	syncers    map[types.NamespacedName]syncerpkg.Syncer
+	crons      map[types.NamespacedName]*cronpkg.Cron
+	schedulers map[types.NamespacedName]schedulerpkg.Scheduler
 
 	scaleDownInterval time.Duration
 
@@ -162,7 +162,7 @@ func NewSpannerAutoscalerReconciler(
 		scheme:            scheme,
 		recorder:          recorder,
 		syncers:           make(map[types.NamespacedName]syncerpkg.Syncer),
-		scheduler:         nil,
+		schedulers:        make(map[types.NamespacedName]schedulerpkg.Scheduler),
 		crons:             make(map[types.NamespacedName]*cronpkg.Cron),
 		scaleDownInterval: 55 * time.Minute,
 		clock:             utilclock.RealClock{},
@@ -190,13 +190,9 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 	statusChanged := false
 
 	r.mu.RLock()
-	if r.scheduler == nil {
-		r.scheduler = schedulerpkg.New(log, r.ctrlClient, r.crons)
-		go r.scheduler.Start()
-	}
-
 	syncer, syncerExists := r.syncers[nnsa]
 	cron, cronExists := r.crons[nnsa]
+	scheduler, schedulerExists := r.schedulers[nnsa]
 	r.mu.RUnlock()
 
 	var sa spannerv1beta1.SpannerAutoscaler
@@ -218,6 +214,14 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 				delete(r.crons, nnsa)
 				r.mu.Unlock()
 				log.Info("removed cron")
+			}
+
+			if schedulerExists {
+				scheduler.Stop()
+				r.mu.Lock()
+				delete(r.schedulers, nnsa)
+				r.mu.Unlock()
+				log.Info("removed scheduler")
 			}
 
 			return ctrlreconcile.Result{}, nil
@@ -270,9 +274,13 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 		))
 		cron.Start()
 
+		scheduler = schedulerpkg.New(log, r.ctrlClient, r.crons, nnsa)
+		go scheduler.Start()
+
 		r.mu.Lock()
 		r.crons[nnsa] = cron
 		cronExists = true
+		r.schedulers[nnsa] = scheduler
 		r.mu.Unlock()
 	}
 
@@ -560,6 +568,15 @@ func calcDesiredPURange(sa spannerv1beta1.SpannerAutoscaler) (int, int, bool) {
 
 	desiredMin += sa.Spec.ScaleConfig.ProcessingUnits.Min
 	desiredMax += sa.Spec.ScaleConfig.ProcessingUnits.Max
+
+	// round up, in case any schedule adds small number of PUs
+	if remainder := desiredMin % 1000; desiredMin > 1000 && remainder != 0 {
+		desiredMin = ((desiredMin / 1000) + 1) * 1000
+	}
+
+	if remainder := desiredMax % 1000; desiredMax > 1000 && remainder != 0 {
+		desiredMax = ((desiredMax / 1000) + 1) * 1000
+	}
 
 	if desiredMin != sa.Status.DesiredMinPUs || desiredMax != sa.Status.DesiredMaxPUs {
 		changed = true

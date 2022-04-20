@@ -25,7 +25,8 @@ type scheduler struct {
 
 	ctrlClient ctrlclient.Client
 
-	crons map[types.NamespacedName]*cronpkg.Cron
+	crons          map[types.NamespacedName]*cronpkg.Cron
+	namespacedName types.NamespacedName
 }
 
 // Job implements cronpkg.Job
@@ -36,13 +37,14 @@ type Job struct {
 	CtrlClient     ctrlclient.Client
 }
 
-func New(log logr.Logger, ctrlClient ctrlclient.Client, crons map[types.NamespacedName]*cronpkg.Cron) scheduler {
+func New(log logr.Logger, ctrlClient ctrlclient.Client, crons map[types.NamespacedName]*cronpkg.Cron, autoscalerName types.NamespacedName) scheduler {
 	return scheduler{
-		log:        log.WithName("scheduler"),
-		interval:   10 * time.Second,
-		stopCh:     make(chan struct{}),
-		ctrlClient: ctrlClient,
-		crons:      crons,
+		log:            log.WithName("scheduler").WithValues("autoscaler", autoscalerName.String()),
+		interval:       10 * time.Second,
+		stopCh:         make(chan struct{}),
+		ctrlClient:     ctrlClient,
+		crons:          crons,
+		namespacedName: autoscalerName,
 	}
 }
 
@@ -60,7 +62,10 @@ func (s scheduler) Start() {
 		select {
 		case <-ticker.C:
 			log.V(1).Info("scheduler tick received")
-			s.UpdateAll()
+			ctx := context.Background()
+			if err := s.Update(ctx); err != nil {
+				log.Error(err, "unable to update status of resource")
+			}
 		case <-s.stopCh:
 			log.V(1).Info("received stop signal")
 			return
@@ -73,42 +78,21 @@ func (s scheduler) Stop() {
 	close(s.stopCh)
 }
 
-// TODO: refactor this package to run one scheduler per SpannerAutoscaler resource, instead of the current approach of one shceduler for updating all SpannerAutoscaler resources.
-
-func (s scheduler) UpdateAll() {
-	allSchedules := &spannerv1beta1.SpannerAutoscaleScheduleList{}
-	allAutoscalers := &spannerv1beta1.SpannerAutoscalerList{}
-
-	ctx := context.Background()
-
-	if err := s.ctrlClient.List(ctx, allSchedules); err != nil {
-		s.log.Error(err, "could not fetch list of spanner-schedule resources")
-	}
-
-	if err := s.ctrlClient.List(ctx, allAutoscalers); err != nil {
-		s.log.Error(err, "could not fetch list of spanner-autoscaler resources")
-	}
-
-	for i := range allAutoscalers.Items {
-		s.Update(ctx, &allAutoscalers.Items[i])
-	}
-}
-
-func (s scheduler) Update(ctx context.Context, autoscaler *spannerv1beta1.SpannerAutoscaler) {
-	log := s.log.WithValues("autoscaler", ctrlclient.ObjectKeyFromObject(autoscaler))
-
-	log.V(1).Info("confirming autoscaler schedules", "autoscaler schedules", autoscaler.Status.Schedules, "autoscaler active schedules", autoscaler.Status.CurrentlyActiveSchedules)
+func (s scheduler) Update(ctx context.Context) error {
+	log := s.log.WithValues("autoscaler", s.namespacedName.String())
 	statusChanged := false
+	var autoscaler spannerv1beta1.SpannerAutoscaler
 
 	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-		if err := s.ctrlClient.Get(ctx, ctrlclient.ObjectKeyFromObject(autoscaler), autoscaler); err != nil {
+		if err := s.ctrlClient.Get(ctx, s.namespacedName, &autoscaler); err != nil {
 			return err
 		}
+		log.V(1).Info("cleanup expired schedules", "autoscaler schedules", autoscaler.Status.Schedules, "autoscaler active schedules", autoscaler.Status.CurrentlyActiveSchedules)
 
 		autoscaler.Status.CurrentlyActiveSchedules, statusChanged = cleanupActiveSchedules(autoscaler.Status.CurrentlyActiveSchedules)
 
 		if statusChanged {
-			return s.ctrlClient.Status().Update(ctx, autoscaler)
+			return s.ctrlClient.Status().Update(ctx, &autoscaler)
 		}
 		return nil
 	})
@@ -116,7 +100,9 @@ func (s scheduler) Update(ctx context.Context, autoscaler *spannerv1beta1.Spanne
 		// May be conflict if max retries were hit, or may be something unrelated
 		// like permissions or a network error
 		log.Error(err, "failed to update spanner-autoscaler status")
+		return err
 	}
+	return nil
 }
 
 func cleanupActiveSchedules(activeSchedules []spannerv1beta1.ActiveSchedule) ([]spannerv1beta1.ActiveSchedule, bool) {
@@ -134,7 +120,7 @@ func cleanupActiveSchedules(activeSchedules []spannerv1beta1.ActiveSchedule) ([]
 }
 
 func (j Job) Run() {
-	j.Log.V(1).Info("Cron Job is now run", "now", metav1.Now())
+	j.Log.V(1).Info("cron job is now starting", "now", metav1.Now())
 	var (
 		sa  spannerv1beta1.SpannerAutoscaler
 		sas spannerv1beta1.SpannerAutoscaleSchedule
@@ -178,5 +164,5 @@ func (j Job) Run() {
 		// like permissions or a network error
 		j.Log.Error(err, "failed to update spanner-autoscaler status for CurrentlyActiveSchedules")
 	}
-	j.Log.V(1).Info("Cron Job run is now over")
+	j.Log.V(1).Info("cron job is now over")
 }
