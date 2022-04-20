@@ -569,6 +569,15 @@ func calcDesiredPURange(sa spannerv1beta1.SpannerAutoscaler) (int, int, bool) {
 	desiredMin += sa.Spec.ScaleConfig.ProcessingUnits.Min
 	desiredMax += sa.Spec.ScaleConfig.ProcessingUnits.Max
 
+	// round up, in case any schedule adds small number of PUs
+	if remainder := desiredMin % 1000; desiredMin > 1000 && remainder != 0 {
+		desiredMin = ((desiredMin / 1000) + 1) * 1000
+	}
+
+	if remainder := desiredMax % 1000; desiredMax > 1000 && remainder != 0 {
+		desiredMax = ((desiredMax / 1000) + 1) * 1000
+	}
+
 	if desiredMin != sa.Status.DesiredMinPUs || desiredMax != sa.Status.DesiredMaxPUs {
 		changed = true
 	}
