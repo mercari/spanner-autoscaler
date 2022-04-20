@@ -38,6 +38,9 @@ help: ## Display this help.
 clean: ## Remove any locally built or downloaded files
 	rm -rf $(shell pwd)/bin
 
+docs: crd-ref-docs ## Generate CRD reference docs
+	$(CRD_REF_DOCS) --config docs/config/config.yaml --renderer markdown --output-path docs/crd-reference.md --source-path api/v1beta1
+
 ##@ Development
 
 manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
@@ -111,7 +114,7 @@ undeploy: ## Undeploy controller from the K8s cluster specified in ~/.kube/confi
 
 ##@ Dependencies
 
-deps: controller-gen kustomize kind kpt golangci-lint ## Download the following dependencies locally (in './bin') if necessary
+deps: controller-gen kustomize kind kpt golangci-lint crd-ref-docs ## Download the following dependencies locally (in './bin') if necessary
 
 CONTROLLER_GEN = $(shell pwd)/bin/controller-gen
 controller-gen: ## Download controller-gen locally if necessary.
@@ -137,6 +140,10 @@ kpt: ## Downlaod 'kpt' locally if necessary
 GOLANGCI_LINT = $(shell pwd)/bin/golangci-lint
 golangci-lint: ## Downlaod 'golangci-lint' locally if necessary
 	$(call go-get-tool,$(GOLANGCI_LINT),github.com/golangci/golangci-lint/cmd/golangci-lint@v1.44.0)
+
+CRD_REF_DOCS = $(shell pwd)/bin/crd-ref-docs
+crd-ref-docs: ## Downlaod 'crd-ref-docs' locally if necessary
+	$(call go-get-tool,$(CRD_REF_DOCS),github.com/elastic/crd-ref-docs@v0.0.8)
 
 # go-get-tool will 'go get' any package $2 and install it to $1.
 PROJECT_DIR := $(shell dirname $(abspath $(lastword $(MAKEFILE_LIST))))

@@ -85,10 +85,10 @@ type ScaleConfig struct {
 	// This is only used at the time of CustomResource creation. If compute capacity is provided in `nodes`, then it is automatically converted to `processing-units` at the time of resource creation, and internally, only `ProcessingUnits` are used for computations and scaling.
 	ComputeType ComputeType `json:"computeType,omitempty"`
 
-	// If `nodes` are provided at the time of resource creation, then they are automatically converted to `processing-units`. So it is recommended to use only the processing units.
+	// If `nodes` are provided at the time of resource creation, then they are automatically converted to `processing-units`. So it is recommended to use only the processing units. Ref: [Spanner Compute Capacity](https://cloud.google.com/spanner/docs/compute-capacity#compute_capacity)
 	Nodes ScaleConfigNodes `json:"nodes,omitempty"`
 
-	// ProcessingUnits for scaling of the Spanner instance: https://cloud.google.com/spanner/docs/compute-capacity#compute_capacity
+	// ProcessingUnits for scaling of the Spanner instance. Ref: [Spanner Compute Capacity](https://cloud.google.com/spanner/docs/compute-capacity#compute_capacity)
 	ProcessingUnits ScaleConfigPUs `json:"processingUnits,omitempty"`
 
 	// The maximum number of processing units which can be deleted in one scale-down operation
@@ -96,24 +96,32 @@ type ScaleConfig struct {
 	// +kubebuilder:validation:MultipleOf=1000
 	ScaledownStepSize int `json:"scaledownStepSize,omitempty"`
 
-	// The CPU utilization which the autoscaling will try to achieve
+	// The CPU utilization which the autoscaling will try to achieve. Ref: [Spanner CPU utilization](https://cloud.google.com/spanner/docs/cpu-utilization#task-priority)
 	TargetCPUUtilization TargetCPUUtilization `json:"targetCPUUtilization"`
 }
 
+// Compute capacity in terms of Nodes
 type ScaleConfigNodes struct {
+	// Minimum number of Nodes for the autoscaling range
 	Min int `json:"min,omitempty"`
+
+	// Maximum number of Nodes for the autoscaling range
 	Max int `json:"max,omitempty"`
 }
 
+// Compute capacity in terms of Processing Units
 type ScaleConfigPUs struct {
+	// Minimum number of Processing Units for the autoscaling range
 	// +kubebuilder:validation:MultipleOf=100
 	Min int `json:"min"`
 
+	// Maximum number of Processing Units for the autoscaling range
 	// +kubebuilder:validation:MultipleOf=100
 	Max int `json:"max"`
 }
 
 type TargetCPUUtilization struct {
+	// Desired CPU utilization for 'High Priority' CPU consumption category. Ref: [Spanner CPU utilization](https://cloud.google.com/spanner/docs/cpu-utilization#task-priority)
 	// +kubebuilder:validation:Minimum=0
 	// +kubebuilder:validation:Maximum=100
 	// +kubebuilder:validation:ExclusiveMinimum=true
@@ -123,9 +131,14 @@ type TargetCPUUtilization struct {
 
 // SpannerAutoscalerSpec defines the desired state of SpannerAutoscaler
 type SpannerAutoscalerSpec struct {
+	// The Spanner instance which will be managed for autoscaling
 	TargetInstance TargetInstance `json:"targetInstance"`
-	Authentication Authentication `json:"authentication"`
-	ScaleConfig    ScaleConfig    `json:"scaleConfig"`
+
+	// Authentication details for the Spanner instance
+	Authentication Authentication `json:"authentication,omitempty"`
+
+	// Details of the autoscaling parameters for the Spanner instance
+	ScaleConfig ScaleConfig `json:"scaleConfig"`
 }
 
 type InstanceState string
@@ -143,22 +156,31 @@ const (
 	InstanceStateReady InstanceState = "ready"
 )
 
+// A `SpannerAutoscaleSchedule` which is currently active and will be used for calculating the autoscaling range.
 type ActiveSchedule struct {
-	ScheduleName string      `json:"name"`
-	EndTime      metav1.Time `json:"endTime"`
-	AdditionalPU int         `json:"additionalPU"`
+	// Name of the `SpannerAutoscaleSchedule`
+	ScheduleName string `json:"name"`
+
+	// The time until when this schedule will remain active
+	EndTime metav1.Time `json:"endTime"`
+
+	// The extra compute capacity which will be added because of this schedule
+	AdditionalPU int `json:"additionalPU"`
 }
 
 // SpannerAutoscalerStatus defines the observed state of SpannerAutoscaler
 type SpannerAutoscalerStatus struct {
-	Schedules                []string         `json:"schedules,omitempty"`
+	// List of schedules which are registered with this spanner-autoscaler instance
+	Schedules []string `json:"schedules,omitempty"`
+
+	// List of all the schedules which are currently active and will be used in calculating compute capacity
 	CurrentlyActiveSchedules []ActiveSchedule `json:"currentlyActiveSchedules,omitempty"`
 
-	// Last time the SpannerAutoscaler scaled the number of Spanner nodes
+	// Last time the `SpannerAutoscaler` scaled the number of Spanner nodes.
 	// Used by the autoscaler to control how often the number of nodes are changed
 	LastScaleTime metav1.Time `json:"lastScaleTime,omitempty"`
 
-	// Last time the SpannerAutoscaler fetched and synced this status
+	// Last time the `SpannerAutoscaler` fetched and synced the metrics from Spanner
 	LastSyncTime metav1.Time `json:"lastSyncTime,omitempty"`
 
 	// Current number of processing-units in the Spanner instance
@@ -173,6 +195,7 @@ type SpannerAutoscalerStatus struct {
 	// Maximum number of processing units based on the currently active schedules
 	DesiredMaxPUs int `json:"desiredMaxPUs,omitempty"`
 
+	// State of the Cloud Spanner instance
 	InstanceState InstanceState `json:"instanceState,omitempty"`
 
 	// Current average CPU utilization for high priority task, represented as a percentage

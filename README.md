@@ -9,21 +9,37 @@ Spanner Autoscaler is a [Kubernetes Operator](https://coreos.com/operators/) to 
 ## Overview
 
 [Cloud Spanner](https://cloud.google.com/spanner) is scalable.
-When CPU utilization gets high, we can [reduce CPU utilization by increasing compute capacity](https://cloud.google.com/spanner/docs/cpu-utilization?hl=en#add-compute-capacity).
+When CPU utilization becomes high, we can [reduce it by increasing compute capacity](https://cloud.google.com/spanner/docs/cpu-utilization?hl=en#add-compute-capacity).
 
-Spanner Autoscaler is created to reconcile Cloud Spanner compute capacity like [Horizontal Pod Autoscaler](https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/) by configuring `minNodes`, `maxNodes`, and `targetCPUUtilization`.
+Spanner Autoscaler is created to reconcile Cloud Spanner compute capacity like [Horizontal Pod Autoscaler](https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/) by configuring a compute capacity range and `targetCPUUtilization`.
 
 <img src="./docs/assets/overview.jpg" width="450" height="300">
 
-When CPU Utilization(High Priority) is above `targetCPUUtilization`, Spanner Autoscaler calculates desired compute capacity and increases compute capacity.
+When CPU Utilization(High Priority) is above (or below) `targetCPUUtilization`, Spanner Autoscaler tries to bring it back to the threshold by calculating desired compute capacity and then increasing (or decreasing) compute capacity.
 
 <img src="./docs/assets/cpu_utilization.png" width="400" height="200"> <img src="./docs/assets/node_scaleup.png" width="400" height="200">
 
 The [pricing of Cloud Spanner](https://cloud.google.com/spanner/pricing) states that any compute capacity which is provisioned will be billed for a minimum of one hour, so Spanner Autoscaler maintains the increased compute capacity for about an hour. Spanner Autoscaler has `--scale-down-interval` flag (default: 55min) for achieving this.
 
-While scaling down, if Spanner Autoscaler reduces a lot of compute capacity at once like 10000 PU -> 1000 PU, it will cause a latency increase. Spanner Autoscaler decreases the compute capacity in steps to avoid such large disruptions. This step size can be provided with the `maxScaleDownNodes` parameter (default: 2).
+While scaling down, removing large amounts of compute capacity at once (like 10000 PU -> 1000 PU) can cause a latency increase. Therefore, Spanner Autoscaler decreases the compute capacity in steps to avoid such large disruptions. This step size can be provided with the `scaledownStepSize` parameter (default: 2000 PU).
 <img src="./docs/assets/node_scaledown.png" width="400" height="200">
 
+### Scheduled scaling feature
+
+If there are some batch jobs or any other compute intensive tasks which are run periodically on the Cloud Spanner, it is now possible to bump up the scaling range only for a specified duration. For example, the following `SpannerAutoscaleSchedule` will add an extra compute capacity of 600 Processing Units to the spanner instance every day at 2 o'clock, just for 3 hours:
+```yaml
+apiVersion: spanner.mercari.com/v1beta1
+kind: SpannerAutoscaleSchedule
+metadata:
+  name: spannerautoscaleschedule-sample
+  namespace: your-namespace
+spec:
+  targetResource: spannerautoscaler-sample
+  additionalProcessingUnits: 600
+  schedule:
+    cron: "0 2 * * *"
+    duration: 3h
+```
 
 ## Installation
 
@@ -54,33 +70,14 @@ Spanner Autoscaler can be installed using [KPT](https://kpt.dev/installation/) b
    ```console
    $ kubectl apply -f spanner-autoscaler/samples
    ```
-   Examples of CRDs can be found [below](#examples).\
+   Examples of CustomResources can be found [below](#examples).\
    For authentication using a GCP service account JSON key, follow [these steps](#gcp-setup) to create a k8s secret with credentials.
 
 
-## `SpannerAutoscaler` CRD reference
+## CRD reference
 
-Following is a reference of the parameters which can be provided in the `spec` section of the `SpannerAutoscaler` CRD:
-
-Parameter | Type | Required | Description
---- | --- | --- | ---
-`scaleTargetRef` | object | yes | Spanner Instance which will be auto scaled
-`scaleTargetRef.projectId` | string | yes | GCP Project ID
-`scaleTargetRef.instanceId` | string | yes | Cloud Spanner Instance ID
-`serviceAccountSecretRef` | object | no | Secret created [here](#authenticate-with-service-account-json-key)
-`serviceAccountSecretRef.name` | string | yes | Name of the k8s secret
-`serviceAccountSecretRef.namespace` | string | yes | Namespace of the k8s secret
-`serviceAccountSecretRef.key` | string | yes | Name of the key in the secret which holds the authentication information
-`impersonateConfig` | object | no | Impersonation config
-`impersonateConfog.targetServiceAccount` | string | yes | Email address of the service account to impersonate ([`GSA_SPANNER`](#using-service-accounts-with-workload-identity-and-impersonation))
-`impersonateConfog.delegates` | list of string | yes | List of target service account emails in a delegation chain ([Ref](https://pkg.go.dev/google.golang.org/api/impersonate#CredentialsConfig))
-`minProcessingUnits` | integer | no | Minimum [processing units](https://cloud.google.com/spanner/docs/compute-capacity#compute_capacity)
-`maxProcessingUnits` | integer | no | Maximum [processing units](https://cloud.google.com/spanner/docs/compute-capacity#compute_capacity)
-`minNodes` | integer | no | Equals [`minProcessingUnits / 1000`](https://cloud.google.com/spanner/docs/compute-capacity#compute_capacity)
-`maxNodes` | integer | no | Equals [`maxProcessingUnits / 1000`](https://cloud.google.com/spanner/docs/compute-capacity#compute_capacity)
-`maxScaleDownNodes` | integer | no | Maximum number of nodes to remove in one scale-down cycle
-`targetCPUUtilization` | object | yes | Spanner [CPU utilization metrics](https://cloud.google.com/spanner/docs/cpu-utilization)
-`targetCPUUtilization.highPriority` | integer | yes | High Priority CPU Utilization value
+- [`SpannerAutoscaler` CRD reference](docs/crd-reference.md#spannerautoscaler)
+- [`SpannerAutoscaleSchedule` CRD reference](docs/crd-reference.md#spannerautoscaleschedule)
 
 
 ## Examples
@@ -88,64 +85,72 @@ Parameter | Type | Required | Description
 #### Single Service Account using Workload Identity:
 
 ```yaml
-apiVersion: spanner.mercari.com/v1alpha1
+apiVersion: spanner.mercari.com/v1beta1
 kind: SpannerAutoscaler
 metadata:
   name: spannerautoscaler-sample
   namespace: your-namespace
 spec:
-  scaleTargetRef:
+  targetInstance:
     projectId: your-gcp-project-id
     instanceId: your-spanner-instance-id
-  minNodes: 1
-  maxNodes: 4
-  maxScaleDownNodes: 1
-  targetCPUUtilization:
-    highPriority: 60
+  scaleConfig:
+    processingUnits:
+      min: 1000
+      max: 4000
+    scaledownStepSize: 1000
+    targetCPUUtilization:
+      highPriority: 60
 ```
 
 #### Using Service Account JSON key for each `SpannerAutoscaler`:
 
 ```diff
-  apiVersion: spanner.mercari.com/v1alpha1
+  apiVersion: spanner.mercari.com/v1beta1
   kind: SpannerAutoscaler
   metadata:
     name: spannerautoscaler-sample
     namespace: your-namespace
   spec:
-    scaleTargetRef:
+    targetInstance:
       projectId: your-gcp-project-id
       instanceId: your-spanner-instance-id
-+   serviceAccountSecretRef:
-+     namespace: your-namespace
-+     name: spanner-autoscaler-gcp-sa
-+     key: service-account
-    minNodes: 1
-    maxNodes: 4
-    maxScaleDownNodes: 1
-    targetCPUUtilization:
-      highPriority: 60
++   authentication:
++     iamKeySecret:
++       namespace: your-namespace
++       name: spanner-autoscaler-gcp-sa
++       key: service-account
+    scaleConfig:
+      processingUnits:
+        min: 1000
+        max: 4000
+      scaledownStepSize: 1000
+      targetCPUUtilization:
+        highPriority: 60
 ```
 
 #### Using Service Accounts with Workload Identity and impersonation:
 
 ```diff
-  apiVersion: spanner.mercari.com/v1alpha1
+  apiVersion: spanner.mercari.com/v1beta1
   kind: SpannerAutoscaler
   metadata:
     name: spannerautoscaler-sample
     namespace: your-namespace
   spec:
-    scaleTargetRef:
+    targetInstance:
       projectId: your-gcp-project-id
       instanceId: your-spanner-instance-id
-+   impersonateConfig:
-+     targetServiceAccount: GSA_SPANNER@TENANT_PROJECT.iam.gserviceaccount.com
-    minNodes: 1
-    maxNodes: 4
-    maxScaleDownNodes: 1
-    targetCPUUtilization:
-      highPriority: 60
++   authentication:
++     impersonateConfig:
++       targetServiceAccount: GSA_SPANNER@TENANT_PROJECT.iam.gserviceaccount.com
+    scaleConfig:
+      processingUnits:
+        min: 1000
+        max: 4000
+      scaledownStepSize: 1000
+      targetCPUUtilization:
+        highPriority: 60
 ```
 
 
@@ -250,34 +255,15 @@ Following are some other advanced methods which can also be used for GCP authent
 </details>
 
 
-## Development
+## Development and Contribution
 
-Run `make help` for a list of useful targets. The installation basically has 3 steps:
+See [docs/development.md](docs/development.md) and [CONTRIBUTING.md](.github/CONTRIBUTING.md) respectively.
 
-```
-## 1. Installation of CRD
-$ make install
+### :information_source: Migration from `0.3.0` to `0.4.0`:
 
-## 2. Deployment of the operator
-$ make deploy
+The older version `0.3.0` (with `apiVersion: spanner.mercari.com/v1alpha1`) is now deprecated in favor of `0.4.0` (with `apiVersion: spanner.mercari.com/v1beta1`).
 
-## 3. Creation of a CRD
-$ kubectl apply -f config/samples
-```
-
-Test the operator with `make test`
-
-> :warning: **Migration from `v0.1.5`:** Names of some resources (`Deployment`, `serviceAccount`,`Role` etc) have changed since version `0.1.5`. Thus, you must first uninstall the old version before installing the new version. To uninstall the old version:
-> ```console
-> $ git checkout v0.1.5
-> $ kustomize build config/default | kubectl delete -f -
-> ```
-> Specifically, the kubernetes service account used for running the spanner-autoscaler has changed from `default` to `spanner-autoscaler-controller-manager`. Please keep this in mind. It is recommended to follow the below configuration steps and re-create any resources if needed.
-
-
-## Contribution
-
-See [CONTRIBUTING.md](.github/CONTRIBUTING.md).
+Version `0.4.0` is backward compatible with `0.3.0`, but there is a restructuring of the `SpannerAutoscaler` resource definition and names of many fields have changed. Thus it is recommended to go through the [`SpannerAutoscaler` CRD reference](docs/crd-reference.md#spannerautoscaler) and replace `v1alpha1` resources with `v1beta1` spec definition.
 
 ## License
 
@@ -289,6 +275,8 @@ Spanner Autoscaler is released under the [Apache License 2.0](./LICENSE).
 1. Spanner Autoscaler watches `High Priority` CPU utilization only. It doesn't watch `Low Priority` CPU utilization and Rolling average 24 hour utilization.
 1. It doesn't check [the storage size and the number of databases](https://cloud.google.com/spanner/quotas?hl=en#database_limits) as well. You must take care of these metrics by yourself.
 
+
+:information_source: More information and background of spanner-autoscaler is available on [this blog](https://engineering.mercari.com/en/blog/entry/20211222-kubernetes-based-spanner-autoscaler)!
 
 <!-- badge links -->
 

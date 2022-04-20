@@ -20,18 +20,25 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// TODO: Add comments for each struct
-
+// The recurring frequency and the length of time for which a schedule will remain active
 type Schedule struct {
-	Cron     string `json:"cron"`
+	// The recurring frequency of the schedule in [standard cron](https://en.wikipedia.org/wiki/Cron) format. Examples and verification utility: https://crontab.guru
+	Cron string `json:"cron"`
+
+	// The length of time for which this schedule will remain active each time the cron is triggered.
 	Duration string `json:"duration"`
 }
 
 // SpannerAutoscaleScheduleSpec defines the desired state of SpannerAutoscaleSchedule
 type SpannerAutoscaleScheduleSpec struct {
-	TargetResource            string   `json:"targetResource"`
-	AdditionalProcessingUnits int      `json:"additionalProcessingUnits"`
-	Schedule                  Schedule `json:"schedule"`
+	// The `SpannerAutoscaler` resource name with which this schedule will be registered
+	TargetResource string `json:"targetResource"`
+
+	// The extra compute capacity which will be added when this schedule is active
+	AdditionalProcessingUnits int `json:"additionalProcessingUnits"`
+
+	// The details of when and for how long this schedule will be active
+	Schedule Schedule `json:"schedule"`
 }
 
 // SpannerAutoscaleScheduleStatus defines the observed state of SpannerAutoscaleSchedule
