@@ -42,8 +42,8 @@ _Appears in:_
 | Field | Description |
 | --- | --- |
 | `type` _AuthType_ | Authentication method to be used for GCP authentication. If `ImpersonateConfig` as well as `IAMKeySecret` is nil, this will be set to use ADC be default. |
-| `impersonateConfig` _[ImpersonateConfig](#impersonateconfig)_ | Details of the GCP service account which will be impersonated, for authentication to GCP. This can used only on GKE clusters, when workload identity is enabled. Ref: https://cloud.google.com/kubernetes-engine/docs/how-to/workload-identity This is a pointer because structs with string slices can not be compared for zero values |
-| `iamKeySecret` _[IAMKeySecret](#iamkeysecret)_ | Details of the k8s secret which contains the GCP service account authentication key (in JSON). Ref: https://cloud.google.com/kubernetes-engine/docs/tutorials/authenticating-to-cloud-platform This is a pointer because structs with string slices can not be compared for zero values |
+| `impersonateConfig` _[ImpersonateConfig](#impersonateconfig)_ | Details of the GCP service account which will be impersonated, for authentication to GCP. This can used only on GKE clusters, when workload identity is enabled. [[Ref](https://cloud.google.com/kubernetes-engine/docs/how-to/workload-identity)]. This is a pointer because structs with string slices can not be compared for zero values |
+| `iamKeySecret` _[IAMKeySecret](#iamkeysecret)_ | Details of the k8s secret which contains the GCP service account authentication key (in JSON). [[Ref](https://cloud.google.com/kubernetes-engine/docs/tutorials/authenticating-to-cloud-platform)]. This is a pointer because structs with string slices can not be compared for zero values |
 
 
 #### IAMKeySecret
@@ -57,9 +57,9 @@ _Appears in:_
 
 | Field | Description |
 | --- | --- |
-| `name` _string_ |  |
-| `namespace` _string_ |  |
-| `key` _string_ |  |
+| `name` _string_ | Name of the secret which contains the authentication key |
+| `namespace` _string_ | Namespace of the secret which contains the authentication key |
+| `key` _string_ | Name of the yaml 'key' under which the authentication value is stored |
 
 
 #### ImpersonateConfig
@@ -73,8 +73,8 @@ _Appears in:_
 
 | Field | Description |
 | --- | --- |
-| `targetServiceAccount` _string_ |  |
-| `delegates` _string array_ |  |
+| `targetServiceAccount` _string_ | The service account which will be impersonated |
+| `delegates` _string array_ | Delegation chain for the service account impersonation. [[Ref](https://pkg.go.dev/google.golang.org/api/impersonate#hdr-Required_IAM_roles)] |
 
 
 #### ScaleConfig
