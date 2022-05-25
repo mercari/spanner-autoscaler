@@ -56,27 +56,36 @@ type Authentication struct {
 
 	// Details of the GCP service account which will be impersonated, for authentication to GCP.
 	// This can used only on GKE clusters, when workload identity is enabled.
-	// Ref: https://cloud.google.com/kubernetes-engine/docs/how-to/workload-identity
+	// [[Ref](https://cloud.google.com/kubernetes-engine/docs/how-to/workload-identity)].
 	// This is a pointer because structs with string slices can not be compared for zero values
 	ImpersonateConfig *ImpersonateConfig `json:"impersonateConfig,omitempty"`
 
 	// Details of the k8s secret which contains the GCP service account authentication key (in JSON).
-	// Ref: https://cloud.google.com/kubernetes-engine/docs/tutorials/authenticating-to-cloud-platform
+	// [[Ref](https://cloud.google.com/kubernetes-engine/docs/tutorials/authenticating-to-cloud-platform)].
 	// This is a pointer because structs with string slices can not be compared for zero values
 	IAMKeySecret *IAMKeySecret `json:"iamKeySecret,omitempty"`
 }
 
 // Details of the impersonation service account for GCP authentication
 type ImpersonateConfig struct {
-	TargetServiceAccount string   `json:"targetServiceAccount"`
-	Delegates            []string `json:"delegates,omitempty"`
+	// The service account which will be impersonated
+	TargetServiceAccount string `json:"targetServiceAccount"`
+
+	// Delegation chain for the service account impersonation.
+	// [[Ref](https://pkg.go.dev/google.golang.org/api/impersonate#hdr-Required_IAM_roles)]
+	Delegates []string `json:"delegates,omitempty"`
 }
 
 // Details of the secret which has the GCP service account key for authentication
 type IAMKeySecret struct {
-	Name      string `json:"name"`
+	// Name of the secret which contains the authentication key
+	Name string `json:"name"`
+
+	// Namespace of the secret which contains the authentication key
 	Namespace string `json:"namespace,omitempty"`
-	Key       string `json:"key"`
+
+	// Name of the yaml 'key' under which the authentication value is stored
+	Key string `json:"key"`
 }
 
 // Details of the autoscaling parameters for the Spanner instance
