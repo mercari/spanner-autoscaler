@@ -264,7 +264,7 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 			return ctrlreconcile.Result{}, err
 		}
 
-		log.Info("replaced syncer", "namespaced name", sa)
+		log.Info("replaced syncer", "namespacedName", sa)
 		return ctrlreconcile.Result{}, nil
 	}
 
@@ -482,22 +482,26 @@ func (r *SpannerAutoscalerReconciler) needUpdateProcessingUnits(log logr.Logger,
 
 	switch {
 	case desiredProcessingUnits == currentProcessingUnits:
-		log.Info("no need to scale", "current-processing-units", currentProcessingUnits, "current-cpu", sa.Status.CurrentHighPriorityCPUUtilization)
+		log.Info("no need to scale", "currentPU", currentProcessingUnits, "currentCPU", sa.Status.CurrentHighPriorityCPUUtilization)
 		return false
 
 	case desiredProcessingUnits > currentProcessingUnits && r.clock.Now().Before(sa.Status.LastScaleTime.Time.Add(10*time.Second)):
 		log.Info("too short to scale up since last scale-up event",
-			"time gap", now.Sub(sa.Status.LastScaleTime.Time),
+			"timeGap", now.Sub(sa.Status.LastScaleTime.Time).String(),
 			"now", now.String(),
-			"last scale time", sa.Status.LastScaleTime,
+			"lastScaleTime", sa.Status.LastScaleTime,
+			"currentPU", currentProcessingUnits,
+			"desiredPU", desiredProcessingUnits,
 		)
 		return false
 
 	case desiredProcessingUnits < currentProcessingUnits && r.clock.Now().Before(sa.Status.LastScaleTime.Time.Add(r.scaleDownInterval)):
 		log.Info("too short to scale down since last scale-up event",
-			"time gap", now.Sub(sa.Status.LastScaleTime.Time),
+			"timeGap", now.Sub(sa.Status.LastScaleTime.Time).String(),
 			"now", now.String(),
-			"last scale time", sa.Status.LastScaleTime,
+			"lastScaleTime", sa.Status.LastScaleTime,
+			"currentPU", currentProcessingUnits,
+			"desiredPU", desiredProcessingUnits,
 		)
 		return false
 
