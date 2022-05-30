@@ -55,21 +55,19 @@ func init() {
 }
 
 var (
-	metricsAddr          = flag.String("metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
-	probeAddr            = flag.String("health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
+	metricsAddr          = flag.String("metrics-bind-address", "", "The address the metric endpoint binds to.")
+	probeAddr            = flag.String("health-probe-bind-address", "", "The address the probe endpoint binds to.")
 	enableLeaderElection = flag.Bool("leader-elect", false, "Enable leader election for controller manager. Enabling this will ensure there is only one active controller manager.")
+	leaderElectionID     = flag.String("leader-elect-id", "", "Lease name for leader election.")
 	scaleDownInterval    = flag.Duration("scale-down-interval", 55*time.Minute, "The scale down interval.")
 	configFile           = flag.String("config", "", "The controller will load its initial configuration from this file. "+
 		"Omit this flag to use the default configuration values. Command-line flags override configuration from this file.")
 )
 
 const (
-	exitCode         = 1
-	leaderElectionID = "spanner-autoscaler-leader-election"
-	healthzEndpoint  = "/healthz"
-	readyzEndpoint   = "/readyz"
-	healthzName      = "healthz"
-	readyzName       = "readyz"
+	exitCode    = 1
+	healthzName = "healthz"
+	readyzName  = "readyz"
 )
 
 func main() {
@@ -100,11 +98,9 @@ func main() {
 	options := ctrlmanager.Options{
 		Scheme:                 scheme,
 		LeaderElection:         *enableLeaderElection,
-		LeaderElectionID:       leaderElectionID,
+		LeaderElectionID:       *leaderElectionID,
 		MetricsBindAddress:     *metricsAddr,
 		HealthProbeBindAddress: *probeAddr,
-		ReadinessEndpointName:  readyzEndpoint,
-		LivenessEndpointName:   healthzEndpoint,
 
 		// TODO: remove this when `v1beta1` is stable and tested
 		// Only for development
