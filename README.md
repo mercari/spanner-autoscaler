@@ -61,7 +61,7 @@ Spanner Autoscaler can be installed using [KPT](https://kpt.dev/installation/) b
    ```
    > :information_source: **TIP:** Instead of `kpt`, you can also use `kubectl` directly to apply the resources with
    >   ```console
-   >   $ kustomize build spanner-autoscaler/default | kubectl apply -f -
+   >   $ kustomize build config/default | kubectl apply -f -
    >   ```
    > These resources can then be adopted by `kpt` by using the `--inventory-policy=adopt` flag while using `kpt live apply` command. [More info](https://kpt.dev/reference/cli/live/apply/?id=flags).
 
