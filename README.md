@@ -68,7 +68,7 @@ Spanner Autoscaler can be installed using [KPT](https://kpt.dev/installation/) b
 1. Create a Custom Resource for managing a spanner instance
 
    ```console
-   $ kubectl apply -f spanner-autoscaler/samples
+   $ kubectl apply -f config/samples
    ```
    Examples of CustomResources can be found [below](#examples).\
    For authentication using a GCP service account JSON key, follow [these steps](#gcp-setup) to create a k8s secret with credentials.
