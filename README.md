@@ -48,27 +48,27 @@ Spanner Autoscaler can be installed using [KPT](https://kpt.dev/installation/) b
 1. Deploy the operator through `kpt`
 
    ```console
-   $ kpt pkg get https://github.com/mercari/spanner-autoscaler/config spanner-autoscaler
-   $ kpt live init spanner-autoscaler/kpt
+   $ kpt pkg get https://github.com/mercari/spanner-autoscaler/config spanner-autoscaler-pkg
+   $ kpt live init spanner-autoscaler-pkg/kpt
    $ kpt live install-resource-group
 
    ## Append '--dry-run' to the below line to just
    ## check the resources which will be created
-   $ kustomize build spanner-autoscaler/kpt | kpt live apply -
+   $ kustomize build spanner-autoscaler-pkg/kpt | kpt live apply -
 
    ## To uninstall, use the following
-   $ kustomize build spanner-autoscaler/kpt | kpt live destroy -
+   $ kustomize build spanner-autoscaler-pkg/kpt | kpt live destroy -
    ```
-   > :information_source: **TIP:** Instead of `kpt`, you can also use `kubectl` directly to apply the resources with
+   > :information_source: **TIP:** Instead of `kpt`, you can also use `kubectl` directly to install the resources (use `?ref=master` latest version) as follows:
    >   ```console
-   >   $ kustomize build config/default | kubectl apply -f -
+   >   $ kustomize build "https://github.com/mercari/spanner-autoscaler.git/config/default?ref=v0.4.1" | kubectl apply -f -
    >   ```
    > These resources can then be adopted by `kpt` by using the `--inventory-policy=adopt` flag while using `kpt live apply` command. [More info](https://kpt.dev/reference/cli/live/apply/?id=flags).
 
 1. Create a Custom Resource for managing a spanner instance
 
    ```console
-   $ kubectl apply -f config/samples
+   $ kubectl apply -f spanner-autoscaler-pkg/samples
    ```
    Examples of CustomResources can be found [below](#examples).\
    For authentication using a GCP service account JSON key, follow [these steps](#gcp-setup) to create a k8s secret with credentials.
