@@ -59,7 +59,7 @@ Spanner Autoscaler can be installed using [KPT](https://kpt.dev/installation/) b
    ## To uninstall, use the following
    $ kustomize build spanner-autoscaler-pkg/kpt | kpt live destroy -
    ```
-   > :information_source: **TIP:** Instead of `kpt`, you can also use `kubectl` directly to install the resources (use `?ref=master` latest version) as follows:
+   > :information_source: **TIP:** Instead of `kpt`, you can also use `kubectl` directly to install the resources (use `?ref=master` for latest version) as follows:
    >   ```console
    >   $ kustomize build "https://github.com/mercari/spanner-autoscaler.git/config/default?ref=v0.4.1" | kubectl apply -f -
    >   ```
