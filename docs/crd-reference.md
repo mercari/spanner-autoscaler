@@ -91,7 +91,7 @@ _Appears in:_
 | `computeType` _ComputeType_ | Whether to use `nodes` or `processing-units` for scaling. This is only used at the time of CustomResource creation. If compute capacity is provided in `nodes`, then it is automatically converted to `processing-units` at the time of resource creation, and internally, only `ProcessingUnits` are used for computations and scaling. |
 | `nodes` _[ScaleConfigNodes](#scaleconfignodes)_ | If `nodes` are provided at the time of resource creation, then they are automatically converted to `processing-units`. So it is recommended to use only the processing units. Ref: [Spanner Compute Capacity](https://cloud.google.com/spanner/docs/compute-capacity#compute_capacity) |
 | `processingUnits` _[ScaleConfigPUs](#scaleconfigpus)_ | ProcessingUnits for scaling of the Spanner instance. Ref: [Spanner Compute Capacity](https://cloud.google.com/spanner/docs/compute-capacity#compute_capacity) |
-| `scaledownStepSize` _integer_ | The maximum number of processing units which can be deleted in one scale-down operation |
+| `scaledownStepSize` _integer_ | The maximum number of processing units which can be deleted in one scale-down operation. Should be a multiple of 1000. |
 | `targetCPUUtilization` _[TargetCPUUtilization](#targetcpuutilization)_ | The CPU utilization which the autoscaling will try to achieve. Ref: [Spanner CPU utilization](https://cloud.google.com/spanner/docs/cpu-utilization#task-priority) |
 
 
