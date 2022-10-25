@@ -352,9 +352,8 @@ spec:
                     - min
                     type: object
                   scaledownInterval:
-                    description: How often(second) autoscaler is reevaluated for scale
-                      down
-                    type: integer
+                    description: How often autoscaler is reevaluated for scale down
+                    type: string
                   scaledownStepSize:
                     default: 2000
                     description: The maximum number of processing units which can

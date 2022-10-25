@@ -22,6 +22,7 @@ limitations under the License.
 package v1beta1
 
 import (
+	"k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
@@ -108,7 +109,7 @@ func (in *ScaleConfig) DeepCopyInto(out *ScaleConfig) {
 	out.ProcessingUnits = in.ProcessingUnits
 	if in.ScaledownInterval != nil {
 		in, out := &in.ScaledownInterval, &out.ScaledownInterval
-		*out = new(int)
+		*out = new(v1.Duration)
 		**out = **in
 	}
 	out.TargetCPUUtilization = in.TargetCPUUtilization

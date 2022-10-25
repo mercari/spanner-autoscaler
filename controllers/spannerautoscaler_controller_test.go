@@ -355,14 +355,26 @@ var _ = DescribeTable("Get and overwrite scaledown interval", func() {
 
 	It("get controller default scaledown interval", func() {
 		want := 55 * time.Minute
-		got := getOrConvertTimeDuration(nil, testReconciler.scaleDownInterval)
+		sa := &spannerv1beta1.SpannerAutoscaler{
+			Status: spannerv1beta1.SpannerAutoscalerStatus{
+				LastScaleTime:          metav1.Time{Time: fakeTime.Add(-time.Minute)},
+				CurrentProcessingUnits: 2000,
+				DesiredProcessingUnits: 1000,
+				InstanceState:          spannerv1beta1.InstanceStateReady,
+			},
+			Spec: spannerv1beta1.SpannerAutoscalerSpec{
+				ScaleConfig: spannerv1beta1.ScaleConfig{},
+			},
+		}
+		got := getOrConvertTimeDuration(sa.Spec.ScaleConfig.ScaledownInterval, testReconciler.scaleDownInterval)
 		Expect(got).To(Equal(want))
 	})
 
 	It("overwrite scaledown interval with SpannerAutoscaler resource", func() {
 		want := 20 * time.Minute
-		var scaledownInterval int = 1200
-
+		scaledownInterval := metav1.Duration{
+			Duration: want,
+		}
 		sa := &spannerv1beta1.SpannerAutoscaler{
 			Status: spannerv1beta1.SpannerAutoscalerStatus{
 				LastScaleTime:          metav1.Time{Time: fakeTime.Add(-time.Minute)},

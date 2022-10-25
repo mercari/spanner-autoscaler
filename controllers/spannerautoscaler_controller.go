@@ -643,9 +643,9 @@ func (r *SpannerAutoscalerReconciler) fetchCredentials(ctx context.Context, sa *
 	}
 }
 
-func getOrConvertTimeDuration(i *int, d time.Duration) time.Duration {
-	if i != nil {
-		return time.Duration(*i) * time.Second
+func getOrConvertTimeDuration(md *metav1.Duration, d time.Duration) time.Duration {
+	if md != nil {
+		return md.Duration
 	}
 
 	return d
