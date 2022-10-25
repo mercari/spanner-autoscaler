@@ -105,6 +105,9 @@ type ScaleConfig struct {
 	// +kubebuilder:validation:MultipleOf=1000
 	ScaledownStepSize int `json:"scaledownStepSize,omitempty"`
 
+	// How often(second) autoscaler is reevaluated for scale down
+	ScaledownInterval *int `json:"scaledownInterval,omitempty"`
+
 	// The CPU utilization which the autoscaling will try to achieve. Ref: [Spanner CPU utilization](https://cloud.google.com/spanner/docs/cpu-utilization#task-priority)
 	TargetCPUUtilization TargetCPUUtilization `json:"targetCPUUtilization"`
 }

@@ -495,7 +495,7 @@ func (r *SpannerAutoscalerReconciler) needUpdateProcessingUnits(log logr.Logger,
 		)
 		return false
 
-	case desiredProcessingUnits < currentProcessingUnits && r.clock.Now().Before(sa.Status.LastScaleTime.Time.Add(r.scaleDownInterval)):
+	case desiredProcessingUnits < currentProcessingUnits && r.clock.Now().Before(sa.Status.LastScaleTime.Time.Add(getOrConvertTimeDuration(sa.Spec.ScaleConfig.ScaledownInterval, r.scaleDownInterval))):
 		log.Info("too short to scale down since last scale-up event",
 			"timeGap", now.Sub(sa.Status.LastScaleTime.Time).String(),
 			"now", now.String(),
@@ -641,4 +641,12 @@ func (r *SpannerAutoscalerReconciler) fetchCredentials(ctx context.Context, sa *
 	default:
 		return syncerpkg.NewADCCredentials(), nil
 	}
+}
+
+func getOrConvertTimeDuration(i *int, d time.Duration) time.Duration {
+	if i != nil {
+		return time.Duration(*i) * time.Second
+	}
+
+	return d
 }

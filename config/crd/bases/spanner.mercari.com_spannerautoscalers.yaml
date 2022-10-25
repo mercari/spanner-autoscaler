@@ -351,10 +351,15 @@ spec:
                     - max
                     - min
                     type: object
+                  scaledownInterval:
+                    description: How often(second) autoscaler is reevaluated for scale
+                      down
+                    type: integer
                   scaledownStepSize:
                     default: 2000
                     description: The maximum number of processing units which can
-                      be deleted in one scale-down operation
+                      be deleted in one scale-down operation. Should be a multiple
+                      of 1000.
                     multipleOf: 1000
                     type: integer
                   targetCPUUtilization:
