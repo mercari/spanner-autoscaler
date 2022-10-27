@@ -105,6 +105,10 @@ type ScaleConfig struct {
 	// +kubebuilder:validation:MultipleOf=1000
 	ScaledownStepSize int `json:"scaledownStepSize,omitempty"`
 
+	// How often autoscaler is reevaluated for scale down.
+	// The cool down period between two consecutive scaledown operations. If this option is omitted, the value of the `--scale-down-interval` command line option is taken as the default value.
+	ScaledownInterval *metav1.Duration `json:"scaledownInterval,omitempty"`
+
 	// The CPU utilization which the autoscaling will try to achieve. Ref: [Spanner CPU utilization](https://cloud.google.com/spanner/docs/cpu-utilization#task-priority)
 	TargetCPUUtilization TargetCPUUtilization `json:"targetCPUUtilization"`
 }

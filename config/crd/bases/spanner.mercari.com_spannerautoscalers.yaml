@@ -351,10 +351,17 @@ spec:
                     - max
                     - min
                     type: object
+                  scaledownInterval:
+                    description: How often autoscaler is reevaluated for scale down.
+                      The cool down period between two consecutive scaledown operations.
+                      If this option is omitted, the value of the `--scale-down-interval`
+                      command line option is taken as the default value.
+                    type: string
                   scaledownStepSize:
                     default: 2000
                     description: The maximum number of processing units which can
-                      be deleted in one scale-down operation
+                      be deleted in one scale-down operation. Should be a multiple
+                      of 1000.
                     multipleOf: 1000
                     type: integer
                   targetCPUUtilization:
