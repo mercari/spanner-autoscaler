@@ -118,44 +118,40 @@ deps: controller-gen kustomize kind kpt golangci-lint crd-ref-docs ## Download t
 
 CONTROLLER_GEN = $(shell pwd)/bin/controller-gen
 controller-gen: ## Download controller-gen locally if necessary.
-	$(call go-get-tool,$(CONTROLLER_GEN),sigs.k8s.io/controller-tools/cmd/controller-gen@v0.7.0)
+	$(call go-install-tool,$(CONTROLLER_GEN),sigs.k8s.io/controller-tools/cmd/controller-gen@v0.7.0)
 
 KUSTOMIZE = $(shell pwd)/bin/kustomize
 kustomize: ## Download kustomize locally if necessary.
-	$(call go-get-tool,$(KUSTOMIZE),sigs.k8s.io/kustomize/kustomize/v3@v3.8.7)
+	$(call go-install-tool,$(KUSTOMIZE),sigs.k8s.io/kustomize/kustomize/v4@v4.5.7)
 
 ENVTEST = $(shell pwd)/bin/setup-envtest
 .PHONY: envtest
 envtest: ## Download envtest-setup locally if necessary.
-	$(call go-get-tool,$(ENVTEST),sigs.k8s.io/controller-runtime/tools/setup-envtest@latest)
+	$(call go-install-tool,$(ENVTEST),sigs.k8s.io/controller-runtime/tools/setup-envtest@latest)
 
 KIND = $(shell pwd)/bin/kind
 kind: ## Downlaod 'kind' locally if necessary
-	$(call go-get-tool,$(KIND),sigs.k8s.io/kind@v0.11.1)
+	$(call go-install-tool,$(KIND),sigs.k8s.io/kind@v0.11.1)
 
 KPT = $(shell pwd)/bin/kpt
 kpt: ## Downlaod 'kpt' locally if necessary
-	$(call go-get-tool,$(KPT),github.com/GoogleContainerTools/kpt@main)
+	$(call go-install-tool,$(KPT),github.com/GoogleContainerTools/kpt@main)
 
 GOLANGCI_LINT = $(shell pwd)/bin/golangci-lint
 golangci-lint: ## Downlaod 'golangci-lint' locally if necessary
-	$(call go-get-tool,$(GOLANGCI_LINT),github.com/golangci/golangci-lint/cmd/golangci-lint@v1.44.0)
+	$(call go-install-tool,$(GOLANGCI_LINT),github.com/golangci/golangci-lint/cmd/golangci-lint@v1.44.0)
 
 CRD_REF_DOCS = $(shell pwd)/bin/crd-ref-docs
 crd-ref-docs: ## Downlaod 'crd-ref-docs' locally if necessary
-	$(call go-get-tool,$(CRD_REF_DOCS),github.com/elastic/crd-ref-docs@v0.0.8)
+	$(call go-install-tool,$(CRD_REF_DOCS),github.com/elastic/crd-ref-docs@v0.0.8)
 
-# go-get-tool will 'go get' any package $2 and install it to $1.
+# go-install-tool will 'go install' any package $2 and install it to $1.
 PROJECT_DIR := $(shell dirname $(abspath $(lastword $(MAKEFILE_LIST))))
-define go-get-tool
+define go-install-tool
 @[ -f $(1) ] || { \
 set -e ;\
-TMP_DIR=$$(mktemp -d) ;\
-cd $$TMP_DIR ;\
-go mod init tmp ;\
-echo "Downloading $(2)" ;\
-GOBIN=$(PROJECT_DIR)/bin go get $(2) ;\
-rm -rf $$TMP_DIR ;\
+echo "Installing $(2)" ;\
+GOBIN=$(PROJECT_DIR)/bin go install $(2) ;\
 }
 endef
 
