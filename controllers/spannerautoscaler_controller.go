@@ -531,8 +531,16 @@ func calcDesiredProcessingUnits(sa spannerv1beta1.SpannerAutoscaler) int {
 		desiredPU = ((requiredPU / 1000) + 1) * 1000
 	}
 
+	sdStepSize := sa.Spec.ScaleConfig.ScaledownStepSize
+
+	// round up the scaledownStepSize to avoid intermediate values
+	// for example: 8000 -> 7000 instead of 8000 -> 7400
+	if sdStepSize < 1000 && sa.Status.CurrentProcessingUnits > 1000 {
+		sdStepSize = 1000
+	}
+
 	// in case of scaling down, check that we don't scale down beyond the ScaledownStepSize
-	if scaledDownPU := (sa.Status.CurrentProcessingUnits - sa.Spec.ScaleConfig.ScaledownStepSize); desiredPU < scaledDownPU {
+	if scaledDownPU := (sa.Status.CurrentProcessingUnits - sdStepSize); desiredPU < scaledDownPU {
 		desiredPU = scaledDownPU
 	}
 
@@ -540,6 +548,7 @@ func calcDesiredProcessingUnits(sa spannerv1beta1.SpannerAutoscaler) int {
 	minPU := sa.Spec.ScaleConfig.ProcessingUnits.Min
 	maxPU := sa.Spec.ScaleConfig.ProcessingUnits.Max
 
+	// fetch min/max range from status, in case any schedules have updated the range
 	if sa.Status.DesiredMinPUs > 0 {
 		minPU = sa.Status.DesiredMinPUs
 	}
