@@ -360,9 +360,8 @@ spec:
                   scaledownStepSize:
                     default: 2000
                     description: The maximum number of processing units which can
-                      be deleted in one scale-down operation. Should be a multiple
-                      of 1000.
-                    multipleOf: 1000
+                      be deleted in one scale-down operation. It can be a multiple
+                      of 100 for values < 1000, or a multiple of 1000 otherwise.
                     type: integer
                   targetCPUUtilization:
                     description: 'The CPU utilization which the autoscaling will try

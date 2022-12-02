@@ -44,11 +44,11 @@ type SpannerAutoscaleScheduleSpec struct {
 // SpannerAutoscaleScheduleStatus defines the observed state of SpannerAutoscaleSchedule
 type SpannerAutoscaleScheduleStatus struct{}
 
-//+kubebuilder:object:root=true
-//+kubebuilder:subresource:status
-//+kubebuilder:printcolumn:name="Cron",type="string",JSONPath=".spec.schedule.cron"
-//+kubebuilder:printcolumn:name="Duration",type="string",JSONPath=".spec.schedule.duration"
-//+kubebuilder:printcolumn:name="Additional PU",type="integer",JSONPath=".spec.additionalProcessingUnits"
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Cron",type="string",JSONPath=".spec.schedule.cron"
+// +kubebuilder:printcolumn:name="Duration",type="string",JSONPath=".spec.schedule.duration"
+// +kubebuilder:printcolumn:name="Additional PU",type="integer",JSONPath=".spec.additionalProcessingUnits"
 // SpannerAutoscaleSchedule is the Schema for the spannerautoscaleschedules API
 type SpannerAutoscaleSchedule struct {
 	metav1.TypeMeta   `json:",inline"`
