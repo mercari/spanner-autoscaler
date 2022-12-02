@@ -100,9 +100,8 @@ type ScaleConfig struct {
 	// ProcessingUnits for scaling of the Spanner instance. Ref: [Spanner Compute Capacity](https://cloud.google.com/spanner/docs/compute-capacity#compute_capacity)
 	ProcessingUnits ScaleConfigPUs `json:"processingUnits,omitempty"`
 
-	// The maximum number of processing units which can be deleted in one scale-down operation. Should be a multiple of 1000.
+	// The maximum number of processing units which can be deleted in one scale-down operation. It can be a multiple of 100 for values < 1000, or a multiple of 1000 otherwise.
 	// +kubebuilder:default=2000
-	// +kubebuilder:validation:MultipleOf=1000
 	ScaledownStepSize int `json:"scaledownStepSize,omitempty"`
 
 	// How often autoscaler is reevaluated for scale down.

@@ -131,7 +131,7 @@ envtest: ## Download envtest-setup locally if necessary.
 
 KIND = $(shell pwd)/bin/kind
 kind: ## Downlaod 'kind' locally if necessary
-	$(call go-install-tool,$(KIND),sigs.k8s.io/kind@v0.11.1)
+	$(call go-install-tool,$(KIND),sigs.k8s.io/kind@v0.17.0)
 
 KPT = $(shell pwd)/bin/kpt
 kpt: ## Downlaod 'kpt' locally if necessary
