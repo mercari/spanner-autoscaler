@@ -1,6 +1,12 @@
 apiVersion: spanner.mercari.com/v1beta1
 kind: SpannerAutoscaleSchedule
 metadata:
+  labels:
+    app.kubernetes.io/name: spannerautoscaleschedule
+    app.kubernetes.io/instance: spannerautoscaleschedule-sample
+    app.kubernetes.io/part-of: spanner-autoscaler
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/created-by: spanner-autoscaler
   name: spannerautoscaleschedule-sample
   namespace: test
 spec:
@@ -14,6 +20,12 @@ spec:
 apiVersion: spanner.mercari.com/v1beta1
 kind: SpannerAutoscaleSchedule
 metadata:
+  labels:
+    app.kubernetes.io/name: spannerautoscaleschedule
+    app.kubernetes.io/instance: another-sample
+    app.kubernetes.io/part-of: spanner-autoscaler
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/created-by: spanner-autoscaler
   name: another-sample
   namespace: test
 spec:

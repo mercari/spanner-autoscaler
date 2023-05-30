@@ -13,7 +13,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package controllers
+package controller
 
 import (
 	"context"
@@ -29,8 +29,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	utilclock "k8s.io/apimachinery/pkg/util/clock"
 	"k8s.io/client-go/tools/record"
+	utilclock "k8s.io/utils/clock"
 	ctrlbuilder "sigs.k8s.io/controller-runtime/pkg/builder"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlcontroller "sigs.k8s.io/controller-runtime/pkg/controller"
@@ -652,10 +652,10 @@ func (r *SpannerAutoscalerReconciler) fetchCredentials(ctx context.Context, sa *
 	}
 }
 
-func getOrConvertTimeDuration(md *metav1.Duration, d time.Duration) time.Duration {
-	if md != nil {
-		return md.Duration
+func getOrConvertTimeDuration(customDuration *metav1.Duration, defaultDuration time.Duration) time.Duration {
+	if customDuration != nil {
+		return customDuration.Duration
 	}
 
-	return d
+	return defaultDuration
 }

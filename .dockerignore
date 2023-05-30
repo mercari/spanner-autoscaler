@@ -10,8 +10,7 @@
 
 # Only include Go files
 !internal
-!controllers
 !api
-!main.go
+!cmd
 !go.mod
 !go.sum

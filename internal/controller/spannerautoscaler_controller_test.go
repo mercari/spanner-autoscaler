@@ -1,11 +1,11 @@
-package controllers
+package controller
 
 import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/clock"
+	testingclock "k8s.io/utils/clock/testing"
 
 	"github.com/go-logr/logr"
 	"github.com/google/go-cmp/cmp"
@@ -128,7 +128,7 @@ var _ = Describe("Check Update Nodes", func() {
 		By("Creating a test reconciler")
 		testReconciler = &SpannerAutoscalerReconciler{
 			scaleDownInterval: time.Hour,
-			clock:             clock.NewFakeClock(fakeTime),
+			clock:             testingclock.NewFakeClock(fakeTime),
 			log:               logr.Discard(),
 		}
 	})
@@ -357,20 +357,21 @@ var _ = Describe("Fetch Credentials", func() {
 	})
 })
 
-var _ = DescribeTable("Get and overwrite scaledown interval", func() {
+var _ = Describe("Get and overwrite scaledown interval", func() {
 	var testReconciler *SpannerAutoscalerReconciler
+	controllerScaleDownInterval := 55 * time.Minute
 
 	BeforeEach(func() {
 		By("Creating a test reconciler")
 		testReconciler = &SpannerAutoscalerReconciler{
-			scaleDownInterval: time.Hour,
-			clock:             clock.NewFakeClock(fakeTime),
+			scaleDownInterval: controllerScaleDownInterval,
+			clock:             testingclock.NewFakeClock(fakeTime),
 			log:               logr.Discard(),
 		}
 	})
 
-	It("get controller default scaledown interval", func() {
-		want := 55 * time.Minute
+	It("should get controller default scaledown interval", func() {
+		want := controllerScaleDownInterval
 		sa := &spannerv1beta1.SpannerAutoscaler{
 			Status: spannerv1beta1.SpannerAutoscalerStatus{
 				LastScaleTime:          metav1.Time{Time: fakeTime.Add(-time.Minute)},
@@ -386,7 +387,7 @@ var _ = DescribeTable("Get and overwrite scaledown interval", func() {
 		Expect(got).To(Equal(want))
 	})
 
-	It("overwrite scaledown interval with SpannerAutoscaler resource", func() {
+	It("should override default scaledown interval with custom SpannerAutoscaler configuration value", func() {
 		want := 20 * time.Minute
 		scaledownInterval := metav1.Duration{
 			Duration: want,
