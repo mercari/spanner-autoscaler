@@ -5,10 +5,10 @@ import (
 	"fmt"
 
 	spanneradmin "cloud.google.com/go/spanner/admin/instance/apiv1"
+	instancepb "cloud.google.com/go/spanner/admin/instance/apiv1/instancepb"
 	"github.com/go-logr/logr"
 	"golang.org/x/oauth2"
 	"google.golang.org/api/option"
-	instancepb "google.golang.org/genproto/googleapis/spanner/admin/instance/v1"
 	field_mask "google.golang.org/genproto/protobuf/field_mask"
 
 	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"

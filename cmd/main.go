@@ -107,7 +107,8 @@ func main() {
 		// CertDir: "./bin/dummytls",
 	}
 	if *configFile != "" {
-		options, err = options.AndFrom(ctrl.ConfigFile().AtPath(*configFile))
+		// TODO: discussion thread for deprecating `ComponentConfig`: https://github.com/kubernetes-sigs/controller-runtime/issues/895, move to some alternatives when a conclusion is reached
+		options, err = options.AndFrom(ctrl.ConfigFile().AtPath(*configFile)) //nolint:staticcheck
 		if err != nil {
 			setupLog.Error(err, "unable to load the config file")
 			os.Exit(exitCode)
