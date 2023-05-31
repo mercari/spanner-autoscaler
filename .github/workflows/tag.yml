@@ -7,12 +7,12 @@ on:
 
 jobs:
   bump-tag:
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-latest
     outputs:
       new_version: ${{ steps.bump-semver.outputs.new_version }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
 
       - name: Get Merged Pull Request
         uses: actions-ecosystem/action-get-merged-pull-request@v1
