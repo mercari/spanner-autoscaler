@@ -10,7 +10,7 @@ The default approach is to:
    $ export IMG=mercari/spanner-autoscaler:local
    $ make docker-build kind-load-docker-image
    $ make install deploy
-   $ kubectl apply -f config/samples
+   $ kubectl apply -k config/samples
    ```
 If there are any errors in the conversion or the validation of the sample CRs, then the `kubectl apply` command above, will fail with the corresponding errors.
 

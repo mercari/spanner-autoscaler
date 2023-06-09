@@ -1,6 +1,7 @@
 ## Append samples of your project ##
 resources:
-- spanner_v1alpha1_spannerautoscaler.yaml
+- namespace.yaml
+- rbac/role.yaml
 - spanner_v1beta1_spannerautoscaler.yaml
 - spanner_v1beta1_spannerautoscaleschedule.yaml
 #+kubebuilder:scaffold:manifestskustomizesamples
