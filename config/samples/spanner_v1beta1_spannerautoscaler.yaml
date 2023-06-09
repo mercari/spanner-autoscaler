@@ -1,6 +1,12 @@
 apiVersion: spanner.mercari.com/v1beta1
 kind: SpannerAutoscaler
 metadata:
+  labels:
+    app.kubernetes.io/name: spannerautoscaler
+    app.kubernetes.io/instance: spannerautoscaler-sample
+    app.kubernetes.io/part-of: spanner-autoscaler
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/created-by: spanner-autoscaler
   name: spannerautoscaler-sample-beta
   namespace: test
 spec:

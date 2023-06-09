@@ -37,7 +37,7 @@ import (
 	// +kubebuilder:scaffold:imports
 
 	spannerv1alpha1 "github.com/mercari/spanner-autoscaler/api/v1alpha1"
-	"github.com/mercari/spanner-autoscaler/controllers"
+	"github.com/mercari/spanner-autoscaler/internal/controller"
 )
 
 var (
@@ -107,7 +107,8 @@ func main() {
 		// CertDir: "./bin/dummytls",
 	}
 	if *configFile != "" {
-		options, err = options.AndFrom(ctrl.ConfigFile().AtPath(*configFile))
+		// TODO: discussion thread for deprecating `ComponentConfig`: https://github.com/kubernetes-sigs/controller-runtime/issues/895, move to some alternatives when a conclusion is reached
+		options, err = options.AndFrom(ctrl.ConfigFile().AtPath(*configFile)) //nolint:staticcheck
 		if err != nil {
 			setupLog.Error(err, "unable to load the config file")
 			os.Exit(exitCode)
@@ -130,14 +131,14 @@ func main() {
 		os.Exit(exitCode)
 	}
 
-	sar := controllers.NewSpannerAutoscalerReconciler(
+	sar := controller.NewSpannerAutoscalerReconciler(
 		mgr.GetClient(),
 		mgr.GetAPIReader(),
 		mgr.GetScheme(),
 		mgr.GetEventRecorderFor("spannerautoscaler-controller"),
 		log,
-		controllers.WithLog(log),
-		controllers.WithScaleDownInterval(*scaleDownInterval),
+		controller.WithLog(log),
+		controller.WithScaleDownInterval(*scaleDownInterval),
 	)
 	if err := sar.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "SpannerAutoscaler")
@@ -149,11 +150,11 @@ func main() {
 		os.Exit(exitCode)
 	}
 
-	sasr := controllers.NewSpannerAutoscaleScheduleReconciler(
+	sasr := controller.NewSpannerAutoscaleScheduleReconciler(
 		mgr.GetClient(),
 		mgr.GetScheme(),
 		mgr.GetEventRecorderFor("spannerautoscaleschedule-controller"),
-		controllers.WithLog(log),
+		controller.WithLog(log),
 	)
 
 	if err = sasr.SetupWithManager(mgr); err != nil {

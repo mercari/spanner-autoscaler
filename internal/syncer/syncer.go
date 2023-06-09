@@ -15,9 +15,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	utilclock "k8s.io/apimachinery/pkg/util/clock"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/retry"
+	utilclock "k8s.io/utils/clock"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"

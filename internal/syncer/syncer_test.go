@@ -14,8 +14,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/clock"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	testingclock "k8s.io/utils/clock/testing"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlenvtest "sigs.k8s.io/controller-runtime/pkg/envtest"
 	ctrlzap "sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -162,7 +162,7 @@ func Test_syncer_syncResource(t *testing.T) {
 					l := zap.NewAtomicLevelAt(zap.DebugLevel)
 					return ctrlzap.New(ctrlzap.Level(&l))
 				}(),
-				clock: clock.NewFakeClock(fakeTime),
+				clock: testingclock.NewFakeClock(fakeTime),
 			}
 
 			if err := s.syncResource(ctx); (err != nil) != tt.wantErr {

@@ -46,6 +46,7 @@ type SpannerAutoscaleScheduleStatus struct{}
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:storageversion
 // +kubebuilder:printcolumn:name="Cron",type="string",JSONPath=".spec.schedule.cron"
 // +kubebuilder:printcolumn:name="Duration",type="string",JSONPath=".spec.schedule.duration"
 // +kubebuilder:printcolumn:name="Additional PU",type="integer",JSONPath=".spec.additionalProcessingUnits"

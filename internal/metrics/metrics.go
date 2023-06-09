@@ -7,14 +7,14 @@ import (
 	"time"
 
 	monitoring "cloud.google.com/go/monitoring/apiv3/v2"
+	monitoringpb "cloud.google.com/go/monitoring/apiv3/v2/monitoringpb"
 	"github.com/go-logr/logr"
 	"github.com/golang/protobuf/ptypes/duration"
 	"github.com/golang/protobuf/ptypes/timestamp"
 	"golang.org/x/oauth2"
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
-	monitoringpb "google.golang.org/genproto/googleapis/monitoring/v3"
-	utilclock "k8s.io/apimachinery/pkg/util/clock"
+	utilclock "k8s.io/utils/clock"
 )
 
 const metricsFilterFormat = `
@@ -154,7 +154,7 @@ func (c *client) GetInstanceMetrics(ctx context.Context) (*InstanceMetrics, erro
 		}
 
 		// TODO: Fix this loop so that lint check will pass
-		return &InstanceMetrics{ // nolint:staticcheck
+		return &InstanceMetrics{ //nolint:staticcheck
 			CurrentHighPriorityCPUUtilization: cpuPercent,
 		}, nil
 	}

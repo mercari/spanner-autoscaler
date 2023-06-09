@@ -72,7 +72,7 @@ linters:
   enable:
     - bodyclose
     - deadcode
-    - depguard
+    # - depguard # disable this temporarily until we confirm and create an allow-list of the imported modules
     - dogsled
     - exportloopref
     - errcheck
