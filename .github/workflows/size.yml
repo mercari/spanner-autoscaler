@@ -7,7 +7,7 @@ on:
     types: [opened, synchronize, reopened, edited, labeled, unlabeled]
 
 jobs:
-  update_labels:
+  add_size_labels:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -21,6 +21,7 @@ jobs:
 
       - name: remove old size labels
         if:  ${{ steps.size.outputs.stale_labels != '' }}
+        continue-on-error: true ## don't fail CI checks even if labelling fails for some reasons
         uses: actions/github-script@v6
         with:
           script: |
@@ -39,6 +40,7 @@ jobs:
       ## ref: https://github.com/actions/github-script#apply-a-label-to-an-issue
       - name: apply new size label
         if:  ${{ steps.size.outputs.new_label != '' }}
+        continue-on-error: true ## don't fail CI checks even if labelling fails for some reasons
         uses: actions/github-script@v6
         with:
           script: |
