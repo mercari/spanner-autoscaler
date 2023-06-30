@@ -2,9 +2,12 @@ name: Size
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled]
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled]
 
 jobs:
-  update_labels:
+  add_size_labels:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -16,10 +19,34 @@ jobs:
       - uses: actions-ecosystem/action-size@v2
         id: size
 
-      - uses: actions-ecosystem/action-remove-labels@v1
+      - name: remove old size labels
+        if:  ${{ steps.size.outputs.stale_labels != '' }}
+        continue-on-error: true ## don't fail CI checks even if labelling fails for some reasons
+        uses: actions/github-script@v6
         with:
-          labels: ${{ steps.size.outputs.stale_labels }}
+          script: |
+            const stale_labels = `${{ steps.size.outputs.stale_labels }}`;
+            const remove_labels = stale_labels.split('\n');
+            for (const label of remove_labels) {
+              github.rest.issues.removeLabel({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: label,
+              })
+            }
 
-      - uses: actions-ecosystem/action-add-labels@v1
+
+      ## ref: https://github.com/actions/github-script#apply-a-label-to-an-issue
+      - name: apply new size label
+        if:  ${{ steps.size.outputs.new_label != '' }}
+        continue-on-error: true ## don't fail CI checks even if labelling fails for some reasons
+        uses: actions/github-script@v6
         with:
-          labels: ${{ steps.size.outputs.new_label }}
+          script: |
+            github.rest.issues.addLabels({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: ['${{ steps.size.outputs.new_label }}'],
+            })
