@@ -567,7 +567,7 @@ func calcDesiredProcessingUnits(sa spannerv1beta1.SpannerAutoscaler) int {
 	}
 
 	// in case of scaling up, check that we don't scale up beyond the ScaleupStepSize
-	if scaledUpPU := (sa.Status.CurrentProcessingUnits + suStepSize); scaledUpPU < desiredPU  {
+	if scaledUpPU := (sa.Status.CurrentProcessingUnits + suStepSize); scaledUpPU < desiredPU {
 		desiredPU = scaledUpPU
 	}
 
