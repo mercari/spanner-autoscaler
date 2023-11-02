@@ -78,6 +78,11 @@ func (r *SpannerAutoscaler) Default() {
 		r.Spec.ScaleConfig.ScaledownStepSize = 2000
 	}
 
+	// set default ScaleupStepSize
+	if r.Spec.ScaleConfig.ScaleupStepSize == 0 {
+		r.Spec.ScaleConfig.ScaleupStepSize = 2000
+	}
+
 	log.V(1).Info("finished setting defaults for spannerautoscaler resource", "name", r.Name, "resource", r)
 }
 
@@ -197,6 +202,18 @@ func (r *SpannerAutoscaler) validateScaleConfig() *field.Error {
 		return field.Invalid(
 			field.NewPath("spec").Child("scaleConfig").Child("scaledownStepSize"),
 			sc.ScaledownStepSize,
+			"must be a multiple of 100 for values which are less than 1000")
+	}
+
+	if sc.ScaleupStepSize > 1000 && sc.ScaleupStepSize%1000 != 0 {
+		return field.Invalid(
+			field.NewPath("spec").Child("scaleConfig").Child("scaleupStepSize"),
+			sc.ScaleupStepSize,
+			"must be a multiple of 1000 for values which are greater than 1000")
+	} else if sc.ScaleupStepSize < 1000 && sc.ScaleupStepSize%100 != 0 {
+		return field.Invalid(
+			field.NewPath("spec").Child("scaleConfig").Child("scaleupStepSize"),
+			sc.ScaleupStepSize,
 			"must be a multiple of 100 for values which are less than 1000")
 	}
 
