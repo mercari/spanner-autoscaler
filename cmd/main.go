@@ -106,7 +106,7 @@ func main() {
 
 		// TODO: remove this when `v1beta1` is stable and tested
 		// Only for development
-		CertDir: "./bin/dummytls",
+		// CertDir: "./bin/dummytls",
 	}
 	if *configFile != "" {
 		// TODO: discussion thread for deprecating `ComponentConfig`: https://github.com/kubernetes-sigs/controller-runtime/issues/895, move to some alternatives when a conclusion is reached
