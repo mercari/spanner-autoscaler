@@ -51,6 +51,7 @@ var _ = Describe("SpannerAutoscaler controller", func() {
 						Max: 10000,
 					},
 					ScaledownStepSize: 2000,
+					ScaleupStepSize:   2000,
 					TargetCPUUtilization: spannerv1beta1.TargetCPUUtilization{
 						HighPriority: 30,
 					},
@@ -104,7 +105,7 @@ var _ = Describe("SpannerAutoscaler controller", func() {
 
 			By("Verifying the status of the fetched SpannerAutoscaler resource")
 			wantStatus := spannerv1beta1.SpannerAutoscalerStatus{
-				DesiredProcessingUnits: 6000,
+				DesiredProcessingUnits: 5000,
 				DesiredMinPUs:          targetResource.Spec.ScaleConfig.ProcessingUnits.Min,
 				DesiredMaxPUs:          targetResource.Spec.ScaleConfig.ProcessingUnits.Max,
 				InstanceState:          spannerv1beta1.InstanceStateReady,
@@ -128,6 +129,7 @@ var _ = Describe("Check Update Nodes", func() {
 		By("Creating a test reconciler")
 		testReconciler = &SpannerAutoscalerReconciler{
 			scaleDownInterval: time.Hour,
+			scaleUpInterval:   time.Hour,
 			clock:             testingclock.NewFakeClock(fakeTime),
 			log:               logr.Discard(),
 		}
@@ -146,7 +148,7 @@ var _ = Describe("Check Update Nodes", func() {
 		Expect(got).To(BeFalse())
 	})
 
-	It("needs to scale up nodes because cooldown interval is only applied to scale down operations", func() {
+	It("does not need to scale up nodes because enough time has not elapsed since last update", func() {
 		sa := &spannerv1beta1.SpannerAutoscaler{
 			Spec: spannerv1beta1.SpannerAutoscalerSpec{
 				ScaleConfig: spannerv1beta1.ScaleConfig{
@@ -161,12 +163,12 @@ var _ = Describe("Check Update Nodes", func() {
 			},
 		}
 		got := testReconciler.needUpdateProcessingUnits(testReconciler.log, sa, sa.Status.DesiredProcessingUnits, fakeTime)
-		Expect(got).To(BeTrue())
+		Expect(got).To(BeFalse())
 	})
 })
 
 var _ = DescribeTable("Calculate Desired Processing Units",
-	func(currentCPU, currentProcessingUnits, targetCPU, minProcessingUnits, maxProcessingUnits, scaledownStepSize, want int) {
+	func(currentCPU, currentProcessingUnits, targetCPU, minProcessingUnits, maxProcessingUnits, scaledownStepSize, scaleupStepSize, want int) {
 		baseObj := spannerv1beta1.SpannerAutoscaler{}
 		baseObj.Status.CurrentProcessingUnits = currentProcessingUnits
 		baseObj.Status.CurrentHighPriorityCPUUtilization = currentCPU
@@ -177,6 +179,7 @@ var _ = DescribeTable("Calculate Desired Processing Units",
 				Max: maxProcessingUnits,
 			},
 			ScaledownStepSize: scaledownStepSize,
+			ScaleupStepSize:   scaleupStepSize,
 			TargetCPUUtilization: spannerv1beta1.TargetCPUUtilization{
 				HighPriority: targetCPU,
 			},
@@ -184,34 +187,45 @@ var _ = DescribeTable("Calculate Desired Processing Units",
 		got := calcDesiredProcessingUnits(baseObj)
 		Expect(got).To(Equal(want))
 	},
-	Entry("should not scale", 25, 200, 30, 100, 1000, 2000, 200),
-	Entry("should scale up 1", 50, 300, 30, 100, 1000, 2000, 600),
-	Entry("should scale up 2", 50, 3000, 30, 1000, 10000, 2000, 6000),
-	Entry("should scale up 3", 50, 900, 40, 100, 5000, 2000, 2000),
-	Entry("should scale down 1", 30, 500, 50, 100, 10000, 2000, 400),
-	Entry("should scale down 2", 30, 5000, 50, 1000, 10000, 2000, 4000),
-	Entry("should scale down 3", 25, 1000, 65, 300, 10000, 800, 400),
-	Entry("should scale down 4", 25, 800, 65, 300, 10000, 800, 400),
-	Entry("should scale down 5", 25, 700, 65, 300, 10000, 800, 300),
-	Entry("should scale up to max PUs 1", 50, 300, 30, 100, 400, 2000, 400),
-	Entry("should scale up to max PUs 2", 50, 3000, 30, 1000, 4000, 2000, 4000),
-	Entry("should scale down to min PUs 1", 0, 500, 50, 100, 1000, 2000, 100),
-	Entry("should scale down to min PUs 2", 0, 5000, 50, 1000, 10000, 5000, 1000),
-	Entry("should scale down to min PUs 3", 0, 5000, 50, 100, 10000, 5000, 100),
-	Entry("should scale down with ScaledownStepSize 1", 30, 10000, 50, 5000, 10000, 2000, 8000),
-	Entry("should scale down with ScaledownStepSize 2", 30, 10000, 50, 5000, 12000, 200, 9000),
-	Entry("should scale down with ScaledownStepSize 3", 30, 10000, 50, 5000, 12000, 100, 9000),
-	Entry("should scale down with ScaledownStepSize 4", 30, 10000, 50, 5000, 12000, 900, 9000),
-	Entry("should scale down with ScaledownStepSize 5", 25, 2000, 65, 300, 10000, 500, 1000),
-	Entry("should scale down with ScaledownStepSize 6", 25, 2000, 65, 300, 10000, 800, 1000),
-	Entry("should scale down with ScaledownStepSize 7", 25, 1000, 65, 300, 10000, 500, 500),
-	Entry("should scale down with ScaledownStepSize 8", 20, 800, 75, 300, 10000, 200, 600),
-	Entry("should scale down with ScaledownStepSize 9", 25, 2000, 50, 300, 10000, 500, 2000),
-	Entry("should scale down with ScaledownStepSize 10", 25, 2000, 50, 300, 10000, 1000, 2000),
-	Entry("should scale down with ScaledownStepSize 11", 25, 2000, 70, 300, 10000, 400, 1000),
-	Entry("should scale down with ScaledownStepSize 12", 25, 1000, 70, 300, 10000, 400, 600),
-	Entry("should scale down with ScaledownStepSize 13", 20, 2000, 50, 300, 10000, 200, 1000),
-	Entry("should scale down with ScaledownStepSize 14", 20, 2000, 75, 300, 10000, 200, 1000),
+	Entry("should not scale", 25, 200, 30, 100, 1000, 2000, 2000, 200),
+	Entry("should scale up 1", 50, 300, 30, 100, 1000, 2000, 2000, 600),
+	Entry("should scale up 2", 50, 1000, 30, 1000, 10000, 2000, 2000, 2000),
+	Entry("should scale up 3", 50, 900, 40, 100, 5000, 2000, 2000, 2000),
+	Entry("should scale down 1", 30, 500, 50, 100, 10000, 2000, 2000, 400),
+	Entry("should scale down 2", 30, 5000, 50, 1000, 10000, 2000, 2000, 4000),
+	Entry("should scale down 3", 25, 1000, 65, 300, 10000, 800, 2000, 400),
+	Entry("should scale down 4", 25, 800, 65, 300, 10000, 800, 2000, 400),
+	Entry("should scale down 5", 25, 700, 65, 300, 10000, 800, 2000, 300),
+	Entry("should scale up to max PUs 1", 50, 300, 30, 100, 400, 2000, 2000, 400),
+	Entry("should scale up to max PUs 2", 50, 3000, 30, 1000, 4000, 2000, 2000, 4000),
+	Entry("should scale down to min PUs 1", 0, 500, 50, 100, 1000, 2000, 2000, 100),
+	Entry("should scale down to min PUs 2", 0, 5000, 50, 1000, 10000, 5000, 2000, 1000),
+	Entry("should scale down to min PUs 3", 0, 5000, 50, 100, 10000, 5000, 2000, 100),
+	Entry("should scale down with ScaledownStepSize 1", 30, 10000, 50, 5000, 10000, 2000, 2000, 8000),
+	Entry("should scale down with ScaledownStepSize 2", 30, 10000, 50, 5000, 12000, 200, 2000, 9000),
+	Entry("should scale down with ScaledownStepSize 3", 30, 10000, 50, 5000, 12000, 100, 2000, 9000),
+	Entry("should scale down with ScaledownStepSize 4", 30, 10000, 50, 5000, 12000, 900, 2000, 9000),
+	Entry("should scale down with ScaledownStepSize 5", 25, 2000, 65, 300, 10000, 500, 2000, 1000),
+	Entry("should scale down with ScaledownStepSize 6", 25, 2000, 65, 300, 10000, 800, 2000, 1000),
+	Entry("should scale down with ScaledownStepSize 7", 25, 1000, 65, 300, 10000, 500, 2000, 500),
+	Entry("should scale down with ScaledownStepSize 8", 20, 800, 75, 300, 10000, 200, 2000, 600),
+	Entry("should scale down with ScaledownStepSize 9", 25, 2000, 50, 300, 10000, 500, 2000, 2000),
+	Entry("should scale down with ScaledownStepSize 10", 25, 2000, 50, 300, 10000, 1000, 2000, 2000),
+	Entry("should scale down with ScaledownStepSize 11", 25, 2000, 70, 300, 10000, 400, 2000, 1000),
+	Entry("should scale down with ScaledownStepSize 12", 25, 1000, 70, 300, 10000, 400, 2000, 600),
+	Entry("should scale down with ScaledownStepSize 13", 20, 2000, 50, 300, 10000, 200, 2000, 1000),
+	Entry("should scale down with ScaledownStepSize 14", 20, 2000, 75, 300, 10000, 200, 2000, 1000),
+
+	Entry("should scale up with ScaleupStepSize when currentPU is lower than 1000", 100, 100, 10, 100, 10000, 2000, 700, 800),
+	Entry("should scale up with ScaleupStepSize when currentPU is lower than 1000", 100, 300, 10, 100, 10000, 2000, 700, 1000),
+	Entry("should scale up with ScaleupStepSize when currentPU is lower than 1000", 100, 800, 10, 100, 10000, 2000, 700, 2000),
+	Entry("should scale up with ScaleupStepSize when currentPU is lower than 1000", 300, 800, 100, 100, 10000, 2000, 2000, 3000),
+	Entry("should scale up with ScaleupStepSize when currentPU is equal to 1000", 300, 1000, 100, 100, 10000, 2000, 700, 2000),
+	Entry("should scale up with ScaleupStepSize when currentPU is equal to 1000", 400, 1000, 100, 100, 10000, 2000, 3000, 4000),
+	Entry("should scale up with ScaleupStepSize when currentPU is equal to 1000", 400, 1000, 100, 100, 10000, 2000, 4000, 5000),
+	Entry("should scale up with ScaleupStepSize when currentPU is more than 1000", 200, 2000, 100, 100, 10000, 2000, 700, 3000),
+	Entry("should scale up with ScaleupStepSize when currentPU is more than 1000", 200, 2000, 100, 100, 10000, 2000, 2000, 4000),
+	Entry("should scale up with ScaleupStepSize when currentPU is more than 1000", 200, 2000, 100, 100, 10000, 2000, 3000, 5000),
 )
 
 var _ = Describe("Fetch Credentials", func() {
@@ -407,6 +421,60 @@ var _ = Describe("Get and overwrite scaledown interval", func() {
 		}
 
 		got := getOrConvertTimeDuration(sa.Spec.ScaleConfig.ScaledownInterval, testReconciler.scaleDownInterval)
+		Expect(got).To(Equal(want))
+	})
+})
+
+var _ = Describe("Get and overwrite scaleup interval", func() {
+	var testReconciler *SpannerAutoscalerReconciler
+	controllerScaleUpInterval := 55 * time.Minute
+
+	BeforeEach(func() {
+		By("Creating a test reconciler")
+		testReconciler = &SpannerAutoscalerReconciler{
+			scaleUpInterval: controllerScaleUpInterval,
+			clock:           testingclock.NewFakeClock(fakeTime),
+			log:             logr.Discard(),
+		}
+	})
+
+	It("should get controller default scaleup interval", func() {
+		want := controllerScaleUpInterval
+		sa := &spannerv1beta1.SpannerAutoscaler{
+			Status: spannerv1beta1.SpannerAutoscalerStatus{
+				LastScaleTime:          metav1.Time{Time: fakeTime.Add(-time.Minute)},
+				CurrentProcessingUnits: 2000,
+				DesiredProcessingUnits: 1000,
+				InstanceState:          spannerv1beta1.InstanceStateReady,
+			},
+			Spec: spannerv1beta1.SpannerAutoscalerSpec{
+				ScaleConfig: spannerv1beta1.ScaleConfig{},
+			},
+		}
+		got := getOrConvertTimeDuration(sa.Spec.ScaleConfig.ScaleupInterval, testReconciler.scaleUpInterval)
+		Expect(got).To(Equal(want))
+	})
+
+	It("should override default scaleup interval with custom SpannerAutoscaler configuration value", func() {
+		want := 20 * time.Minute
+		scaleupInterval := metav1.Duration{
+			Duration: want,
+		}
+		sa := &spannerv1beta1.SpannerAutoscaler{
+			Status: spannerv1beta1.SpannerAutoscalerStatus{
+				LastScaleTime:          metav1.Time{Time: fakeTime.Add(-time.Minute)},
+				CurrentProcessingUnits: 2000,
+				DesiredProcessingUnits: 1000,
+				InstanceState:          spannerv1beta1.InstanceStateReady,
+			},
+			Spec: spannerv1beta1.SpannerAutoscalerSpec{
+				ScaleConfig: spannerv1beta1.ScaleConfig{
+					ScaleupInterval: &scaleupInterval,
+				},
+			},
+		}
+
+		got := getOrConvertTimeDuration(sa.Spec.ScaleConfig.ScaleupInterval, testReconciler.scaleUpInterval)
 		Expect(got).To(Equal(want))
 	})
 })

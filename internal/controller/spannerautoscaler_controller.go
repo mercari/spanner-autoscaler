@@ -557,7 +557,7 @@ func calcDesiredProcessingUnits(sa spannerv1beta1.SpannerAutoscaler) int {
 
 	// round up the scaleupStepSize to avoid intermediate values
 	// for example: 7000 -> 8000 instead of 7000 -> 7600
-	if suStepSize < 1000 && sa.Status.CurrentProcessingUnits > 1000 {
+	if suStepSize < 1000 && sa.Status.CurrentProcessingUnits+suStepSize > 1000 {
 		suStepSize = 1000
 	}
 
@@ -569,6 +569,10 @@ func calcDesiredProcessingUnits(sa spannerv1beta1.SpannerAutoscaler) int {
 	// in case of scaling up, check that we don't scale up beyond the ScaleupStepSize
 	if scaledUpPU := (sa.Status.CurrentProcessingUnits + suStepSize); scaledUpPU < desiredPU {
 		desiredPU = scaledUpPU
+
+		if 1000 < desiredPU && desiredPU%1000 != 0 {
+			desiredPU = ((desiredPU / 1000) + 1) * 1000
+		}
 	}
 
 	// keep the scaling between the specified min/max range
