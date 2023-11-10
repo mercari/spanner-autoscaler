@@ -108,7 +108,7 @@ type ScaleConfig struct {
 	// The cool down period between two consecutive scaledown operations. If this option is omitted, the value of the `--scale-down-interval` command line option is taken as the default value.
 	ScaledownInterval *metav1.Duration `json:"scaledownInterval,omitempty"`
 
-	// The maximum number of processing units which can be deleted in one scale-up operation. It can be a multiple of 100 for values < 1000, or a multiple of 1000 otherwise.
+	// The maximum number of processing units which can be added in one scale-up operation. It can be a multiple of 100 for values < 1000, or a multiple of 1000 otherwise.
 	// +kubebuilder:default=2000
 	ScaleupStepSize int `json:"scaleupStepSize,omitempty"`
 
