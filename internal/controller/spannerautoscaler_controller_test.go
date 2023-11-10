@@ -215,7 +215,6 @@ var _ = DescribeTable("Calculate Desired Processing Units",
 	Entry("should scale down with ScaledownStepSize 12", 25, 1000, 70, 300, 10000, 400, 2000, 600),
 	Entry("should scale down with ScaledownStepSize 13", 20, 2000, 50, 300, 10000, 200, 2000, 1000),
 	Entry("should scale down with ScaledownStepSize 14", 20, 2000, 75, 300, 10000, 200, 2000, 1000),
-
 	Entry("should scale up with ScaleupStepSize when currentPU is lower than 1000", 100, 100, 10, 100, 10000, 2000, 700, 800),
 	Entry("should scale up with ScaleupStepSize when currentPU is lower than 1000", 100, 300, 10, 100, 10000, 2000, 700, 1000),
 	Entry("should scale up with ScaleupStepSize when currentPU is lower than 1000", 100, 800, 10, 100, 10000, 2000, 700, 2000),
