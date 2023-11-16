@@ -109,7 +109,7 @@ type ScaleConfig struct {
 	ScaledownInterval *metav1.Duration `json:"scaledownInterval,omitempty"`
 
 	// The maximum number of processing units which can be added in one scale-up operation. It can be a multiple of 100 for values < 1000, or a multiple of 1000 otherwise.
-	// +kubebuilder:default=2000
+	// +kubebuilder:default=0
 	ScaleupStepSize int `json:"scaleupStepSize,omitempty"`
 
 	// How often autoscaler is reevaluated for scale up.

@@ -500,7 +500,7 @@ func (r *SpannerAutoscalerReconciler) needUpdateProcessingUnits(log logr.Logger,
 		log.Info("no need to scale", "currentPU", currentProcessingUnits, "currentCPU", sa.Status.CurrentHighPriorityCPUUtilization)
 		return false
 
-	case desiredProcessingUnits > currentProcessingUnits && r.clock.Now().Before(sa.Status.LastScaleTime.Time.Add(getOrConvertTimeDuration(sa.Spec.ScaleConfig.ScaleupInterval, r.scaleUpInterval))):
+	case desiredProcessingUnits > currentProcessingUnits && sa.Spec.ScaleConfig.ScaleupInterval.Milliseconds() != 0 && r.clock.Now().Before(sa.Status.LastScaleTime.Time.Add(getOrConvertTimeDuration(sa.Spec.ScaleConfig.ScaleupInterval, r.scaleUpInterval))):
 		log.Info("too short to scale up since last scale-up event",
 			"timeGap", now.Sub(sa.Status.LastScaleTime.Time).String(),
 			"now", now.String(),
@@ -567,7 +567,7 @@ func calcDesiredProcessingUnits(sa spannerv1beta1.SpannerAutoscaler) int {
 	}
 
 	// in case of scaling up, check that we don't scale up beyond the ScaleupStepSize
-	if scaledUpPU := (sa.Status.CurrentProcessingUnits + suStepSize); scaledUpPU < desiredPU {
+	if scaledUpPU := (sa.Status.CurrentProcessingUnits + suStepSize); suStepSize != 0 && scaledUpPU < desiredPU {
 		desiredPU = scaledUpPU
 
 		if 1000 < desiredPU && desiredPU%1000 != 0 {
