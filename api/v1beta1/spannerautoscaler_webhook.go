@@ -78,11 +78,6 @@ func (r *SpannerAutoscaler) Default() {
 		r.Spec.ScaleConfig.ScaledownStepSize = 2000
 	}
 
-	// set default ScaleupStepSize
-	if r.Spec.ScaleConfig.ScaleupStepSize == 0 {
-		r.Spec.ScaleConfig.ScaleupStepSize = 2000
-	}
-
 	log.V(1).Info("finished setting defaults for spannerautoscaler resource", "name", r.Name, "resource", r)
 }
 
