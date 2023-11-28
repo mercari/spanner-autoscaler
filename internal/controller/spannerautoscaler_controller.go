@@ -179,7 +179,7 @@ func NewSpannerAutoscalerReconciler(
 		schedulers:        make(map[types.NamespacedName]schedulerpkg.Scheduler),
 		crons:             make(map[types.NamespacedName]*cronpkg.Cron),
 		scaleDownInterval: 55 * time.Minute,
-		scaleUpInterval:   55 * time.Minute,
+		scaleUpInterval:   10 * time.Second,
 		clock:             utilclock.RealClock{},
 		log:               logger,
 	}
