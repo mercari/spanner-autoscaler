@@ -444,8 +444,8 @@ var _ = Describe("Get and overwrite scaleup interval", func() {
 		sa := &spannerv1beta1.SpannerAutoscaler{
 			Status: spannerv1beta1.SpannerAutoscalerStatus{
 				LastScaleTime:          metav1.Time{Time: fakeTime.Add(-time.Minute)},
-				CurrentProcessingUnits: 2000,
-				DesiredProcessingUnits: 1000,
+				CurrentProcessingUnits: 1000,
+				DesiredProcessingUnits: 2000,
 				InstanceState:          spannerv1beta1.InstanceStateReady,
 			},
 			Spec: spannerv1beta1.SpannerAutoscalerSpec{
