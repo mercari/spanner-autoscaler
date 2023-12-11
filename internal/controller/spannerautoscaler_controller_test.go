@@ -51,7 +51,6 @@ var _ = Describe("SpannerAutoscaler controller", func() {
 						Max: 10000,
 					},
 					ScaledownStepSize: 2000,
-					ScaleupStepSize:   2000,
 					TargetCPUUtilization: spannerv1beta1.TargetCPUUtilization{
 						HighPriority: 30,
 					},
