@@ -3,7 +3,7 @@ module github.com/mercari/spanner-autoscaler
 go 1.19
 
 require (
-	cloud.google.com/go/monitoring v1.16.1
+	cloud.google.com/go/monitoring v1.17.0
 	cloud.google.com/go/spanner v1.54.0
 	github.com/go-logr/logr v1.2.4
 	github.com/golang/protobuf v1.5.3
@@ -67,11 +67,11 @@ require (
 	go.opencensus.io v0.24.0 // indirect
 	go.uber.org/atomic v1.7.0 // indirect
 	go.uber.org/multierr v1.6.0 // indirect
-	golang.org/x/crypto v0.14.0 // indirect
+	golang.org/x/crypto v0.17.0 // indirect
 	golang.org/x/net v0.17.0 // indirect
-	golang.org/x/sys v0.13.0 // indirect
-	golang.org/x/term v0.13.0 // indirect
-	golang.org/x/text v0.13.0 // indirect
+	golang.org/x/sys v0.15.0 // indirect
+	golang.org/x/term v0.15.0 // indirect
+	golang.org/x/text v0.14.0 // indirect
 	golang.org/x/time v0.3.0 // indirect
 	golang.org/x/tools v0.12.0 // indirect
 	gomodules.xyz/jsonpatch/v2 v2.2.0 // indirect
