@@ -5,7 +5,7 @@ go 1.19
 require (
 	cloud.google.com/go/monitoring v1.17.0
 	cloud.google.com/go/spanner v1.54.0
-	github.com/go-logr/logr v1.2.4
+	github.com/go-logr/logr v1.3.0
 	github.com/golang/protobuf v1.5.3
 	github.com/google/go-cmp v0.6.0
 	github.com/google/uuid v1.4.0
