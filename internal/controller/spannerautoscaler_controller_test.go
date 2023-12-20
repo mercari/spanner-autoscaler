@@ -134,6 +134,19 @@ var _ = Describe("Check Update Nodes", func() {
 		}
 	})
 
+	It("need to scale down nodes because enough time has elapsed since last update", func() {
+		sa := &spannerv1beta1.SpannerAutoscaler{
+			Status: spannerv1beta1.SpannerAutoscalerStatus{
+				LastScaleTime:          metav1.Time{Time: fakeTime.Add(-2 * time.Hour)},
+				CurrentProcessingUnits: 2000,
+				DesiredProcessingUnits: 1000,
+				InstanceState:          spannerv1beta1.InstanceStateReady,
+			},
+		}
+		got := testReconciler.needUpdateProcessingUnits(testReconciler.log, sa, sa.Status.DesiredProcessingUnits, fakeTime)
+		Expect(got).To(BeTrue())
+	})
+
 	It("does not need to scale down nodes because enough time has not elapsed since last update", func() {
 		sa := &spannerv1beta1.SpannerAutoscaler{
 			Status: spannerv1beta1.SpannerAutoscalerStatus{
@@ -145,6 +158,24 @@ var _ = Describe("Check Update Nodes", func() {
 		}
 		got := testReconciler.needUpdateProcessingUnits(testReconciler.log, sa, sa.Status.DesiredProcessingUnits, fakeTime)
 		Expect(got).To(BeFalse())
+	})
+
+	It("need to scale up nodes because enough time has elapsed since last update", func() {
+		sa := &spannerv1beta1.SpannerAutoscaler{
+			Spec: spannerv1beta1.SpannerAutoscalerSpec{
+				ScaleConfig: spannerv1beta1.ScaleConfig{
+					ComputeType: spannerv1beta1.ComputeTypeNode,
+				},
+			},
+			Status: spannerv1beta1.SpannerAutoscalerStatus{
+				LastScaleTime:          metav1.Time{Time: fakeTime.Add(-2 * time.Hour)},
+				CurrentProcessingUnits: 1000,
+				DesiredProcessingUnits: 2000,
+				InstanceState:          spannerv1beta1.InstanceStateReady,
+			},
+		}
+		got := testReconciler.needUpdateProcessingUnits(testReconciler.log, sa, sa.Status.DesiredProcessingUnits, fakeTime)
+		Expect(got).To(BeTrue())
 	})
 
 	It("does not need to scale up nodes because enough time has not elapsed since last update", func() {
