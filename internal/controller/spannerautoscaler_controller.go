@@ -557,7 +557,8 @@ func calcDesiredProcessingUnits(sa spannerv1beta1.SpannerAutoscaler) int {
 
 	// round up the scaleupStepSize to avoid intermediate values
 	// for example: 7000 -> 8000 instead of 7000 -> 7600
-	if suStepSize < 1000 && sa.Status.CurrentProcessingUnits+suStepSize > 1000 {
+	// To keep compatibility, check if scaleupStepSize is not 0
+	if suStepSize != 0 && suStepSize < 1000 && sa.Status.CurrentProcessingUnits+suStepSize > 1000 {
 		suStepSize = 1000
 	}
 
