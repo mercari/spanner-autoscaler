@@ -402,110 +402,24 @@ var _ = Describe("Fetch Credentials", func() {
 	})
 })
 
-var _ = Describe("Get and overwrite scaledown interval", func() {
-	var testReconciler *SpannerAutoscalerReconciler
-	controllerScaleDownInterval := 55 * time.Minute
+var _ = Describe("Get and overwrite interval", func() {
+	defaultInterval := 55 * time.Minute
 
 	BeforeEach(func() {
-		By("Creating a test reconciler")
-		testReconciler = &SpannerAutoscalerReconciler{
-			scaleDownInterval: controllerScaleDownInterval,
-			clock:             testingclock.NewFakeClock(fakeTime),
-			log:               logr.Discard(),
-		}
+		By("Creating a test interval")
 	})
 
-	It("should get controller default scaledown interval", func() {
-		want := controllerScaleDownInterval
-		sa := &spannerv1beta1.SpannerAutoscaler{
-			Status: spannerv1beta1.SpannerAutoscalerStatus{
-				LastScaleTime:          metav1.Time{Time: fakeTime.Add(-time.Minute)},
-				CurrentProcessingUnits: 2000,
-				DesiredProcessingUnits: 1000,
-				InstanceState:          spannerv1beta1.InstanceStateReady,
-			},
-			Spec: spannerv1beta1.SpannerAutoscalerSpec{
-				ScaleConfig: spannerv1beta1.ScaleConfig{},
-			},
-		}
-		got := getOrConvertTimeDuration(sa.Spec.ScaleConfig.ScaledownInterval, testReconciler.scaleDownInterval)
+	It("should get defaultInterval if customInterval == nil", func() {
+		want := defaultInterval
+		got := getOrConvertTimeDuration(nil, defaultInterval)
 		Expect(got).To(Equal(want))
 	})
 
-	It("should override default scaledown interval with custom SpannerAutoscaler configuration value", func() {
+	It("should override defaultInterval with customInterval.Duration if customInterval != nil", func() {
 		want := 20 * time.Minute
-		scaledownInterval := metav1.Duration{
-			Duration: want,
-		}
-		sa := &spannerv1beta1.SpannerAutoscaler{
-			Status: spannerv1beta1.SpannerAutoscalerStatus{
-				LastScaleTime:          metav1.Time{Time: fakeTime.Add(-time.Minute)},
-				CurrentProcessingUnits: 2000,
-				DesiredProcessingUnits: 1000,
-				InstanceState:          spannerv1beta1.InstanceStateReady,
-			},
-			Spec: spannerv1beta1.SpannerAutoscalerSpec{
-				ScaleConfig: spannerv1beta1.ScaleConfig{
-					ScaledownInterval: &scaledownInterval,
-				},
-			},
-		}
-
-		got := getOrConvertTimeDuration(sa.Spec.ScaleConfig.ScaledownInterval, testReconciler.scaleDownInterval)
+		customInterval := &metav1.Duration{Duration: want}
+		got := getOrConvertTimeDuration(customInterval, defaultInterval)
 		Expect(got).To(Equal(want))
 	})
 })
 
-var _ = Describe("Get and overwrite scaleup interval", func() {
-	var testReconciler *SpannerAutoscalerReconciler
-	controllerScaleUpInterval := 55 * time.Minute
-
-	BeforeEach(func() {
-		By("Creating a test reconciler")
-		testReconciler = &SpannerAutoscalerReconciler{
-			scaleUpInterval: controllerScaleUpInterval,
-			clock:           testingclock.NewFakeClock(fakeTime),
-			log:             logr.Discard(),
-		}
-	})
-
-	It("should get controller default scaleup interval", func() {
-		want := controllerScaleUpInterval
-		sa := &spannerv1beta1.SpannerAutoscaler{
-			Status: spannerv1beta1.SpannerAutoscalerStatus{
-				LastScaleTime:          metav1.Time{Time: fakeTime.Add(-time.Minute)},
-				CurrentProcessingUnits: 1000,
-				DesiredProcessingUnits: 2000,
-				InstanceState:          spannerv1beta1.InstanceStateReady,
-			},
-			Spec: spannerv1beta1.SpannerAutoscalerSpec{
-				ScaleConfig: spannerv1beta1.ScaleConfig{},
-			},
-		}
-		got := getOrConvertTimeDuration(sa.Spec.ScaleConfig.ScaleupInterval, testReconciler.scaleUpInterval)
-		Expect(got).To(Equal(want))
-	})
-
-	It("should override default scaleup interval with custom SpannerAutoscaler configuration value", func() {
-		want := 20 * time.Minute
-		scaleupInterval := metav1.Duration{
-			Duration: want,
-		}
-		sa := &spannerv1beta1.SpannerAutoscaler{
-			Status: spannerv1beta1.SpannerAutoscalerStatus{
-				LastScaleTime:          metav1.Time{Time: fakeTime.Add(-time.Minute)},
-				CurrentProcessingUnits: 2000,
-				DesiredProcessingUnits: 1000,
-				InstanceState:          spannerv1beta1.InstanceStateReady,
-			},
-			Spec: spannerv1beta1.SpannerAutoscalerSpec{
-				ScaleConfig: spannerv1beta1.ScaleConfig{
-					ScaleupInterval: &scaleupInterval,
-				},
-			},
-		}
-
-		got := getOrConvertTimeDuration(sa.Spec.ScaleConfig.ScaleupInterval, testReconciler.scaleUpInterval)
-		Expect(got).To(Equal(want))
-	})
-})
