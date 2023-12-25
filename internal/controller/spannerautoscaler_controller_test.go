@@ -180,11 +180,6 @@ var _ = Describe("Check Update Nodes", func() {
 
 	It("does not need to scale up nodes because enough time has not elapsed since last update", func() {
 		sa := &spannerv1beta1.SpannerAutoscaler{
-			Spec: spannerv1beta1.SpannerAutoscalerSpec{
-				ScaleConfig: spannerv1beta1.ScaleConfig{
-					ComputeType: spannerv1beta1.ComputeTypeNode,
-				},
-			},
 			Status: spannerv1beta1.SpannerAutoscalerStatus{
 				LastScaleTime:          metav1.Time{Time: fakeTime.Add(-time.Minute)},
 				CurrentProcessingUnits: 1000,
@@ -404,10 +399,6 @@ var _ = Describe("Fetch Credentials", func() {
 
 var _ = Describe("Get and overwrite interval", func() {
 	defaultInterval := 55 * time.Minute
-
-	BeforeEach(func() {
-		By("Creating a test interval")
-	})
 
 	It("should get defaultInterval if customInterval == nil", func() {
 		want := defaultInterval
