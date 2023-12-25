@@ -60,7 +60,7 @@ var (
 	enableLeaderElection = flag.Bool("leader-elect", false, "Enable leader election for controller manager. Enabling this will ensure there is only one active controller manager.")
 	leaderElectionID     = flag.String("leader-elect-id", "", "Lease name for leader election.")
 	scaleDownInterval    = flag.Duration("scale-down-interval", 55*time.Minute, "The scale down interval.")
-	scaleUpInterval      = flag.Duration("scale-up-interval", 0, "The scale up interval.")
+	scaleUpInterval      = flag.Duration("scale-up-interval", 60*time.Second, "The scale up interval.")
 	configFile           = flag.String("config", "", "The controller will load its initial configuration from this file. "+
 		"Omit this flag to use the default configuration values. Command-line flags override configuration from this file.")
 )
