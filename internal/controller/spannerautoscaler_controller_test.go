@@ -240,18 +240,17 @@ var _ = DescribeTable("Calculate Desired Processing Units",
 	Entry("should scale down with ScaledownStepSize 12", 25, 1000, 70, 300, 10000, 400, 0, 600),
 	Entry("should scale down with ScaledownStepSize 13", 20, 2000, 50, 300, 10000, 200, 0, 1000),
 	Entry("should scale down with ScaledownStepSize 14", 20, 2000, 75, 300, 10000, 200, 0, 1000),
-	Entry("should scale up with ScaleupStepSize when currentPU is equal to zero", 80, 100, 10, 100, 10000, 2000, 0, 900),
-	Entry("should scale up with ScaleupStepSize when currentPU is equal to zero", 150, 100, 10, 100, 10000, 2000, 0, 2000),
-	Entry("should scale up with ScaleupStepSize when currentPU is lower than 1000", 100, 100, 10, 100, 10000, 2000, 700, 800),
-	Entry("should scale up with ScaleupStepSize when currentPU is lower than 1000", 100, 300, 10, 100, 10000, 2000, 700, 1000),
-	Entry("should scale up with ScaleupStepSize when currentPU is lower than 1000", 100, 800, 10, 100, 10000, 2000, 700, 2000),
-	Entry("should scale up with ScaleupStepSize when currentPU is lower than 1000", 300, 800, 100, 100, 10000, 2000, 2000, 3000),
-	Entry("should scale up with ScaleupStepSize when currentPU is equal to 1000", 300, 1000, 100, 100, 10000, 2000, 700, 2000),
-	Entry("should scale up with ScaleupStepSize when currentPU is equal to 1000", 400, 1000, 100, 100, 10000, 2000, 3000, 4000),
-	Entry("should scale up with ScaleupStepSize when currentPU is equal to 1000", 400, 1000, 100, 100, 10000, 2000, 4000, 5000),
-	Entry("should scale up with ScaleupStepSize when currentPU is more than 1000", 200, 2000, 100, 100, 10000, 2000, 700, 3000),
-	Entry("should scale up with ScaleupStepSize when currentPU is more than 1000", 200, 2000, 100, 100, 10000, 2000, 2000, 4000),
-	Entry("should scale up with ScaleupStepSize when currentPU is more than 1000", 200, 2000, 100, 100, 10000, 2000, 3000, 5000),
+	Entry("should scale up with ScaleupStepSize when currentPU is equal to zero 1", 80, 100, 10, 100, 10000, 2000, 0, 900),
+	Entry("should scale up with ScaleupStepSize when currentPU is equal to zero 2", 100, 100, 10, 100, 10000, 2000, 0, 2000),
+	Entry("should scale up with ScaleupStepSize when currentPU is lower than 1000 1", 80, 100, 10, 100, 10000, 2000, 700, 800),
+	Entry("should scale up with ScaleupStepSize when currentPU is lower than 1000 2", 100, 300, 10, 100, 10000, 2000, 700, 1000),
+	Entry("should scale up with ScaleupStepSize when currentPU is lower than 1000 3", 100, 800, 10, 100, 10000, 2000, 700, 2000),
+	Entry("should scale up with ScaleupStepSize when currentPU is equal to 1000 1", 100, 1000, 50, 100, 10000, 2000, 700, 2000),
+	Entry("should scale up with ScaleupStepSize when currentPU is equal to 1000 2", 100, 1000, 30, 100, 10000, 2000, 2000, 3000),
+	Entry("should scale up with ScaleupStepSize when currentPU is equal to 1000 3", 100, 1000, 10, 100, 10000, 2000, 3000, 4000),
+	Entry("should scale up with ScaleupStepSize when currentPU is more than 1000 1", 30, 2000, 20, 100, 10000, 2000, 700, 3000),
+	Entry("should scale up with ScaleupStepSize when currentPU is more than 1000 2", 20, 2000, 10, 100, 10000, 2000, 2000, 4000),
+	Entry("should scale up with ScaleupStepSize when currentPU is more than 1000 3", 100, 2000, 10, 100, 10000, 2000, 3000, 5000),
 )
 
 var _ = Describe("Fetch Credentials", func() {
@@ -413,4 +412,3 @@ var _ = Describe("Get and overwrite interval", func() {
 		Expect(got).To(Equal(want))
 	})
 })
-
