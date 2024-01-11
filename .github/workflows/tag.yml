@@ -9,7 +9,7 @@ jobs:
   bump-tag:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       pull-requests: write
     outputs:
       new_version: ${{ steps.bump-semver.outputs.new_version }}

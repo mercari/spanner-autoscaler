@@ -361,6 +361,18 @@ spec:
                       be deleted in one scale-down operation. It can be a multiple
                       of 100 for values < 1000, or a multiple of 1000 otherwise.
                     type: integer
+                  scaleupInterval:
+                    description: How often autoscaler is reevaluated for scale up.
+                      The warm up period between two consecutive scaleup operations.
+                      If this option is omitted, the value of the `--scale-up-interval`
+                      command line option is taken as the default value.
+                    type: string
+                  scaleupStepSize:
+                    default: 0
+                    description: The maximum number of processing units which can
+                      be added in one scale-up operation. It can be a multiple of
+                      100 for values < 1000, or a multiple of 1000 otherwise.
+                    type: integer
                   targetCPUUtilization:
                     description: 'The CPU utilization which the autoscaling will try
                       to achieve. Ref: [Spanner CPU utilization](https://cloud.google.com/spanner/docs/cpu-utilization#task-priority)'

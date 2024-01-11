@@ -65,6 +65,7 @@ type SpannerAutoscalerReconciler struct {
 	schedulers map[types.NamespacedName]schedulerpkg.Scheduler
 
 	scaleDownInterval time.Duration
+	scaleUpInterval   time.Duration
 
 	clock utilclock.Clock
 	log   logr.Logger
@@ -147,6 +148,19 @@ func (o withScaleDownInterval) applySpannerAutoscalerReconciler(r *SpannerAutosc
 	r.scaleDownInterval = o.scaleDownInterval
 }
 
+// Add scale-up-interval option for the autoscaler-reconciler
+func WithScaleUpInterval(scaleUpInterval time.Duration) Option {
+	return withScaleUpInterval{scaleUpInterval: scaleUpInterval}
+}
+
+type withScaleUpInterval struct {
+	scaleUpInterval time.Duration
+}
+
+func (o withScaleUpInterval) applySpannerAutoscalerReconciler(r *SpannerAutoscalerReconciler) {
+	r.scaleUpInterval = o.scaleUpInterval
+}
+
 // NewSpannerAutoscalerReconciler returns a new SpannerAutoscalerReconciler.
 func NewSpannerAutoscalerReconciler(
 	ctrlClient ctrlclient.Client,
@@ -165,6 +179,7 @@ func NewSpannerAutoscalerReconciler(
 		schedulers:        make(map[types.NamespacedName]schedulerpkg.Scheduler),
 		crons:             make(map[types.NamespacedName]*cronpkg.Cron),
 		scaleDownInterval: 55 * time.Minute,
+		scaleUpInterval:   60 * time.Second,
 		clock:             utilclock.RealClock{},
 		log:               logger,
 	}
@@ -485,7 +500,7 @@ func (r *SpannerAutoscalerReconciler) needUpdateProcessingUnits(log logr.Logger,
 		log.Info("no need to scale", "currentPU", currentProcessingUnits, "currentCPU", sa.Status.CurrentHighPriorityCPUUtilization)
 		return false
 
-	case desiredProcessingUnits > currentProcessingUnits && r.clock.Now().Before(sa.Status.LastScaleTime.Time.Add(10*time.Second)):
+	case currentProcessingUnits < desiredProcessingUnits && r.clock.Now().Before(sa.Status.LastScaleTime.Time.Add(getOrConvertTimeDuration(sa.Spec.ScaleConfig.ScaleupInterval, r.scaleUpInterval))):
 		log.Info("too short to scale up since last scale-up event",
 			"timeGap", now.Sub(sa.Status.LastScaleTime.Time).String(),
 			"now", now.String(),
@@ -532,6 +547,7 @@ func calcDesiredProcessingUnits(sa spannerv1beta1.SpannerAutoscaler) int {
 	}
 
 	sdStepSize := sa.Spec.ScaleConfig.ScaledownStepSize
+	suStepSize := sa.Spec.ScaleConfig.ScaleupStepSize
 
 	// round up the scaledownStepSize to avoid intermediate values
 	// for example: 8000 -> 7000 instead of 8000 -> 7400
@@ -539,9 +555,25 @@ func calcDesiredProcessingUnits(sa spannerv1beta1.SpannerAutoscaler) int {
 		sdStepSize = 1000
 	}
 
+	// round up the scaleupStepSize to avoid intermediate values
+	// for example: 7000 -> 8000 instead of 7000 -> 7600
+	// To keep compatibility, check if scaleupStepSize is not 0
+	if suStepSize != 0 && suStepSize < 1000 && sa.Status.CurrentProcessingUnits+suStepSize > 1000 {
+		suStepSize = 1000
+	}
+
 	// in case of scaling down, check that we don't scale down beyond the ScaledownStepSize
 	if scaledDownPU := (sa.Status.CurrentProcessingUnits - sdStepSize); desiredPU < scaledDownPU {
 		desiredPU = scaledDownPU
+	}
+
+	// in case of scaling up, check that we don't scale up beyond the ScaleupStepSize
+	if scaledUpPU := (sa.Status.CurrentProcessingUnits + suStepSize); suStepSize != 0 && scaledUpPU < desiredPU {
+		desiredPU = scaledUpPU
+
+		if 1000 < desiredPU && desiredPU%1000 != 0 {
+			desiredPU = ((desiredPU / 1000) + 1) * 1000
+		}
 	}
 
 	// keep the scaling between the specified min/max range

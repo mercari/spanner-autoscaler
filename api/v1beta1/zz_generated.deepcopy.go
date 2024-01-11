@@ -112,6 +112,11 @@ func (in *ScaleConfig) DeepCopyInto(out *ScaleConfig) {
 		*out = new(v1.Duration)
 		**out = **in
 	}
+	if in.ScaleupInterval != nil {
+		in, out := &in.ScaleupInterval, &out.ScaleupInterval
+		*out = new(v1.Duration)
+		**out = **in
+	}
 	out.TargetCPUUtilization = in.TargetCPUUtilization
 }
 

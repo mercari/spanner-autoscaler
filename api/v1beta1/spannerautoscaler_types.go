@@ -108,6 +108,14 @@ type ScaleConfig struct {
 	// The cool down period between two consecutive scaledown operations. If this option is omitted, the value of the `--scale-down-interval` command line option is taken as the default value.
 	ScaledownInterval *metav1.Duration `json:"scaledownInterval,omitempty"`
 
+	// The maximum number of processing units which can be added in one scale-up operation. It can be a multiple of 100 for values < 1000, or a multiple of 1000 otherwise.
+	// +kubebuilder:default=0
+	ScaleupStepSize int `json:"scaleupStepSize,omitempty"`
+
+	// How often autoscaler is reevaluated for scale up.
+	// The warm up period between two consecutive scaleup operations. If this option is omitted, the value of the `--scale-up-interval` command line option is taken as the default value.
+	ScaleupInterval *metav1.Duration `json:"scaleupInterval,omitempty"`
+
 	// The CPU utilization which the autoscaling will try to achieve. Ref: [Spanner CPU utilization](https://cloud.google.com/spanner/docs/cpu-utilization#task-priority)
 	TargetCPUUtilization TargetCPUUtilization `json:"targetCPUUtilization"`
 }
