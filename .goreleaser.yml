@@ -9,3 +9,4 @@ builds:
   - linux
   - darwin
   - windows
+  main: ./cmd
