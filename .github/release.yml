@@ -4,6 +4,8 @@ changelog:
   exclude:
     labels:
       - ignore-for-release-notes
+    authors:
+      - dependabot
   categories:
     - title: Breaking Changes 🛠
       labels:
