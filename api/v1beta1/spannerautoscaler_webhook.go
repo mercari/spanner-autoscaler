@@ -200,6 +200,18 @@ func (r *SpannerAutoscaler) validateScaleConfig() *field.Error {
 			"must be a multiple of 100 for values which are less than 1000")
 	}
 
+	if sc.ScaleupStepSize > 1000 && sc.ScaleupStepSize%1000 != 0 {
+		return field.Invalid(
+			field.NewPath("spec").Child("scaleConfig").Child("scaleupStepSize"),
+			sc.ScaleupStepSize,
+			"must be a multiple of 1000 for values which are greater than 1000")
+	} else if sc.ScaleupStepSize < 1000 && sc.ScaleupStepSize%100 != 0 {
+		return field.Invalid(
+			field.NewPath("spec").Child("scaleConfig").Child("scaleupStepSize"),
+			sc.ScaleupStepSize,
+			"must be a multiple of 100 for values which are less than 1000")
+	}
+
 	return nil
 }
 
