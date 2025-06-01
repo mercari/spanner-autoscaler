@@ -18,6 +18,7 @@ package v1beta1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
 // Type for specifying authentication methods
@@ -101,16 +102,18 @@ type ScaleConfig struct {
 	ProcessingUnits ScaleConfigPUs `json:"processingUnits,omitempty"`
 
 	// The maximum number of processing units which can be deleted in one scale-down operation. It can be a multiple of 100 for values < 1000, or a multiple of 1000 otherwise.
+	// It can also be a percentage of the total number of processing units at the start of the scale-down operation.
 	// +kubebuilder:default=2000
-	ScaledownStepSize int `json:"scaledownStepSize,omitempty"`
+	ScaledownStepSize intstr.IntOrString `json:"scaledownStepSize,omitempty"`
 
 	// How often autoscaler is reevaluated for scale down.
 	// The cool down period between two consecutive scaledown operations. If this option is omitted, the value of the `--scale-down-interval` command line option is taken as the default value.
 	ScaledownInterval *metav1.Duration `json:"scaledownInterval,omitempty"`
 
 	// The maximum number of processing units which can be added in one scale-up operation. It can be a multiple of 100 for values < 1000, or a multiple of 1000 otherwise.
+	// It can also be a percentage of the total number of processing units at the start of the scale-down operation.
 	// +kubebuilder:default=0
-	ScaleupStepSize int `json:"scaleupStepSize,omitempty"`
+	ScaleupStepSize intstr.IntOrString `json:"scaleupStepSize,omitempty"`
 
 	// How often autoscaler is reevaluated for scale up.
 	// The warm up period between two consecutive scaleup operations. If this option is omitted, the value of the `--scale-up-interval` command line option is taken as the default value.

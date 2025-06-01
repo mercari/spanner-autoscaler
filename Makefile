@@ -177,11 +177,11 @@ CRD_REF_DOCS = $(LOCALBIN)/crd-ref-docs
 
 ## Tool Versions
 KUSTOMIZE_VERSION ?= v5.0.0
-CONTROLLER_TOOLS_VERSION ?= v0.12.0
+CONTROLLER_TOOLS_VERSION ?= v0.18.0
 KIND_VERSION ?= v0.17.0
 KPT_VERSION ?= v1.0.0-beta.34
 GOLANGCI_LINT_VERSION ?= v1.53.1
-CRD_REF_DOCS_VERSION ?= v0.0.9
+CRD_REF_DOCS_VERSION ?= v0.1.0
 
 KUSTOMIZE_INSTALL_SCRIPT ?= "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh"
 

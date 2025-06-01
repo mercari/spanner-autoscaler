@@ -17,9 +17,13 @@ limitations under the License.
 package v1beta1
 
 import (
+	"strings"
+
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	ctrl "sigs.k8s.io/controller-runtime"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -74,8 +78,8 @@ func (r *SpannerAutoscaler) Default() {
 	}
 
 	// set default ScaledownStepSize
-	if r.Spec.ScaleConfig.ScaledownStepSize == 0 {
-		r.Spec.ScaleConfig.ScaledownStepSize = 2000
+	if r.Spec.ScaleConfig.ScaledownStepSize.IntValue() == 0 {
+		r.Spec.ScaleConfig.ScaledownStepSize = intstr.FromInt(2000)
 	}
 
 	log.V(1).Info("finished setting defaults for spannerautoscaler resource", "name", r.Name, "resource", r)
@@ -188,28 +192,60 @@ func (r *SpannerAutoscaler) validateScaleConfig() *field.Error {
 		}
 	}
 
-	if sc.ScaledownStepSize > 1000 && sc.ScaledownStepSize%1000 != 0 {
+	switch sc.ScaledownStepSize.Type {
+	case intstr.Int:
+		if sc.ScaledownStepSize.IntVal > 1000 && sc.ScaledownStepSize.IntVal%1000 != 0 {
+			return field.Invalid(
+				field.NewPath("spec").Child("scaleConfig").Child("scaledownStepSize"),
+				sc.ScaledownStepSize,
+				"must be a multiple of 1000 for values which are greater than 1000")
+		} else if sc.ScaledownStepSize.IntVal < 1000 && sc.ScaledownStepSize.IntVal%100 != 0 {
+			return field.Invalid(
+				field.NewPath("spec").Child("scaleConfig").Child("scaledownStepSize"),
+				sc.ScaledownStepSize,
+				"must be a multiple of 100 for values which are less than 1000")
+		}
+	case intstr.String:
+		msg := validation.IsValidPercent(sc.ScaledownStepSize.StrVal)
+		if len(msg) != 0 {
+			return field.Invalid(
+				field.NewPath("spec").Child("scaleConfig").Child("scaledownStepSize"),
+				sc.ScaledownStepSize,
+				strings.Join(msg, ", "))
+		}
+	default:
 		return field.Invalid(
 			field.NewPath("spec").Child("scaleConfig").Child("scaledownStepSize"),
 			sc.ScaledownStepSize,
-			"must be a multiple of 1000 for values which are greater than 1000")
-	} else if sc.ScaledownStepSize < 1000 && sc.ScaledownStepSize%100 != 0 {
-		return field.Invalid(
-			field.NewPath("spec").Child("scaleConfig").Child("scaledownStepSize"),
-			sc.ScaledownStepSize,
-			"must be a multiple of 100 for values which are less than 1000")
+			"must be an integer or percentage (e.g '5%%')")
 	}
 
-	if sc.ScaleupStepSize > 1000 && sc.ScaleupStepSize%1000 != 0 {
+	switch sc.ScaleupStepSize.Type {
+	case intstr.Int:
+		if sc.ScaleupStepSize.IntVal > 1000 && sc.ScaleupStepSize.IntVal%1000 != 0 {
+			return field.Invalid(
+				field.NewPath("spec").Child("scaleConfig").Child("scaleupStepSize"),
+				sc.ScaleupStepSize,
+				"must be a multiple of 1000 for values which are greater than 1000")
+		} else if sc.ScaleupStepSize.IntVal < 1000 && sc.ScaleupStepSize.IntVal%100 != 0 {
+			return field.Invalid(
+				field.NewPath("spec").Child("scaleConfig").Child("scaleupStepSize"),
+				sc.ScaleupStepSize,
+				"must be a multiple of 100 for values which are less than 1000")
+		}
+	case intstr.String:
+		msg := validation.IsValidPercent(sc.ScaleupStepSize.StrVal)
+		if len(msg) != 0 {
+			return field.Invalid(
+				field.NewPath("spec").Child("scaleConfig").Child("scaleupStepSize"),
+				sc.ScaleupStepSize,
+				strings.Join(msg, ", "))
+		}
+	default:
 		return field.Invalid(
 			field.NewPath("spec").Child("scaleConfig").Child("scaleupStepSize"),
 			sc.ScaleupStepSize,
-			"must be a multiple of 1000 for values which are greater than 1000")
-	} else if sc.ScaleupStepSize < 1000 && sc.ScaleupStepSize%100 != 0 {
-		return field.Invalid(
-			field.NewPath("spec").Child("scaleConfig").Child("scaleupStepSize"),
-			sc.ScaleupStepSize,
-			"must be a multiple of 100 for values which are less than 1000")
+			"must be an integer or percentage (e.g '5%%')")
 	}
 
 	return nil

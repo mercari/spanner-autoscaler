@@ -5,6 +5,7 @@ import (
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/pointer"
 	"sigs.k8s.io/controller-runtime/pkg/conversion"
 )
@@ -60,7 +61,7 @@ func (src *SpannerAutoscaler) ConvertTo(dstRaw conversion.Hub) error {
 		}
 	}
 	if src.Spec.MaxScaleDownNodes != nil {
-		scaleConfig.ScaledownStepSize = int(*src.Spec.MaxScaleDownNodes) * 1000
+		scaleConfig.ScaledownStepSize = intstr.FromInt(int(*src.Spec.MaxScaleDownNodes) * 1000)
 	}
 	scaleConfig.TargetCPUUtilization = v1beta1.TargetCPUUtilization{
 		HighPriority: int(*src.Spec.TargetCPUUtilization.HighPriority),
@@ -128,7 +129,11 @@ func (dst *SpannerAutoscaler) ConvertFrom(srcRaw conversion.Hub) error {
 		dst.Spec.MaxProcessingUnits = pointer.Int32(int32(src.Spec.ScaleConfig.ProcessingUnits.Max))
 	}
 
-	dst.Spec.MaxScaleDownNodes = pointer.Int32(int32(src.Spec.ScaleConfig.ScaledownStepSize / 1000))
+	if src.Spec.ScaleConfig.ScaledownStepSize.Type == intstr.Int {
+		dst.Spec.MaxScaleDownNodes = pointer.Int32(src.Spec.ScaleConfig.ScaledownStepSize.IntVal / 1000)
+	} else {
+		dst.Spec.MaxScaleDownNodes = pointer.Int32(2) // From the default scaledownStepSize value
+	}
 	dst.Spec.TargetCPUUtilization = TargetCPUUtilization{
 		HighPriority: pointer.Int32(int32(src.Spec.ScaleConfig.TargetCPUUtilization.HighPriority)),
 	}

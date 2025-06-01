@@ -7,6 +7,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
 var _ = Describe("SpannerAutoscaler validation", func() {
@@ -128,14 +129,14 @@ var _ = Describe("SpannerAutoscaler validation", func() {
 
 				Context("scale down step size is set", func() {
 					BeforeEach(func() {
-						testResource.Spec.ScaleConfig.ScaledownStepSize = 1000
+						testResource.Spec.ScaleConfig.ScaledownStepSize = intstr.FromInt(1000)
 					})
 
 					It("should set compute type 'processing-units' automatically", func() {
 						result, err := createResource(testResource)
 						Expect(err).ToNot(HaveOccurred())
 						Expect(result.Spec.ScaleConfig.ComputeType).To(Equal(ComputeTypePU))
-						Expect(result.Spec.ScaleConfig.ScaledownStepSize).To(Equal(1000))
+						Expect(result.Spec.ScaleConfig.ScaledownStepSize.IntVal).To(Equal(int32(1000)))
 					})
 				})
 
@@ -144,7 +145,7 @@ var _ = Describe("SpannerAutoscaler validation", func() {
 						result, err := createResource(testResource)
 						Expect(err).ToNot(HaveOccurred())
 						Expect(result.Spec.ScaleConfig.ComputeType).To(Equal(ComputeTypePU))
-						Expect(result.Spec.ScaleConfig.ScaledownStepSize).To(Equal(2000))
+						Expect(result.Spec.ScaleConfig.ScaledownStepSize.IntVal).To(Equal(int32(2000)))
 					})
 				})
 			})
@@ -159,7 +160,7 @@ var _ = Describe("SpannerAutoscaler validation", func() {
 
 				Context("scale down step size is set", func() {
 					BeforeEach(func() {
-						testResource.Spec.ScaleConfig.ScaledownStepSize = 1000
+						testResource.Spec.ScaleConfig.ScaledownStepSize = intstr.FromInt(1000)
 					})
 
 					It("should set compute type and processing unit configuration automatically", func() {
@@ -168,7 +169,7 @@ var _ = Describe("SpannerAutoscaler validation", func() {
 						Expect(result.Spec.ScaleConfig.ComputeType).To(Equal(ComputeTypeNode))
 						Expect(result.Spec.ScaleConfig.ProcessingUnits.Min).To(Equal(1000))
 						Expect(result.Spec.ScaleConfig.ProcessingUnits.Max).To(Equal(10000))
-						Expect(result.Spec.ScaleConfig.ScaledownStepSize).To(Equal(1000))
+						Expect(result.Spec.ScaleConfig.ScaledownStepSize.IntVal).To(Equal(int32(1000)))
 					})
 				})
 
@@ -179,7 +180,7 @@ var _ = Describe("SpannerAutoscaler validation", func() {
 						Expect(result.Spec.ScaleConfig.ComputeType).To(Equal(ComputeTypeNode))
 						Expect(result.Spec.ScaleConfig.ProcessingUnits.Min).To(Equal(1000))
 						Expect(result.Spec.ScaleConfig.ProcessingUnits.Max).To(Equal(10000))
-						Expect(result.Spec.ScaleConfig.ScaledownStepSize).To(Equal(2000))
+						Expect(result.Spec.ScaleConfig.ScaledownStepSize.IntVal).To(Equal(int32(2000)))
 					})
 				})
 			})
