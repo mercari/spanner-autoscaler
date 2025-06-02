@@ -128,6 +128,7 @@ func (c *client) UpdateInstance(ctx context.Context, instance *Instance) error {
 
 	log.V(1).Info("got spanner instance", "received instance", i, "patch", instance)
 
+	//nolint:gosec // G115
 	i.ProcessingUnits = int32(instance.ProcessingUnits)
 	log.V(1).Info("updating spanner instance", "desired instance", i, "patch", instance)
 
