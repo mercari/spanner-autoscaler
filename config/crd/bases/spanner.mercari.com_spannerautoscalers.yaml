@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.12.0
+    controller-gen.kubebuilder.io/version: v0.18.0
   name: spannerautoscalers.spanner.mercari.com
 spec:
   group: spanner.mercari.com
@@ -55,14 +55,19 @@ spec:
         description: SpannerAutoscaler is the Schema for the spannerautoscalers API
         properties:
           apiVersion:
-            description: 'APIVersion defines the versioned schema of this representation
-              of an object. Servers should convert recognized schemas to the latest
-              internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
             type: string
           kind:
-            description: 'Kind is a string value representing the REST resource this
-              object represents. Servers may infer this from the endpoint the client
-              submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
             type: string
           metadata:
             type: object
@@ -81,14 +86,16 @@ spec:
                 - targetServiceAccount
                 type: object
               maxNodes:
-                description: upper limit for the number of nodes that can be set by
-                  the autoscaler. It cannot be smaller than MinNodes.
+                description: |-
+                  upper limit for the number of nodes that can be set by the autoscaler.
+                  It cannot be smaller than MinNodes.
                 format: int32
                 minimum: 1
                 type: integer
               maxProcessingUnits:
-                description: upper limit for the number of nodes that can be set by
-                  the autoscaler. It cannot be smaller than minProcessingUnits.
+                description: |-
+                  upper limit for the number of nodes that can be set by the autoscaler.
+                  It cannot be smaller than minProcessingUnits.
                 format: int32
                 minimum: 100
                 multipleOf: 100
@@ -125,8 +132,9 @@ spec:
                 - projectId
                 type: object
               serviceAccountSecretRef:
-                description: reference for service account secret. If not specified,
-                  use ADC of the controller.
+                description: |-
+                  reference for service account secret.
+                  If not specified, use ADC of the controller.
                 properties:
                   key:
                     minLength: 1
@@ -144,7 +152,8 @@ spec:
                 description: target average CPU utilization for Spanner.
                 properties:
                   highPriority:
-                    description: fraction of the requested CPU that should be utilized/used,
+                    description: |-
+                      fraction of the requested CPU that should be utilized/used,
                       e.g. 70 means that 70% of the requested CPU should be in use.
                     format: int32
                     maximum: 100
@@ -184,9 +193,9 @@ spec:
               instanceState:
                 type: string
               lastScaleTime:
-                description: last time the SpannerAutoscaler scaled the number of
-                  Spanner nodes. used by the autoscaler to control how often the number
-                  of nodes is changed.
+                description: |-
+                  last time the SpannerAutoscaler scaled the number of Spanner nodes.
+                  used by the autoscaler to control how often the number of nodes is changed.
                 format: date-time
                 type: string
               lastSyncTime:
@@ -235,14 +244,19 @@ spec:
         description: SpannerAutoscaler is the Schema for the spannerautoscalers API
         properties:
           apiVersion:
-            description: 'APIVersion defines the versioned schema of this representation
-              of an object. Servers should convert recognized schemas to the latest
-              internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
             type: string
           kind:
-            description: 'Kind is a string value representing the REST resource this
-              object represents. Servers may infer this from the endpoint the client
-              submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
             type: string
           metadata:
             type: object
@@ -253,10 +267,10 @@ spec:
                 description: Authentication details for the Spanner instance
                 properties:
                   iamKeySecret:
-                    description: Details of the k8s secret which contains the GCP
-                      service account authentication key (in JSON). [[Ref](https://cloud.google.com/kubernetes-engine/docs/tutorials/authenticating-to-cloud-platform)].
-                      This is a pointer because structs with string slices can not
-                      be compared for zero values
+                    description: |-
+                      Details of the k8s secret which contains the GCP service account authentication key (in JSON).
+                      [[Ref](https://cloud.google.com/kubernetes-engine/docs/tutorials/authenticating-to-cloud-platform)].
+                      This is a pointer because structs with string slices can not be compared for zero values
                     properties:
                       key:
                         description: Name of the yaml 'key' under which the authentication
@@ -275,14 +289,15 @@ spec:
                     - name
                     type: object
                   impersonateConfig:
-                    description: Details of the GCP service account which will be
-                      impersonated, for authentication to GCP. This can used only
-                      on GKE clusters, when workload identity is enabled. [[Ref](https://cloud.google.com/kubernetes-engine/docs/how-to/workload-identity)].
-                      This is a pointer because structs with string slices can not
-                      be compared for zero values
+                    description: |-
+                      Details of the GCP service account which will be impersonated, for authentication to GCP.
+                      This can used only on GKE clusters, when workload identity is enabled.
+                      [[Ref](https://cloud.google.com/kubernetes-engine/docs/how-to/workload-identity)].
+                      This is a pointer because structs with string slices can not be compared for zero values
                     properties:
                       delegates:
-                        description: Delegation chain for the service account impersonation.
+                        description: |-
+                          Delegation chain for the service account impersonation.
                           [[Ref](https://pkg.go.dev/google.golang.org/api/impersonate#hdr-Required_IAM_roles)]
                         items:
                           type: string
@@ -294,9 +309,9 @@ spec:
                     - targetServiceAccount
                     type: object
                   type:
-                    description: Authentication method to be used for GCP authentication.
-                      If `ImpersonateConfig` as well as `IAMKeySecret` is nil, this
-                      will be set to use ADC be default.
+                    description: |-
+                      Authentication method to be used for GCP authentication.
+                      If `ImpersonateConfig` as well as `IAMKeySecret` is nil, this will be set to use ADC be default.
                     enum:
                     - gcp-sa-key
                     - impersonation
@@ -308,12 +323,9 @@ spec:
                   instance
                 properties:
                   computeType:
-                    description: Whether to use `nodes` or `processing-units` for
-                      scaling. This is only used at the time of CustomResource creation.
-                      If compute capacity is provided in `nodes`, then it is automatically
-                      converted to `processing-units` at the time of resource creation,
-                      and internally, only `ProcessingUnits` are used for computations
-                      and scaling.
+                    description: |-
+                      Whether to use `nodes` or `processing-units` for scaling.
+                      This is only used at the time of CustomResource creation. If compute capacity is provided in `nodes`, then it is automatically converted to `processing-units` at the time of resource creation, and internally, only `ProcessingUnits` are used for computations and scaling.
                     enum:
                     - nodes
                     - processing-units
@@ -350,38 +362,32 @@ spec:
                     - min
                     type: object
                   scaledownInterval:
-                    description: How often autoscaler is reevaluated for scale down.
-                      The cool down period between two consecutive scaledown operations.
-                      If this option is omitted, the value of the `--scale-down-interval`
-                      command line option is taken as the default value.
+                    description: |-
+                      How often autoscaler is reevaluated for scale down.
+                      The cool down period between two consecutive scaledown operations. If this option is omitted, the value of the `--scale-down-interval` command line option is taken as the default value.
                     type: string
                   scaledownStepSize:
                     anyOf:
                     - type: integer
                     - type: string
                     default: 2000
-                    description: The maximum number of processing units which can
-                      be deleted in one scale-down operation. It can be a multiple
-                      of 100 for values < 1000, or a multiple of 1000 otherwise. It
-                      can also be a percentage of the total number of processing units
-                      at the start of the scale-down operation.
+                    description: |-
+                      The maximum number of processing units which can be deleted in one scale-down operation. It can be a multiple of 100 for values < 1000, or a multiple of 1000 otherwise.
+                      It can also be a percentage of the total number of processing units at the start of the scale-down operation.
                     x-kubernetes-int-or-string: true
                   scaleupInterval:
-                    description: How often autoscaler is reevaluated for scale up.
-                      The warm up period between two consecutive scaleup operations.
-                      If this option is omitted, the value of the `--scale-up-interval`
-                      command line option is taken as the default value.
+                    description: |-
+                      How often autoscaler is reevaluated for scale up.
+                      The warm up period between two consecutive scaleup operations. If this option is omitted, the value of the `--scale-up-interval` command line option is taken as the default value.
                     type: string
                   scaleupStepSize:
                     anyOf:
                     - type: integer
                     - type: string
                     default: 0
-                    description: The maximum number of processing units which can
-                      be added in one scale-up operation. It can be a multiple of
-                      100 for values < 1000, or a multiple of 1000 otherwise. It can
-                      also be a percentage of the total number of processing units
-                      at the start of the scale-down operation.
+                    description: |-
+                      The maximum number of processing units which can be added in one scale-up operation. It can be a multiple of 100 for values < 1000, or a multiple of 1000 otherwise.
+                      It can also be a percentage of the total number of processing units at the start of the scale-down operation.
                     x-kubernetes-int-or-string: true
                   targetCPUUtilization:
                     description: 'The CPU utilization which the autoscaling will try
@@ -467,9 +473,9 @@ spec:
                 description: State of the Cloud Spanner instance
                 type: string
               lastScaleTime:
-                description: Last time the `SpannerAutoscaler` scaled the number of
-                  Spanner nodes. Used by the autoscaler to control how often the number
-                  of nodes are changed
+                description: |-
+                  Last time the `SpannerAutoscaler` scaled the number of Spanner nodes.
+                  Used by the autoscaler to control how often the number of nodes are changed
                 format: date-time
                 type: string
               lastSyncTime:
