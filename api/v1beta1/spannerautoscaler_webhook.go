@@ -217,7 +217,7 @@ func (r *SpannerAutoscaler) validateScaleConfig() *field.Error {
 		return field.Invalid(
 			field.NewPath("spec").Child("scaleConfig").Child("scaledownStepSize"),
 			sc.ScaledownStepSize,
-			"must be an integer or percentage (e.g '5%%')")
+			"must be an integer or percentage (e.g '5%')")
 	}
 
 	switch sc.ScaleupStepSize.Type {
@@ -245,7 +245,7 @@ func (r *SpannerAutoscaler) validateScaleConfig() *field.Error {
 		return field.Invalid(
 			field.NewPath("spec").Child("scaleConfig").Child("scaleupStepSize"),
 			sc.ScaleupStepSize,
-			"must be an integer or percentage (e.g '5%%')")
+			"must be an integer or percentage (e.g '5%')")
 	}
 
 	return nil
