@@ -23,6 +23,8 @@ rules:
   - spanner.mercari.com
   resources:
   - spannerautoscaler/status
+  - spannerautoscalers/status
+  - spannerautoscaleschedules/status
   verbs:
   - get
   - patch
@@ -31,31 +33,6 @@ rules:
   - spanner.mercari.com
   resources:
   - spannerautoscalers
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - spanner.mercari.com
-  resources:
-  - spannerautoscalers/finalizers
-  verbs:
-  - update
-- apiGroups:
-  - spanner.mercari.com
-  resources:
-  - spannerautoscalers/status
-  verbs:
-  - get
-  - patch
-  - update
-- apiGroups:
-  - spanner.mercari.com
-  resources:
   - spannerautoscaleschedules
   verbs:
   - create
@@ -68,14 +45,7 @@ rules:
 - apiGroups:
   - spanner.mercari.com
   resources:
+  - spannerautoscalers/finalizers
   - spannerautoscaleschedules/finalizers
   verbs:
-  - update
-- apiGroups:
-  - spanner.mercari.com
-  resources:
-  - spannerautoscaleschedules/status
-  verbs:
-  - get
-  - patch
   - update

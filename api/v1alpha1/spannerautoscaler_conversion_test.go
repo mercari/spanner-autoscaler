@@ -7,6 +7,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/pointer"
 )
 
@@ -123,7 +124,7 @@ var _ = Describe("ConvertTo", func() {
 					Min: 1,
 					Max: 10,
 				},
-				ScaledownStepSize: 1000,
+				ScaledownStepSize: intstr.FromInt(1000),
 				TargetCPUUtilization: v1beta1.TargetCPUUtilization{
 					HighPriority: 50,
 				},
@@ -136,7 +137,7 @@ var _ = Describe("ConvertTo", func() {
 					Min: 100,
 					Max: 1000,
 				},
-				ScaledownStepSize: 1000,
+				ScaledownStepSize: intstr.FromInt(1000),
 				TargetCPUUtilization: v1beta1.TargetCPUUtilization{
 					HighPriority: 50,
 				},
@@ -253,7 +254,7 @@ var _ = Describe("ConvertFrom", func() {
 	DescribeTable("scaleConfig",
 		func(scaleConfig v1beta1.ScaleConfig, expectedMinNodes, expectedMaxNodes, expectedMinPU, expectedMaxPU *int32) {
 			src.Spec.ScaleConfig = scaleConfig
-			src.Spec.ScaleConfig.ScaledownStepSize = 1000
+			src.Spec.ScaleConfig.ScaledownStepSize = intstr.FromInt(1000)
 			src.Spec.ScaleConfig.TargetCPUUtilization = v1beta1.TargetCPUUtilization{
 				HighPriority: 50,
 			}

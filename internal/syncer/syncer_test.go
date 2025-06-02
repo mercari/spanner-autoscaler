@@ -14,6 +14,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	testingclock "k8s.io/utils/clock/testing"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
@@ -72,7 +73,7 @@ func Test_syncer_syncResource(t *testing.T) {
 						Min: 1,
 						Max: 3,
 					},
-					ScaledownStepSize: 1000,
+					ScaledownStepSize: intstr.FromInt(1000),
 					TargetCPUUtilization: spannerv1beta1.TargetCPUUtilization{
 						HighPriority: 50,
 					},

@@ -1,6 +1,6 @@
 module github.com/mercari/spanner-autoscaler
 
-go 1.19
+go 1.24
 
 require (
 	cloud.google.com/go/monitoring v1.18.0
