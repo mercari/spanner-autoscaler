@@ -18,9 +18,9 @@ package main
 import (
 	"flag"
 	"os"
+	"sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"time"
-
-	ctrl "sigs.k8s.io/controller-runtime"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -55,14 +55,13 @@ func init() {
 }
 
 var (
-	metricsAddr          = flag.String("metrics-bind-address", "", "The address the metric endpoint binds to.")
-	probeAddr            = flag.String("health-probe-bind-address", "", "The address the probe endpoint binds to.")
+	metricsAddr          = flag.String("metrics-bind-address", "127.0.0.1:8080", "The address the metric endpoint binds to.")
+	probeAddr            = flag.String("health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	enableLeaderElection = flag.Bool("leader-elect", false, "Enable leader election for controller manager. Enabling this will ensure there is only one active controller manager.")
-	leaderElectionID     = flag.String("leader-elect-id", "", "Lease name for leader election.")
-	scaleDownInterval    = flag.Duration("scale-down-interval", 55*time.Minute, "The scale down interval.")
+	leaderElectionID     = flag.String("leader-elect-id", "54b82eb3.mercari.com", "Lease name for leader election.")
+	webhookPort          = flag.Int("webhook-port", 9443, "The address the probe endpoint binds to.")
+	scaleDownInterval    = flag.Duration("scale-down-interval", 55*time.Minute, "The port of the webhook.")
 	scaleUpInterval      = flag.Duration("scale-up-interval", 60*time.Second, "The scale up interval.")
-	configFile           = flag.String("config", "", "The controller will load its initial configuration from this file. "+
-		"Omit this flag to use the default configuration values. Command-line flags override configuration from this file.")
 )
 
 const (
@@ -98,23 +97,19 @@ func main() {
 	}
 
 	options := ctrlmanager.Options{
-		Scheme:                 scheme,
-		LeaderElection:         *enableLeaderElection,
-		LeaderElectionID:       *leaderElectionID,
-		MetricsBindAddress:     *metricsAddr,
+		Scheme:           scheme,
+		LeaderElection:   *enableLeaderElection,
+		LeaderElectionID: *leaderElectionID,
+		Metrics: server.Options{
+			BindAddress: *metricsAddr,
+		},
+		WebhookServer: webhook.NewServer(webhook.Options{
+			Port: *webhookPort,
+			// TODO: remove this when `v1beta1` is stable and tested
+			// Only for development
+			// CertDir: "./bin/dummytls",
+		}),
 		HealthProbeBindAddress: *probeAddr,
-
-		// TODO: remove this when `v1beta1` is stable and tested
-		// Only for development
-		// CertDir: "./bin/dummytls",
-	}
-	if *configFile != "" {
-		// TODO: discussion thread for deprecating `ComponentConfig`: https://github.com/kubernetes-sigs/controller-runtime/issues/895, move to some alternatives when a conclusion is reached
-		options, err = options.AndFrom(ctrl.ConfigFile().AtPath(*configFile)) //nolint:staticcheck
-		if err != nil {
-			setupLog.Error(err, "unable to load the config file")
-			os.Exit(exitCode)
-		}
 	}
 
 	mgr, err := ctrlmanager.New(cfg, options)
