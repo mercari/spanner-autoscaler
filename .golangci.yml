@@ -71,10 +71,9 @@ linters:
   disable-all: true
   enable:
     - bodyclose
-    - deadcode
     # - depguard # disable this temporarily until we confirm and create an allow-list of the imported modules
     - dogsled
-    - exportloopref
+    - copyloopvar
     - errcheck
     - gocritic
     - gocyclo
@@ -85,19 +84,16 @@ linters:
     - gosec
     - gosimple
     - govet
-    - ifshort
     - ineffassign
     - misspell
     - nakedret
     - nolintlint
     - rowserrcheck
     - staticcheck
-    - structcheck
     - stylecheck
     - typecheck
     - unconvert
     - unused
-    - varcheck
     - whitespace
 
 # Configuration of issue rules
