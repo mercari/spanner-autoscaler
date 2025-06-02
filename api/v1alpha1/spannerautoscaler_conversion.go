@@ -95,7 +95,7 @@ func (src *SpannerAutoscaler) ConvertTo(dstRaw conversion.Hub) error {
 	return nil
 }
 
-//nolint:stylecheck
+//nolint:stylecheck,gosec
 func (dst *SpannerAutoscaler) ConvertFrom(srcRaw conversion.Hub) error {
 	src := srcRaw.(*v1beta1.SpannerAutoscaler)
 	log.V(2).Info("begin conversion from v1beta1 to v1alpha1", "src", src)
