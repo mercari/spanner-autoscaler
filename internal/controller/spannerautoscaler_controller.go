@@ -34,7 +34,6 @@ import (
 	utilclock "k8s.io/utils/clock"
 	ctrlbuilder "sigs.k8s.io/controller-runtime/pkg/builder"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
-	ctrlcontroller "sigs.k8s.io/controller-runtime/pkg/controller"
 	ctrlmanager "sigs.k8s.io/controller-runtime/pkg/manager"
 	ctrlreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -366,13 +365,8 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 
 // SetupWithManager sets up the controller with ctrlmanager.Manager.
 func (r *SpannerAutoscalerReconciler) SetupWithManager(mgr ctrlmanager.Manager) error {
-	opts := ctrlcontroller.Options{
-		Reconciler: r,
-	}
-
 	return ctrlbuilder.ControllerManagedBy(mgr).
 		For(&spannerv1beta1.SpannerAutoscaler{}).
-		WithOptions(opts).
 		Complete(r)
 }
 

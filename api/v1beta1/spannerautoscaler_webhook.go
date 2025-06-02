@@ -17,6 +17,7 @@ limitations under the License.
 package v1beta1
 
 import (
+	"context"
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -28,6 +29,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
 
 // log is for logging in this package.
@@ -41,10 +43,10 @@ func (r *SpannerAutoscaler) SetupWebhookWithManager(mgr ctrl.Manager) error {
 
 //+kubebuilder:webhook:path=/mutate-spanner-mercari-com-v1beta1-spannerautoscaler,mutating=true,failurePolicy=fail,sideEffects=None,groups=spanner.mercari.com,resources=spannerautoscalers,verbs=create;update,versions=v1beta1,name=mspannerautoscaler.kb.io,admissionReviewVersions=v1
 
-var _ webhook.Defaulter = &SpannerAutoscaler{}
+var _ admission.CustomDefaulter = &SpannerAutoscaler{}
 
 // Default implements webhook.Defaulter so a webhook will be registered for the type
-func (r *SpannerAutoscaler) Default() {
+func (r *SpannerAutoscaler) Default(ctx context.Context, obj runtime.Object) error {
 	log.Info("default", "name", r.Name)
 	log.V(1).Info("received spannerautoscaler resource for setting defaults", "name", r.Name, "resource", r)
 
@@ -83,35 +85,37 @@ func (r *SpannerAutoscaler) Default() {
 	}
 
 	log.V(1).Info("finished setting defaults for spannerautoscaler resource", "name", r.Name, "resource", r)
+
+	return nil
 }
 
 //+kubebuilder:webhook:path=/validate-spanner-mercari-com-v1beta1-spannerautoscaler,mutating=false,failurePolicy=fail,sideEffects=None,groups=spanner.mercari.com,resources=spannerautoscalers,verbs=create;update,versions=v1beta1,name=vspannerautoscaler.kb.io,admissionReviewVersions=v1
 
-var _ webhook.Validator = &SpannerAutoscaler{}
+var _ webhook.CustomValidator = &SpannerAutoscaler{}
 
 // ValidateCreate implements webhook.Validator so a webhook will be registered for the type
-func (r *SpannerAutoscaler) ValidateCreate() error {
+func (r *SpannerAutoscaler) ValidateCreate(ctx context.Context, obj runtime.Object) (warnings admission.Warnings, err error) {
 	log.Info("validate create", "name", r.Name)
 	log.V(1).Info("validating creation of SpannerAutoscaler resource", "name", r.Name, "resource", r)
 
 	allErrs := r.validateSpec()
 
 	if len(allErrs) == 0 {
-		return nil
+		return nil, nil
 	}
 
-	return apierrors.NewInvalid(
+	return nil, apierrors.NewInvalid(
 		schema.GroupKind{Group: "spanner.mercari.com", Kind: "SpannerAutoscaler"},
 		r.Name, allErrs)
 }
 
 // ValidateUpdate implements webhook.Validator so a webhook will be registered for the type
-func (r *SpannerAutoscaler) ValidateUpdate(old runtime.Object) error {
+func (r *SpannerAutoscaler) ValidateUpdate(ctx context.Context, oldObj runtime.Object, newObj runtime.Object) (warnings admission.Warnings, err error) {
 	log.Info("validate update", "name", r.Name)
 	log.V(1).Info("validating updates to SpannerAutoscaler resource", "name", r.Name, "resource", r)
 
 	var allErrs field.ErrorList
-	oldResource := old.(*SpannerAutoscaler)
+	oldResource := oldObj.(*SpannerAutoscaler)
 
 	if oldResource.Spec.TargetInstance != r.Spec.TargetInstance {
 		err := field.Invalid(
@@ -124,20 +128,20 @@ func (r *SpannerAutoscaler) ValidateUpdate(old runtime.Object) error {
 	allErrs = append(allErrs, r.validateSpec()...)
 
 	if len(allErrs) == 0 {
-		return nil
+		return nil, nil
 	}
 
-	return apierrors.NewInvalid(
+	return nil, apierrors.NewInvalid(
 		schema.GroupKind{Group: "spanner.mercari.com", Kind: "SpannerAutoscaler"},
 		r.Name, allErrs)
 }
 
 // ValidateDelete implements webhook.Validator so a webhook will be registered for the type
-func (r *SpannerAutoscaler) ValidateDelete() error {
+func (r *SpannerAutoscaler) ValidateDelete(ctx context.Context, obj runtime.Object) (warnings admission.Warnings, err error) {
 	log.Info("validate delete", "name", r.Name)
 
 	// TODO(user): fill in your validation logic upon object deletion.
-	return nil
+	return nil, nil
 }
 
 func (r *SpannerAutoscaler) validateSpec() (allErrs field.ErrorList) {
