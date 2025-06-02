@@ -554,7 +554,7 @@ func calcDesiredProcessingUnits(sa spannerv1beta1.SpannerAutoscaler) int {
 	}
 	suStepSize, suStepSizeErr := intstr.GetScaledValueFromIntOrPercent(&sa.Spec.ScaleConfig.ScaleupStepSize, sa.Status.CurrentProcessingUnits, false)
 	if suStepSizeErr != nil {
-		// unlikely, revert to the default value if sdStepSize cannot be resolved
+		// unlikely, revert to the default value if suStepSize cannot be resolved
 		suStepSize = 0
 	}
 
