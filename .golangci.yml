@@ -8,10 +8,10 @@ run:
   # Default value is empty list, but next dirs are always skipped independently
   # From this option's value:
   #   	vendor$, third_party$, testdata$, examples$, Godeps$, builtin$
-  skip-dirs:
+  exclude-dirs:
     - bin
 
-  skip-files:
+  exclude-files:
     - ".*_test.go"
 
   timeout: 10m
@@ -20,8 +20,6 @@ run:
 linters-settings:
 
   govet:
-    # Report about shadowed variables
-    check-shadowing: true
 
   golint:
     # Minimal confidence for issues, default is 0.8
