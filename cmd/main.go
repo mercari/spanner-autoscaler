@@ -61,6 +61,9 @@ var (
 	leaderElectionID     = flag.String("leader-elect-id", "", "Lease name for leader election.")
 	scaleDownInterval    = flag.Duration("scale-down-interval", 55*time.Minute, "The scale down interval.")
 	scaleUpInterval      = flag.Duration("scale-up-interval", 60*time.Second, "The scale up interval.")
+	certDir              = flag.String("cert-dir", "", "Directory containing TLS certificates for the webhook server. Used for local development with webhook forwarding (see docs/development.md).")
+	spannerEndpoint      = flag.String("spanner-endpoint", "", "Override the Spanner API endpoint (e.g. localhost:9010 for the emulator).")
+	metricsEndpoint      = flag.String("metrics-endpoint", "", "Override the Cloud Monitoring API endpoint (e.g. localhost:9090 for the emulator).")
 	configFile           = flag.String("config", "", "The controller will load its initial configuration from this file. "+
 		"Omit this flag to use the default configuration values. Command-line flags override configuration from this file.")
 )
@@ -103,10 +106,7 @@ func main() {
 		LeaderElectionID:       *leaderElectionID,
 		MetricsBindAddress:     *metricsAddr,
 		HealthProbeBindAddress: *probeAddr,
-
-		// TODO: remove this when `v1beta1` is stable and tested
-		// Only for development
-		// CertDir: "./bin/dummytls",
+		CertDir:                *certDir,
 	}
 	if *configFile != "" {
 		// TODO: discussion thread for deprecating `ComponentConfig`: https://github.com/kubernetes-sigs/controller-runtime/issues/895, move to some alternatives when a conclusion is reached
@@ -133,23 +133,28 @@ func main() {
 		os.Exit(exitCode)
 	}
 
+	reconcilerOpts := []controller.Option{
+		controller.WithLog(log),
+		controller.WithScaleDownInterval(*scaleDownInterval),
+		controller.WithScaleUpInterval(*scaleUpInterval),
+	}
+	if *spannerEndpoint != "" {
+		reconcilerOpts = append(reconcilerOpts, controller.WithSpannerEndpoint(*spannerEndpoint))
+	}
+	if *metricsEndpoint != "" {
+		reconcilerOpts = append(reconcilerOpts, controller.WithMetricsEndpoint(*metricsEndpoint))
+	}
+
 	sar := controller.NewSpannerAutoscalerReconciler(
 		mgr.GetClient(),
 		mgr.GetAPIReader(),
 		mgr.GetScheme(),
 		mgr.GetEventRecorderFor("spannerautoscaler-controller"),
 		log,
-		controller.WithLog(log),
-		controller.WithScaleDownInterval(*scaleDownInterval),
-		controller.WithScaleUpInterval(*scaleUpInterval),
+		reconcilerOpts...,
 	)
 	if err := sar.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "SpannerAutoscaler")
-		os.Exit(exitCode)
-	}
-
-	if err = (&spannerv1beta1.SpannerAutoscaler{}).SetupWebhookWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create webhook", "webhook", "SpannerAutoscaler")
 		os.Exit(exitCode)
 	}
 
@@ -164,9 +169,18 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "SpannerAutoscaleSchedule")
 		os.Exit(exitCode)
 	}
-	if err = (&spannerv1beta1.SpannerAutoscaleSchedule{}).SetupWebhookWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create webhook", "webhook", "SpannerAutoscaleSchedule")
-		os.Exit(exitCode)
+
+	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
+		if err = (&spannerv1beta1.SpannerAutoscaler{}).SetupWebhookWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create webhook", "webhook", "SpannerAutoscaler")
+			os.Exit(exitCode)
+		}
+		if err = (&spannerv1beta1.SpannerAutoscaleSchedule{}).SetupWebhookWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create webhook", "webhook", "SpannerAutoscaleSchedule")
+			os.Exit(exitCode)
+		}
+	} else {
+		setupLog.Info("webhooks disabled (ENABLE_WEBHOOKS=false)")
 	}
 	//+kubebuilder:scaffold:builder
 

@@ -68,6 +68,18 @@ type SpannerAutoscalerReconciler struct {
 	scaleDownInterval time.Duration
 	scaleUpInterval   time.Duration
 
+	// spannerEndpoint and metricsEndpoint allow overriding the API endpoints
+	// for testing with emulators. When both are set, authentication is skipped.
+	spannerEndpoint string
+	metricsEndpoint string
+
+	// spannerClientFactory overrides how Spanner clients are constructed.
+	// Defaults to spanner.NewClient. Useful in tests to inject a fake client.
+	spannerClientFactory SpannerClientFactory
+
+	// syncInterval overrides the default syncer polling interval (used in tests).
+	syncInterval time.Duration
+
 	clock utilclock.Clock
 	log   logr.Logger
 	mu    sync.RWMutex
@@ -160,6 +172,62 @@ type withScaleUpInterval struct {
 
 func (o withScaleUpInterval) applySpannerAutoscalerReconciler(r *SpannerAutoscalerReconciler) {
 	r.scaleUpInterval = o.scaleUpInterval
+}
+
+// WithSpannerEndpoint overrides the Spanner API endpoint (for emulator testing).
+func WithSpannerEndpoint(endpoint string) Option {
+	return withSpannerEndpoint{endpoint: endpoint}
+}
+
+type withSpannerEndpoint struct {
+	endpoint string
+}
+
+func (o withSpannerEndpoint) applySpannerAutoscalerReconciler(r *SpannerAutoscalerReconciler) {
+	r.spannerEndpoint = o.endpoint
+}
+
+// SpannerClientFactory is a constructor function for spanner.Client.
+// The default is spanner.NewClient; tests may substitute a fake.
+type SpannerClientFactory func(ctx context.Context, projectID, instanceID string, opts ...spanner.Option) (spanner.Client, error)
+
+// WithSpannerClientFactory overrides the factory used to create Spanner clients.
+func WithSpannerClientFactory(f SpannerClientFactory) Option {
+	return withSpannerClientFactory{factory: f}
+}
+
+type withSpannerClientFactory struct {
+	factory SpannerClientFactory
+}
+
+func (o withSpannerClientFactory) applySpannerAutoscalerReconciler(r *SpannerAutoscalerReconciler) {
+	r.spannerClientFactory = o.factory
+}
+
+// WithMetricsEndpoint overrides the Cloud Monitoring API endpoint (for emulator testing).
+func WithMetricsEndpoint(endpoint string) Option {
+	return withMetricsEndpoint{endpoint: endpoint}
+}
+
+type withMetricsEndpoint struct {
+	endpoint string
+}
+
+func (o withMetricsEndpoint) applySpannerAutoscalerReconciler(r *SpannerAutoscalerReconciler) {
+	r.metricsEndpoint = o.endpoint
+}
+
+// WithSyncInterval overrides the syncer polling interval (for testing).
+func WithSyncInterval(interval time.Duration) Option {
+	return withSyncInterval{interval: interval}
+}
+
+type withSyncInterval struct {
+	interval time.Duration
+}
+
+func (o withSyncInterval) applySpannerAutoscalerReconciler(r *SpannerAutoscalerReconciler) {
+	r.syncInterval = o.interval
 }
 
 // NewSpannerAutoscalerReconciler returns a new SpannerAutoscalerReconciler.
@@ -364,6 +432,16 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 	return ctrlreconcile.Result{}, nil
 }
 
+// StopAll stops all active syncers. Useful in tests to ensure syncer goroutines
+// are cleaned up when the manager shuts down.
+func (r *SpannerAutoscalerReconciler) StopAll() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, s := range r.syncers {
+		s.Stop()
+	}
+}
+
 // SetupWithManager sets up the controller with ctrlmanager.Manager.
 func (r *SpannerAutoscalerReconciler) SetupWithManager(mgr ctrlmanager.Manager) error {
 	opts := ctrlcontroller.Options{
@@ -451,34 +529,46 @@ func parseNamespacedName(name string, defaultNamespace string) types.NamespacedN
 }
 
 func (r *SpannerAutoscalerReconciler) startSyncer(ctx context.Context, log logr.Logger, nn types.NamespacedName, projectID, instanceID string, credentials *syncerpkg.Credentials) error {
-	ts, err := credentials.TokenSource(ctx)
+	useEmulators := r.spannerEndpoint != "" && r.metricsEndpoint != ""
+
+	var spannerOpts []spanner.Option
+	var metricsOpts []metrics.Option
+
+	if useEmulators {
+		spannerOpts = append(spannerOpts, spanner.WithEndpoint(r.spannerEndpoint))
+		metricsOpts = append(metricsOpts, metrics.WithEndpoint(r.metricsEndpoint))
+	} else {
+		ts, err := credentials.TokenSource(ctx)
+		if err != nil {
+			return err
+		}
+		spannerOpts = append(spannerOpts, spanner.WithTokenSource(ts))
+		metricsOpts = append(metricsOpts, metrics.WithTokenSource(ts))
+	}
+
+	spannerOpts = append(spannerOpts, spanner.WithLog(log))
+	metricsOpts = append(metricsOpts, metrics.WithLog(log))
+
+	spannerFactory := SpannerClientFactory(spanner.NewClient)
+	if r.spannerClientFactory != nil {
+		spannerFactory = r.spannerClientFactory
+	}
+	spannerClient, err := spannerFactory(ctx, projectID, instanceID, spannerOpts...)
 	if err != nil {
 		return err
 	}
 
-	spannerClient, err := spanner.NewClient(
-		ctx,
-		projectID,
-		instanceID,
-		spanner.WithTokenSource(ts),
-		spanner.WithLog(log),
-	)
+	metricsClient, err := metrics.NewClient(ctx, projectID, instanceID, metricsOpts...)
 	if err != nil {
 		return err
 	}
 
-	metricsClient, err := metrics.NewClient(
-		ctx,
-		projectID,
-		instanceID,
-		metrics.WithTokenSource(ts),
-		metrics.WithLog(log),
-	)
-	if err != nil {
-		return err
+	syncerOpts := []syncerpkg.Option{syncerpkg.WithLog(log)}
+	if r.syncInterval > 0 {
+		syncerOpts = append(syncerOpts, syncerpkg.WithInterval(r.syncInterval))
 	}
 
-	s, err := syncerpkg.New(ctx, r.ctrlClient, nn, credentials, r.recorder, spannerClient, metricsClient, syncerpkg.WithLog(log))
+	s, err := syncerpkg.New(ctx, r.ctrlClient, nn, credentials, r.recorder, spannerClient, metricsClient, syncerOpts...)
 	if err != nil {
 		return err
 	}
