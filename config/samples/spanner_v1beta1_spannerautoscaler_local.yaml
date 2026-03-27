@@ -1,0 +1,24 @@
+# Local development sample for use with the emulators (make tilt-up).
+#
+# The monitoring emulator runs the default scenario (scenarios/default.yaml)
+# which simulates load at 1000 PU and expects the controller to scale up/down.
+#
+# Authentication is set to ADC; the Spanner and Monitoring emulators do not
+# perform real auth checks, so no credentials are needed.
+apiVersion: spanner.mercari.com/v1beta1
+kind: SpannerAutoscaler
+metadata:
+  name: spannerautoscaler-sample-beta
+  namespace: spanner-autoscaler
+spec:
+  targetInstance:
+    projectId: beta-project
+    instanceId: beta-instance
+  authentication:
+    type: adc
+  scaleConfig:
+    processingUnits:
+      min: 100
+      max: 10000
+    targetCPUUtilization:
+      highPriority: 40

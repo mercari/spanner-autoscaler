@@ -24,3 +24,13 @@ Dockerfile.cross
 *.swp
 *.swo
 *~
+
+# Tilt local config (use tilt_config.json.example as a template)
+tilt_config.json
+
+# GCP service account key (never commit credentials)
+service-account-key.json
+
+# Compiled emulator binaries (produced by go build)
+/main
+/monitoring-emulator

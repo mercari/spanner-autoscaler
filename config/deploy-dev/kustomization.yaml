@@ -9,7 +9,7 @@ patches:
   patch: |-
     - op: add
       path: /spec/dnsNames/0
-      value: dummy.local
+      value: host.docker.internal
 - target:
     version: v1
     kind: Deployment
@@ -27,7 +27,7 @@ patches:
       path: /spec
       value:
         type: ExternalName
-        externalName: dummy.local
+        externalName: host.docker.internal
 - target:
     version: v1
     kind: CustomResourceDefinition
