@@ -42,6 +42,14 @@ This runs the following steps in order:
 
 After `make tilt-down`, running `make tilt-up` starts from a completely clean state.
 
+To stream the controller logs while Tilt is running:
+
+```console
+$ make logs-controller
+```
+
+This runs `tilt logs -f controller` and follows the output until interrupted with `Ctrl-C`.
+
 ### What Tilt manages
 
 | Component | Details |

@@ -128,6 +128,10 @@ tilt-down: tilt kind ## Tear down Tilt, stop emulators, delete the kind cluster,
 	$(KIND) delete cluster --name $(KIND_CLUSTER_NAME)
 	rm -rf $(WEBHOOK_CERT_DIR)
 
+.PHONY: logs-controller
+logs-controller: tilt ## Stream controller logs (requires Tilt to be running).
+	$(TILT) logs -f controller
+
 .PHONY: kind-cluster-delete
 kind-cluster-delete: kind ## Delete the kind cluster created for development
 	@$(KIND) delete cluster --name $(KIND_CLUSTER_NAME)
