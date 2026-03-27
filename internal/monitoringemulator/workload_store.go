@@ -9,7 +9,7 @@ import "sync"
 //	workload = cpu_utilization × processing_units  (constant)
 //	current_cpu = workload / current_processing_units
 //
-// This models the behaviour of real Cloud Spanner: scaling up PUs reduces CPU
+// This models the behavior of real Cloud Spanner: scaling up PUs reduces CPU
 // utilization proportionally for the same workload.
 type WorkloadEntry struct {
 	Workload     float64 // ReferenceCPU * ReferencePU

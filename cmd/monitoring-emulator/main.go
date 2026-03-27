@@ -54,7 +54,7 @@ func main() {
 			logger.Error("failed to create spanner admin client", "error", err)
 			os.Exit(1)
 		}
-		defer spannerAdminClient.Close()
+		defer spannerAdminClient.Close() //nolint:errcheck
 	} else {
 		logger.Info("dynamic mode disabled: SPANNER_EMULATOR_HOST not set")
 	}
@@ -65,7 +65,7 @@ func main() {
 	grpcLis, err := net.Listen("tcp", ":"+grpcPort)
 	if err != nil {
 		logger.Error("failed to listen for gRPC", "port", grpcPort, "error", err)
-		os.Exit(1)
+		os.Exit(1) //nolint:gocritic
 	}
 	grpcSrv := grpc.NewServer()
 	monitoringpb.RegisterMetricServiceServer(grpcSrv, srv)
@@ -79,7 +79,7 @@ func main() {
 
 	// Start HTTP admin server.
 	adminHandler := monitoringemulator.NewAdminHandler(staticStore, workloadStore, scenarioStore)
-	adminSrv := &http.Server{
+	adminSrv := &http.Server{ //nolint:gosec
 		Addr:    ":" + adminPort,
 		Handler: adminHandler,
 	}

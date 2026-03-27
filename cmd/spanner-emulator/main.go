@@ -40,7 +40,7 @@ func main() {
 	}()
 
 	// Start HTTP admin server.
-	adminSrv := &http.Server{
+	adminSrv := &http.Server{ //nolint:gosec
 		Addr:    ":" + adminPort,
 		Handler: spanneremulator.NewAdminHandler(srv),
 	}

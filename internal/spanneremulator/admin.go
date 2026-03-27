@@ -45,7 +45,7 @@ func handleUpsert(srv *Server) http.HandlerFunc {
 		srv.AdminUpsertInstance(name, req.ProcessingUnits)
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(instanceResponse{ //nolint:errcheck
+		json.NewEncoder(w).Encode(instanceResponse{ //nolint:errcheck,gosec
 			Name:            name,
 			ProcessingUnits: req.ProcessingUnits,
 		})

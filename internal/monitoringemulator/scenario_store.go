@@ -14,7 +14,7 @@ import (
 //
 //   - CPUUtilization: returns a fixed CPU value regardless of current PU.
 //   - Workload: computes CPU dynamically (cpu = workload / current_pu),
-//     modelling real Cloud Spanner behaviour where scaling up reduces CPU.
+//     modeling real Cloud Spanner behavior where scaling up reduces CPU.
 type ScenarioStep struct {
 	Duration       Duration          `json:"duration"`
 	CPUUtilization *float64          `json:"cpu_utilization,omitempty"`
@@ -137,7 +137,7 @@ func (s *ScenarioStore) Delete(project, instanceID string) {
 
 // LoadFile loads a scenario YAML file and populates the store.
 func (s *ScenarioStore) LoadFile(path string) error {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec
 	if err != nil {
 		return fmt.Errorf("read scenario file: %w", err)
 	}

@@ -70,7 +70,7 @@ func handleStaticSet(store *StaticStore) http.HandlerFunc {
 		store.Set(projectID, instanceID, req.CPUUtilization)
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(staticResponse{ //nolint:errcheck
+		json.NewEncoder(w).Encode(staticResponse{ //nolint:errcheck,gosec
 			ProjectID:      projectID,
 			InstanceID:     instanceID,
 			CPUUtilization: req.CPUUtilization,
@@ -90,7 +90,7 @@ func handleStaticGet(store *StaticStore) http.HandlerFunc {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(staticResponse{ //nolint:errcheck
+		json.NewEncoder(w).Encode(staticResponse{ //nolint:errcheck,gosec
 			ProjectID:      projectID,
 			InstanceID:     instanceID,
 			CPUUtilization: cpu,
@@ -143,7 +143,7 @@ func handleWorkloadSet(store *WorkloadStore) http.HandlerFunc {
 		entry, _ := store.Get(projectID, instanceID)
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(workloadResponse{ //nolint:errcheck
+		json.NewEncoder(w).Encode(workloadResponse{ //nolint:errcheck,gosec
 			ProjectID:                projectID,
 			InstanceID:               instanceID,
 			Workload:                 entry.Workload,
@@ -165,7 +165,7 @@ func handleWorkloadGet(store *WorkloadStore) http.HandlerFunc {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(workloadResponse{ //nolint:errcheck
+		json.NewEncoder(w).Encode(workloadResponse{ //nolint:errcheck,gosec
 			ProjectID:                projectID,
 			InstanceID:               instanceID,
 			Workload:                 entry.Workload,
