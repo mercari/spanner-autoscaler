@@ -67,6 +67,10 @@ func (s *MetricServiceServer) ListTimeSeries(
 		return nil, err
 	}
 
+	if extractMetricKind(req.GetFilter()) == MetricKindUnknown {
+		return nil, fmt.Errorf("unsupported metric type in filter: %s", req.GetFilter())
+	}
+
 	// Priority 1: ScenarioStore (time-based scenario mode)
 	if step, ok := s.scenarioStore.Get(projectID, instanceID); ok {
 		if step.Workload != nil {
