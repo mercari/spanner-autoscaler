@@ -69,7 +69,8 @@ type SpannerAutoscalerReconciler struct {
 	scaleUpInterval   time.Duration
 
 	// spannerEndpoint and metricsEndpoint allow overriding the API endpoints
-	// for testing with emulators. When both are set, authentication is skipped.
+	// independently (e.g. point one client at an emulator while the other uses
+	// real GCP). When set, the corresponding client skips token-based auth.
 	spannerEndpoint string
 	metricsEndpoint string
 
@@ -529,21 +530,27 @@ func parseNamespacedName(name string, defaultNamespace string) types.NamespacedN
 }
 
 func (r *SpannerAutoscalerReconciler) startSyncer(ctx context.Context, log logr.Logger, nn types.NamespacedName, projectID, instanceID string, credentials *syncerpkg.Credentials) error {
-	useEmulators := r.spannerEndpoint != "" && r.metricsEndpoint != ""
-
 	var spannerOpts []spanner.Option
 	var metricsOpts []metrics.Option
 
-	if useEmulators {
-		spannerOpts = append(spannerOpts, spanner.WithEndpoint(r.spannerEndpoint))
-		metricsOpts = append(metricsOpts, metrics.WithEndpoint(r.metricsEndpoint))
-	} else {
+	// Fetch a token source only when at least one client needs real GCP auth.
+	if r.spannerEndpoint == "" || r.metricsEndpoint == "" {
 		ts, err := credentials.TokenSource(ctx)
 		if err != nil {
 			return err
 		}
-		spannerOpts = append(spannerOpts, spanner.WithTokenSource(ts))
-		metricsOpts = append(metricsOpts, metrics.WithTokenSource(ts))
+		if r.spannerEndpoint == "" {
+			spannerOpts = append(spannerOpts, spanner.WithTokenSource(ts))
+		}
+		if r.metricsEndpoint == "" {
+			metricsOpts = append(metricsOpts, metrics.WithTokenSource(ts))
+		}
+	}
+	if r.spannerEndpoint != "" {
+		spannerOpts = append(spannerOpts, spanner.WithEndpoint(r.spannerEndpoint))
+	}
+	if r.metricsEndpoint != "" {
+		metricsOpts = append(metricsOpts, metrics.WithEndpoint(r.metricsEndpoint))
 	}
 
 	spannerOpts = append(spannerOpts, spanner.WithLog(log))
@@ -620,7 +627,7 @@ func (r *SpannerAutoscalerReconciler) needUpdateProcessingUnits(log logr.Logger,
 func calcDesiredProcessingUnits(sa spannerv1beta1.SpannerAutoscaler) int {
 	totalCPU := sa.Status.CurrentHighPriorityCPUUtilization * sa.Status.CurrentProcessingUnits
 
-	requiredPU := totalCPU / sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority
+	requiredPU := totalCPU / *sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority
 
 	var desiredPU int
 
