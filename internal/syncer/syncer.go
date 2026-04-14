@@ -261,7 +261,13 @@ func (s *syncer) syncResource(ctx context.Context) error {
 		"spannerautoscaler", sa,
 	)
 
-	instance, instanceMetrics, err := s.getInstanceInfo(ctx)
+	// Determine metric type from spec.
+	metricType := metrics.MetricTypeHighPriority
+	if sa.Spec.ScaleConfig.TargetCPUUtilization.Total != nil {
+		metricType = metrics.MetricTypeTotal
+	}
+
+	instance, instanceMetrics, err := s.getInstanceInfo(ctx, metricType)
 	if err != nil {
 		s.recorder.Eventf(&sa, corev1.EventTypeWarning, "FailedSpannerAPICall", err.Error())
 		log.Error(err, "unable to get instance info")
@@ -269,9 +275,10 @@ func (s *syncer) syncResource(ctx context.Context) error {
 	}
 
 	log.V(1).Info("spanner instance status",
-		"current processing untis", instance.ProcessingUnits,
+		"current processing units", instance.ProcessingUnits,
 		"instance state", instance.InstanceState,
 		"high priority cpu utilization", instanceMetrics.CurrentHighPriorityCPUUtilization,
+		"total cpu utilization", instanceMetrics.CurrentTotalCPUUtilization,
 	)
 
 	err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
@@ -280,7 +287,10 @@ func (s *syncer) syncResource(ctx context.Context) error {
 		}
 		sa.Status.CurrentProcessingUnits = instance.ProcessingUnits
 		sa.Status.InstanceState = instance.InstanceState
+		// Reset both fields and set only the one that corresponds to the current metric type.
+		// This prevents stale data when switching between metric types.
 		sa.Status.CurrentHighPriorityCPUUtilization = instanceMetrics.CurrentHighPriorityCPUUtilization
+		sa.Status.CurrentTotalCPUUtilization = instanceMetrics.CurrentTotalCPUUtilization
 		sa.Status.LastSyncTime = metav1.Time{Time: s.clock.Now()}
 
 		return s.ctrlClient.Status().Update(ctx, &sa)
@@ -298,7 +308,7 @@ func (s *syncer) syncResource(ctx context.Context) error {
 	return nil
 }
 
-func (s *syncer) getInstanceInfo(ctx context.Context) (*spanner.Instance, *metrics.InstanceMetrics, error) {
+func (s *syncer) getInstanceInfo(ctx context.Context, metricType metrics.MetricType) (*spanner.Instance, *metrics.InstanceMetrics, error) {
 	log := s.log
 	eg, ctx := errgroup.WithContext(ctx)
 
@@ -323,13 +333,14 @@ func (s *syncer) getInstanceInfo(ctx context.Context) (*spanner.Instance, *metri
 
 	eg.Go(func() error {
 		var err error
-		instanceMetrics, err = s.metricsClient.GetInstanceMetrics(ctx)
+		instanceMetrics, err = s.metricsClient.GetInstanceMetrics(ctx, metricType)
 		if err != nil {
 			log.Error(err, "unable to get spanner instance metrics with client")
 			return err
 		}
 		log.V(1).Info("successfully got spanner instance metrics with metrics client",
 			"high priority cpu utilization", instanceMetrics.CurrentHighPriorityCPUUtilization,
+			"total cpu utilization", instanceMetrics.CurrentTotalCPUUtilization,
 		)
 		return nil
 	})
