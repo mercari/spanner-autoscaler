@@ -43,7 +43,7 @@ var _ = Describe("SpannerAutoscaler validation", func() {
 				},
 				ScaleConfig: ScaleConfig{
 					TargetCPUUtilization: TargetCPUUtilization{
-						HighPriority: 30,
+						HighPriority: intPtr(30),
 					},
 				},
 			},
@@ -218,6 +218,55 @@ var _ = Describe("SpannerAutoscaler validation", func() {
 			})
 		})
 
+		Describe("TargetCPUUtilization", func() {
+			BeforeEach(func() {
+				testResource.Spec.ScaleConfig.ProcessingUnits = ScaleConfigPUs{
+					Min: 1000,
+					Max: 10000,
+				}
+			})
+
+			Context("only total is set", func() {
+				BeforeEach(func() {
+					testResource.Spec.ScaleConfig.TargetCPUUtilization = TargetCPUUtilization{
+						Total: intPtr(60),
+					}
+				})
+
+				It("should succeed", func() {
+					_, err := createResource(testResource)
+					Expect(err).ToNot(HaveOccurred())
+				})
+			})
+
+			Context("both highPriority and total are set", func() {
+				BeforeEach(func() {
+					testResource.Spec.ScaleConfig.TargetCPUUtilization = TargetCPUUtilization{
+						HighPriority: intPtr(30),
+						Total:        intPtr(60),
+					}
+				})
+
+				It("should return validation error", func() {
+					_, err := createResource(testResource)
+					Expect(err).To(HaveOccurred())
+					Expect(err.Error()).To(ContainSubstring("exactly one of 'highPriority' or 'total' must be specified"))
+				})
+			})
+
+			Context("neither highPriority nor total is set", func() {
+				BeforeEach(func() {
+					testResource.Spec.ScaleConfig.TargetCPUUtilization = TargetCPUUtilization{}
+				})
+
+				It("should return validation error", func() {
+					_, err := createResource(testResource)
+					Expect(err).To(HaveOccurred())
+					Expect(err.Error()).To(ContainSubstring("exactly one of 'highPriority' or 'total' must be specified"))
+				})
+			})
+		})
+
 		Describe("ScaleConfig", func() {
 			BeforeEach(func() {
 				testResource.Spec.Authentication = Authentication{
@@ -275,6 +324,8 @@ var _ = Describe("SpannerAutoscaler validation", func() {
 		})
 	})
 })
+
+func intPtr(i int) *int { return &i }
 
 func createResource(r *SpannerAutoscaler) (finalResource *SpannerAutoscaler, err error) {
 	finalResource = &SpannerAutoscaler{}
