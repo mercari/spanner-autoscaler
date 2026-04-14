@@ -25,7 +25,7 @@ func NewFakeClient(metrics *InstanceMetrics) *FakeClient {
 }
 
 // GetInstanceMetrics implements Client.
-func (c *FakeClient) GetInstanceMetrics(ctx context.Context) (*InstanceMetrics, error) {
+func (c *FakeClient) GetInstanceMetrics(ctx context.Context, _ MetricType) (*InstanceMetrics, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.metrics, nil

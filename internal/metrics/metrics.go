@@ -19,21 +19,39 @@ import (
 	utilclock "k8s.io/utils/clock"
 )
 
-const metricsFilterFormat = `
+// MetricType represents which Cloud Monitoring metric to query.
+type MetricType int
+
+const (
+	// MetricTypeHighPriority queries cpu/utilization_by_priority with priority=high (default).
+	MetricTypeHighPriority MetricType = iota
+	// MetricTypeTotal queries cpu/utilization (all priorities combined).
+	MetricTypeTotal
+)
+
+const metricsFilterFormatHighPriority = `
 		metric.type = "spanner.googleapis.com/instance/cpu/utilization_by_priority" AND
 		metric.label.priority = "high" AND
 		resource.label.instance_id = "%s"
 `
 
+const metricsFilterFormatTotal = `
+		metric.type = "spanner.googleapis.com/instance/cpu/utilization" AND
+		resource.label.instance_id = "%s"
+`
+
 // InstanceMetrics represents metrics of Spanner instance.
 type InstanceMetrics struct {
+	// CurrentHighPriorityCPUUtilization is set when MetricTypeHighPriority is used.
 	CurrentHighPriorityCPUUtilization int
+	// CurrentTotalCPUUtilization is set when MetricTypeTotal is used.
+	CurrentTotalCPUUtilization int
 }
 
 // Client is a client for manipulation of InstanceMetrics.
 type Client interface {
-	// GetInstanceMetrics gets the instance metrics by instance id.
-	GetInstanceMetrics(ctx context.Context) (*InstanceMetrics, error)
+	// GetInstanceMetrics gets the instance metrics for the given metric type.
+	GetInstanceMetrics(ctx context.Context, metricType MetricType) (*InstanceMetrics, error)
 }
 
 // client is a client for Stackdriver Monitoring.
@@ -123,14 +141,22 @@ func NewClient(ctx context.Context, projectID, instanceID string, opts ...Option
 
 // GetInstanceMetrics implements Client.
 // https://cloud.google.com/monitoring/custom-metrics/reading-metrics#monitoring_read_timeseries_fields-go
-func (c *client) GetInstanceMetrics(ctx context.Context) (*InstanceMetrics, error) {
+func (c *client) GetInstanceMetrics(ctx context.Context, metricType MetricType) (*InstanceMetrics, error) {
 	log := c.log.WithValues("instance-id", c.instanceID, "project-id", c.projectID)
 
 	log.V(1).Info("getting monitoring time series data")
 
+	var filter string
+	switch metricType {
+	case MetricTypeTotal:
+		filter = fmt.Sprintf(metricsFilterFormatTotal, c.instanceID)
+	default: // MetricTypeHighPriority
+		filter = fmt.Sprintf(metricsFilterFormatHighPriority, c.instanceID)
+	}
+
 	req := &monitoringpb.ListTimeSeriesRequest{
 		Name:   fmt.Sprintf("projects/%s", c.projectID),
-		Filter: fmt.Sprintf(metricsFilterFormat, c.instanceID),
+		Filter: filter,
 		Interval: &monitoringpb.TimeInterval{
 			StartTime: &timestamp.Timestamp{
 				Seconds: c.clock.Now().UTC().Add(-c.term).Unix(),
@@ -167,9 +193,14 @@ func (c *client) GetInstanceMetrics(ctx context.Context) (*InstanceMetrics, erro
 		return nil, err
 	}
 
-	return &InstanceMetrics{
-		CurrentHighPriorityCPUUtilization: cpuPercent,
-	}, nil
+	result := &InstanceMetrics{}
+	switch metricType {
+	case MetricTypeTotal:
+		result.CurrentTotalCPUUtilization = cpuPercent
+	default: // MetricTypeHighPriority
+		result.CurrentHighPriorityCPUUtilization = cpuPercent
+	}
+	return result, nil
 }
 
 func firstPointAsPercent(points []*monitoringpb.Point) (percent int, err error) {
