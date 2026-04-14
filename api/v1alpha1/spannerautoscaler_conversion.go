@@ -63,8 +63,9 @@ func (src *SpannerAutoscaler) ConvertTo(dstRaw conversion.Hub) error {
 	if src.Spec.MaxScaleDownNodes != nil {
 		scaleConfig.ScaledownStepSize = intstr.FromInt(int(*src.Spec.MaxScaleDownNodes) * 1000)
 	}
+	hp := int(*src.Spec.TargetCPUUtilization.HighPriority)
 	scaleConfig.TargetCPUUtilization = v1beta1.TargetCPUUtilization{
-		HighPriority: int(*src.Spec.TargetCPUUtilization.HighPriority),
+		HighPriority: &hp,
 	}
 
 	dst.Spec.ScaleConfig = scaleConfig
@@ -134,8 +135,10 @@ func (dst *SpannerAutoscaler) ConvertFrom(srcRaw conversion.Hub) error {
 	} else {
 		dst.Spec.MaxScaleDownNodes = pointer.Int32(2) // From the default scaledownStepSize value
 	}
-	dst.Spec.TargetCPUUtilization = TargetCPUUtilization{
-		HighPriority: pointer.Int32(int32(src.Spec.ScaleConfig.TargetCPUUtilization.HighPriority)),
+	if src.Spec.ScaleConfig.TargetCPUUtilization.HighPriority != nil {
+		dst.Spec.TargetCPUUtilization = TargetCPUUtilization{
+			HighPriority: pointer.Int32(int32(*src.Spec.ScaleConfig.TargetCPUUtilization.HighPriority)),
+		}
 	}
 
 	// Copy the resource metadata
