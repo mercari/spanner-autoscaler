@@ -183,6 +183,8 @@ spec:
 
 > **Note:** `spec.targetInstance` (`projectId` and `instanceId`) is **immutable** after creation. To change the target Spanner instance, delete the `SpannerAutoscaler` and create a new one.
 
+> **Note:** `highPriority` and `total` in `targetCPUUtilization` are mutually exclusive — exactly one must be specified. They use different Cloud Monitoring metrics (`spanner.googleapis.com/instance/cpu/utilization_by_priority` and `spanner.googleapis.com/instance/cpu/utilization` respectively), so the values are not directly comparable. When switching between them on a live resource, no scaling occurs during the first reconcile after the change because the status for the new metric type has not yet been populated by the syncer. Scaling resumes normally on the next sync cycle (default: 1 minute).
+
 ## GCP Setup
 
 On your GCP project, you will need to enable `spanner.googleapis.com` and `monitoring.googleapis.com` APIs.
@@ -310,7 +312,7 @@ Spanner Autoscaler is released under the [Apache License 2.0](./LICENSE).
 :warning: **NOTE:**
 
 1. This project is currently in active development phase and there might be some backward incompatible changes in future versions.
-1. Spanner Autoscaler watches `High Priority` CPU utilization only. It doesn't watch `Low Priority` CPU utilization and Rolling average 24 hour utilization.
+1. Spanner Autoscaler supports scaling based on `High Priority` CPU utilization (`targetCPUUtilization.highPriority`) or total CPU utilization (`targetCPUUtilization.total`). It doesn't watch `Low Priority` CPU utilization and Rolling average 24 hour utilization.
 1. It doesn't check [the storage size and the number of databases](https://cloud.google.com/spanner/quotas?hl=en#database_limits) as well. You must take care of these metrics by yourself.
 
 
