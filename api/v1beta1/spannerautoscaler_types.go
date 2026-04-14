@@ -145,11 +145,22 @@ type ScaleConfigPUs struct {
 
 type TargetCPUUtilization struct {
 	// Desired CPU utilization for 'High Priority' CPU consumption category. Ref: [Spanner CPU utilization](https://cloud.google.com/spanner/docs/cpu-utilization#task-priority)
+	// Mutually exclusive with 'total'. Exactly one of 'highPriority' or 'total' must be specified.
+	// +optional
 	// +kubebuilder:validation:Minimum=0
 	// +kubebuilder:validation:Maximum=100
 	// +kubebuilder:validation:ExclusiveMinimum=true
 	// +kubebuilder:validation:ExclusiveMaximum=true
-	HighPriority int `json:"highPriority"`
+	HighPriority *int `json:"highPriority,omitempty"`
+
+	// Desired total CPU utilization (all priorities combined). Ref: [Spanner CPU utilization](https://cloud.google.com/spanner/docs/cpu-utilization)
+	// Mutually exclusive with 'highPriority'. Exactly one of 'highPriority' or 'total' must be specified.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=100
+	// +kubebuilder:validation:ExclusiveMinimum=true
+	// +kubebuilder:validation:ExclusiveMaximum=true
+	Total *int `json:"total,omitempty"`
 }
 
 // SpannerAutoscalerSpec defines the desired state of SpannerAutoscaler
@@ -223,6 +234,10 @@ type SpannerAutoscalerStatus struct {
 
 	// Current average CPU utilization for high priority task, represented as a percentage
 	CurrentHighPriorityCPUUtilization int `json:"currentHighPriorityCPUUtilization,omitempty"`
+
+	// Current total CPU utilization (all priorities), represented as a percentage.
+	// This field is populated only when spec.scaleConfig.targetCPUUtilization.total is specified.
+	CurrentTotalCPUUtilization int `json:"currentTotalCPUUtilization,omitempty"`
 }
 
 //+kubebuilder:object:root=true
@@ -234,8 +249,10 @@ type SpannerAutoscalerStatus struct {
 //+kubebuilder:printcolumn:name="Desired PUs",type="integer",JSONPath=".status.desiredProcessingUnits"
 //+kubebuilder:printcolumn:name="Desired Min PUs",type="integer",JSONPath=".status.desiredMinPUs"
 //+kubebuilder:printcolumn:name="Desired Max PUs",type="integer",JSONPath=".status.desiredMaxPUs"
-//+kubebuilder:printcolumn:name="Target CPU",type="integer",JSONPath=".spec.scaleConfig.targetCPUUtilization.highPriority"
-//+kubebuilder:printcolumn:name="Current CPU",type="integer",JSONPath=".status.currentHighPriorityCPUUtilization"
+//+kubebuilder:printcolumn:name="Target CPU High",type="integer",JSONPath=".spec.scaleConfig.targetCPUUtilization.highPriority"
+//+kubebuilder:printcolumn:name="Target CPU Total",type="integer",JSONPath=".spec.scaleConfig.targetCPUUtilization.total"
+//+kubebuilder:printcolumn:name="Current CPU High",type="integer",JSONPath=".status.currentHighPriorityCPUUtilization"
+//+kubebuilder:printcolumn:name="Current CPU Total",type="integer",JSONPath=".status.currentTotalCPUUtilization"
 //+kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 
 // SpannerAutoscaler is the Schema for the spannerautoscalers API

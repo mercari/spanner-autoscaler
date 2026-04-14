@@ -230,10 +230,16 @@ spec:
       name: Desired Max PUs
       type: integer
     - jsonPath: .spec.scaleConfig.targetCPUUtilization.highPriority
-      name: Target CPU
+      name: Target CPU High
+      type: integer
+    - jsonPath: .spec.scaleConfig.targetCPUUtilization.total
+      name: Target CPU Total
       type: integer
     - jsonPath: .status.currentHighPriorityCPUUtilization
-      name: Current CPU
+      name: Current CPU High
+      type: integer
+    - jsonPath: .status.currentTotalCPUUtilization
+      name: Current CPU Total
       type: integer
     - jsonPath: .metadata.creationTimestamp
       name: Age
@@ -394,15 +400,23 @@ spec:
                       to achieve. Ref: [Spanner CPU utilization](https://cloud.google.com/spanner/docs/cpu-utilization#task-priority)'
                     properties:
                       highPriority:
-                        description: 'Desired CPU utilization for ''High Priority''
-                          CPU consumption category. Ref: [Spanner CPU utilization](https://cloud.google.com/spanner/docs/cpu-utilization#task-priority)'
+                        description: |-
+                          Desired CPU utilization for 'High Priority' CPU consumption category. Ref: [Spanner CPU utilization](https://cloud.google.com/spanner/docs/cpu-utilization#task-priority)
+                          Mutually exclusive with 'total'. Exactly one of 'highPriority' or 'total' must be specified.
                         exclusiveMaximum: true
                         exclusiveMinimum: true
                         maximum: 100
                         minimum: 0
                         type: integer
-                    required:
-                    - highPriority
+                      total:
+                        description: |-
+                          Desired total CPU utilization (all priorities combined). Ref: [Spanner CPU utilization](https://cloud.google.com/spanner/docs/cpu-utilization)
+                          Mutually exclusive with 'highPriority'. Exactly one of 'highPriority' or 'total' must be specified.
+                        exclusiveMaximum: true
+                        exclusiveMinimum: true
+                        maximum: 100
+                        minimum: 0
+                        type: integer
                     type: object
                 required:
                 - targetCPUUtilization
@@ -433,6 +447,11 @@ spec:
                 type: integer
               currentProcessingUnits:
                 description: Current number of processing-units in the Spanner instance
+                type: integer
+              currentTotalCPUUtilization:
+                description: |-
+                  Current total CPU utilization (all priorities), represented as a percentage.
+                  This field is populated only when spec.scaleConfig.targetCPUUtilization.total is specified.
                 type: integer
               currentlyActiveSchedules:
                 description: List of all the schedules which are currently active
