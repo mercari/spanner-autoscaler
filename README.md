@@ -21,8 +21,10 @@ When CPU Utilization(High Priority) is above (or below) `targetCPUUtilization`, 
 
 The [pricing of Cloud Spanner](https://cloud.google.com/spanner/pricing) states that any compute capacity which is provisioned will be billed for a minimum of one hour, so Spanner Autoscaler maintains the increased compute capacity for about an hour. Spanner Autoscaler has `--scale-down-interval` flag (default: 55min) for achieving this.
 
-While scaling down, removing large amounts of compute capacity at once (like 10000 PU -> 1000 PU) can cause a latency increase. Therefore, Spanner Autoscaler decreases the compute capacity in steps to avoid such large disruptions. This step size can be provided with the `scaledownStepSize` parameter (default: 2000 PU).
+While scaling down, removing large amounts of compute capacity at once (like 10000 PU -> 1000 PU) can cause a latency increase. Therefore, Spanner Autoscaler decreases the compute capacity in steps to avoid such large disruptions. This step size can be configured with the `scaledownStepSize` parameter (default: 2000 PU). Similarly, `scaleupStepSize` limits how much capacity can be added in a single scale-up operation (default: no limit). Both parameters accept either an integer number of Processing Units or a percentage of current capacity (e.g., `"10%"`).
 <img src="./docs/assets/node_scaledown.png" width="400" height="200">
+
+Per-resource scale intervals can also be configured with `scaledownInterval` and `scaleupInterval` in the `scaleConfig` section, overriding the global `--scale-down-interval` and `--scale-up-interval` flags set on the controller.
 
 ### Scheduled scaling feature
 
@@ -40,6 +42,8 @@ spec:
     cron: "0 2 * * *"
     duration: 3h
 ```
+
+> **Note:** `spec.targetResource` and `spec.schedule` (cron and duration) are **immutable** after creation. To change the target or schedule, delete the `SpannerAutoscaleSchedule` and create a new one. Only `spec.additionalProcessingUnits` can be updated in place.
 
 ## Installation
 
@@ -81,6 +85,30 @@ Spanner Autoscaler can be installed using [KPT](https://kpt.dev/installation/) b
 
 
 ## Examples
+
+#### With custom step sizes and per-resource intervals:
+
+```yaml
+apiVersion: spanner.mercari.com/v1beta1
+kind: SpannerAutoscaler
+metadata:
+  name: spannerautoscaler-sample
+  namespace: your-namespace
+spec:
+  targetInstance:
+    projectId: your-gcp-project-id
+    instanceId: your-spanner-instance-id
+  scaleConfig:
+    processingUnits:
+      min: 1000
+      max: 10000
+    scaledownStepSize: "20%"  # or an integer, e.g. 2000
+    scaleupStepSize: "50%"    # or an integer, e.g. 3000; defaults to no limit
+    scaledownInterval: 55m    # overrides --scale-down-interval for this resource
+    scaleupInterval: 30s      # overrides --scale-up-interval for this resource
+    targetCPUUtilization:
+      highPriority: 60
+```
 
 #### Single Service Account using Workload Identity:
 
@@ -153,6 +181,7 @@ spec:
         highPriority: 60
 ```
 
+> **Note:** `spec.targetInstance` (`projectId` and `instanceId`) is **immutable** after creation. To change the target Spanner instance, delete the `SpannerAutoscaler` and create a new one.
 
 ## GCP Setup
 
@@ -258,6 +287,15 @@ Following are some other advanced methods which can also be used for GCP authent
 ## Development and Contribution
 
 See [docs/development.md](docs/development.md) and [CONTRIBUTING.md](.github/CONTRIBUTING.md) respectively.
+
+The recommended local development workflow uses [Tilt](https://tilt.dev) with local Spanner and Cloud Monitoring emulators — no real GCP credentials required:
+
+```console
+$ make tilt-up   # creates a kind cluster and starts Tilt
+$ make tilt-down # tears everything down (Tilt, emulators, kind cluster, webhook certs)
+```
+
+Tilt automatically starts the emulators, installs cert-manager, deploys the webhook configuration, and runs the controller locally. Changes to any Go file under `cmd/`, `api/`, or `internal/` trigger a live reload. Running `make tilt-up` after `make tilt-down` starts from a completely clean state.
 
 ### :information_source: Migration from `0.3.0` to `0.4.0`:
 

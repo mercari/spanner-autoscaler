@@ -10,6 +10,8 @@ import (
 	"golang.org/x/oauth2"
 	"google.golang.org/api/option"
 	field_mask "google.golang.org/genproto/protobuf/field_mask"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 
 	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
 )
@@ -44,6 +46,7 @@ type client struct {
 	projectID  string
 	instanceID string
 
+	endpoint    string
 	tokenSource oauth2.TokenSource
 	log         logr.Logger
 }
@@ -51,6 +54,12 @@ type client struct {
 var _ Client = (*client)(nil)
 
 type Option func(*client)
+
+func WithEndpoint(endpoint string) Option {
+	return func(c *client) {
+		c.endpoint = endpoint
+	}
+}
 
 func WithTokenSource(ts oauth2.TokenSource) Option {
 	return func(c *client) {
@@ -78,7 +87,13 @@ func NewClient(ctx context.Context, projectID, instanceID string, opts ...Option
 
 	var options []option.ClientOption
 
-	if c.tokenSource != nil {
+	if c.endpoint != "" {
+		options = append(options,
+			option.WithEndpoint(c.endpoint),
+			option.WithoutAuthentication(),
+			option.WithGRPCDialOption(grpc.WithTransportCredentials(insecure.NewCredentials())),
+		)
+	} else if c.tokenSource != nil {
 		options = append(options, option.WithTokenSource(c.tokenSource))
 	}
 

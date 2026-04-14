@@ -2,7 +2,7 @@
 IMG ?= mercari/spanner-autoscaler:latest
 
 # ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
-ENVTEST_K8S_VERSION = 1.26.1
+ENVTEST_K8S_VERSION = 1.32.0
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
@@ -15,6 +15,15 @@ endif
 # Options are set to exit when a recipe line exits non-zero or a piped command fails.
 SHELL = /usr/bin/env bash -o pipefail
 .SHELLFLAGS = -ec
+
+# base64 decode flag differs between macOS (base64 -D) and Linux (base64 -d).
+BASE64_DECODE := $(shell if base64 --decode /dev/null 2>/dev/null; then echo "base64 --decode"; elif base64 -d /dev/null 2>/dev/null; then echo "base64 -d"; else echo "base64 -D"; fi)
+
+# Webhook TLS cert dir used by run-dev.
+WEBHOOK_CERT_DIR ?= $(LOCALBIN)/webhook-certs
+
+# Webhook server namespace (must match config/default).
+WEBHOOK_NAMESPACE ?= spanner-autoscaler
 
 .PHONY: all
 all: build
@@ -70,6 +79,35 @@ lint: golangci-lint ## Run golangci-lint against code.
 test: manifests generate fmt vet envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test ./... -coverprofile cover.out
 
+.PHONY: dev-certs
+dev-certs: ## Extract webhook TLS certs from cluster into $(WEBHOOK_CERT_DIR) for local webhook development.
+	mkdir -p $(WEBHOOK_CERT_DIR)
+	kubectl get secret -n $(WEBHOOK_NAMESPACE) webhook-server-cert -o jsonpath='{.data.tls\.crt}' | $(BASE64_DECODE) > $(WEBHOOK_CERT_DIR)/tls.crt
+	kubectl get secret -n $(WEBHOOK_NAMESPACE) webhook-server-cert -o jsonpath='{.data.tls\.key}' | $(BASE64_DECODE) > $(WEBHOOK_CERT_DIR)/tls.key
+
+.PHONY: run-dev
+run-dev: manifests generate fmt vet dev-certs ## Run controller locally with webhook forwarding (requires kind cluster with deploy-dev or tilt-up).
+	go run ./cmd/main.go -zap-devel --cert-dir=$(WEBHOOK_CERT_DIR)
+
+.PHONY: test-integration
+test-integration: manifests generate envtest ## Run integration tests (starts emulators automatically if not running).
+	@if ! nc -z localhost 9091 2>/dev/null; then \
+		echo "Emulators not running, starting..."; \
+		$(MAKE) emulator-up; \
+		echo "Waiting for monitoring emulator to be ready..."; \
+		for i in $$(seq 1 60); do nc -z localhost 9091 2>/dev/null && break || sleep 1; done; \
+	fi
+	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" \
+	go test -tags integration ./test/integration/... -v -count=1
+
+.PHONY: emulator-up
+emulator-up: ## Start Spanner and Monitoring emulators via docker-compose.
+	docker compose up -d --build
+
+.PHONY: emulator-down
+emulator-down: ## Stop and remove emulator containers.
+	docker compose down
+
 KIND_CLUSTER_NAME = spanner-autoscaler
 
 .PHONY: kind-cluster-create
@@ -77,10 +115,22 @@ kind-cluster-create: kind ## Create a kind cluster for development
 	@if [ -z $(shell $(KIND) get clusters | grep $(KIND_CLUSTER_NAME)) ]; then \
 	  $(KIND) create cluster --name $(KIND_CLUSTER_NAME); \
 	fi
-	## Change context to use kind cluster as default
 	kubectl config use-context kind-$(KIND_CLUSTER_NAME)
-	## Install cert-manager for generating certifacetes for validation and defaulting webhooks
-	kubectl apply -f https://github.com/jetstack/cert-manager/releases/download/v1.6.1/cert-manager.yaml
+
+.PHONY: tilt-up
+tilt-up: kind-cluster-create tilt ## Create kind cluster (if needed) and start Tilt.
+	$(TILT) up
+
+.PHONY: tilt-down
+tilt-down: tilt kind ## Tear down Tilt, stop emulators, delete the kind cluster, and remove webhook certs.
+	$(TILT) down
+	$(MAKE) emulator-down
+	$(KIND) delete cluster --name $(KIND_CLUSTER_NAME)
+	rm -rf $(WEBHOOK_CERT_DIR)
+
+.PHONY: logs-controller
+logs-controller: tilt ## Stream controller logs (requires Tilt to be running).
+	$(TILT) logs -f controller
 
 .PHONY: kind-cluster-delete
 kind-cluster-delete: kind ## Delete the kind cluster created for development
@@ -100,8 +150,8 @@ build: manifests generate fmt vet ## Build manager binary.
 	go build -o bin/manager cmd/main.go
 
 .PHONY: run
-run: manifests generate fmt vet ## Run a controller from your host.
-	go run ./cmd/main.go -zap-devel
+run: manifests generate fmt vet ## Run a controller from your host (webhooks disabled).
+	ENABLE_WEBHOOKS=false go run ./cmd/main.go -zap-devel
 
 # If you wish to build the manager image targeting other platforms you can use the --platform flag.
 # (i.e. docker build --platform linux/arm64 ). However, you must enable docker buildKit for it.
@@ -174,19 +224,21 @@ KIND = $(LOCALBIN)/kind
 KPT = $(LOCALBIN)/kpt
 GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
 CRD_REF_DOCS = $(LOCALBIN)/crd-ref-docs
+TILT = $(LOCALBIN)/tilt
 
 ## Tool Versions
-KUSTOMIZE_VERSION ?= v5.0.0
-CONTROLLER_TOOLS_VERSION ?= v0.18.0
-KIND_VERSION ?= v0.17.0
+KUSTOMIZE_VERSION ?= v5.8.1
+CONTROLLER_TOOLS_VERSION ?= v0.20.1
+KIND_VERSION ?= v0.31.0
 KPT_VERSION ?= v1.0.0-beta.34
-GOLANGCI_LINT_VERSION ?= v1.64.8
-CRD_REF_DOCS_VERSION ?= v0.1.0
+GOLANGCI_LINT_VERSION ?= v2.1.6
+CRD_REF_DOCS_VERSION ?= v0.3.0
+TILT_VERSION ?= v0.33.21
 
 KUSTOMIZE_INSTALL_SCRIPT ?= "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh"
 
 .PHONY: deps
-deps: kustomize controller-gen envtest kind kpt golangci-lint crd-ref-docs ## Download the following dependencies locally (in './bin') if necessary
+deps: kustomize controller-gen envtest kind kpt golangci-lint crd-ref-docs tilt ## Download the following dependencies locally (in './bin') if necessary
 
 .PHONY: kustomize
 kustomize: $(KUSTOMIZE) ## Download kustomize locally if necessary. If wrong version is installed, it will be removed before downloading.
@@ -210,7 +262,7 @@ $(ENVTEST): $(LOCALBIN)
 
 .PHONY: kind
 kind: ## Downlaod 'kind' locally if necessary
-	test -s $(LOCALBIN)/kind && $(LOCALBIN)/kind --version | grep -q $(CONTROLLER_TOOLS_VERSION) || \
+	test -s $(LOCALBIN)/kind && $(LOCALBIN)/kind --version | grep -q $(KIND_VERSION) || \
 	GOBIN=$(LOCALBIN) go install sigs.k8s.io/kind@$(KIND_VERSION)
 
 .PHONY: kpt
@@ -221,10 +273,20 @@ kpt: ## Downlaod 'kpt' locally if necessary
 .PHONY: golangci-lint
 golangci-lint: ## Downlaod 'golangci-lint' locally if necessary
 	test -s $(LOCALBIN)/golangci-lint && $(LOCALBIN)/golangci-lint --version | grep -q $(GOLANGCI_LINT_VERSION) || \
-	GOBIN=$(LOCALBIN) go install github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+	GOBIN=$(LOCALBIN) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 
 .PHONY: crd-ref-docs
 crd-ref-docs: ## Downlaod 'crd-ref-docs' locally if necessary
 	test -s $(LOCALBIN)/crd-ref-docs || \
 	GOBIN=$(LOCALBIN) go install github.com/elastic/crd-ref-docs@$(CRD_REF_DOCS_VERSION)
+
+.PHONY: tilt
+tilt: $(LOCALBIN) ## Download 'tilt' locally if necessary
+	@if ! test -s $(LOCALBIN)/tilt || ! $(LOCALBIN)/tilt version | grep -q $(subst v,,$(TILT_VERSION)); then \
+		OS=$$(uname -s | tr '[:upper:]' '[:lower:]' | sed 's/darwin/mac/'); \
+		ARCH=$$(uname -m | sed 's/aarch64/arm64/'); \
+		echo "Downloading tilt $(TILT_VERSION)..."; \
+		curl -fsSL "https://github.com/tilt-dev/tilt/releases/download/$(TILT_VERSION)/tilt.$(subst v,,$(TILT_VERSION)).$${OS}.$${ARCH}.tar.gz" \
+			| tar -xz -C $(LOCALBIN) tilt; \
+	fi
 

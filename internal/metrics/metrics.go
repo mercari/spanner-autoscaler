@@ -14,6 +14,8 @@ import (
 	"golang.org/x/oauth2"
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	utilclock "k8s.io/utils/clock"
 )
 
@@ -42,6 +44,7 @@ type client struct {
 	instanceID string
 	term       time.Duration
 
+	endpoint    string
 	tokenSource oauth2.TokenSource
 
 	clock utilclock.Clock
@@ -51,6 +54,12 @@ type client struct {
 var _ Client = (*client)(nil)
 
 type Option func(*client)
+
+func WithEndpoint(endpoint string) Option {
+	return func(c *client) {
+		c.endpoint = endpoint
+	}
+}
 
 func WithTerm(term time.Duration) Option {
 	return func(c *client) {
@@ -92,7 +101,13 @@ func NewClient(ctx context.Context, projectID, instanceID string, opts ...Option
 
 	var options []option.ClientOption
 
-	if c.tokenSource != nil {
+	if c.endpoint != "" {
+		options = append(options,
+			option.WithEndpoint(c.endpoint),
+			option.WithoutAuthentication(),
+			option.WithGRPCDialOption(grpc.WithTransportCredentials(insecure.NewCredentials())),
+		)
+	} else if c.tokenSource != nil {
 		options = append(options, option.WithTokenSource(c.tokenSource))
 	}
 
@@ -134,34 +149,27 @@ func (c *client) GetInstanceMetrics(ctx context.Context) (*InstanceMetrics, erro
 
 	it := c.monitoringMetricClient.ListTimeSeries(ctx, req)
 
-	for {
-		resp, err := it.Next()
-		if err == iterator.Done {
-			break
-		}
-
-		if err != nil {
-			log.Error(err, "unable to get metrics list time series response with iterator")
-			return nil, err
-		}
-
-		log.V(1).Info("got time series data points", "points", resp.GetPoints())
-
-		// monitoringpb.Point.GetValue().GetDoubleValue() for CPU is in [0, 1].
-		cpuPercent, err := firstPointAsPercent(resp.GetPoints())
-		if err != nil {
-			return nil, err
-		}
-
-		// TODO: Fix this loop so that lint check will pass
-		return &InstanceMetrics{ //nolint:staticcheck
-			CurrentHighPriorityCPUUtilization: cpuPercent,
-		}, nil
+	resp, err := it.Next()
+	if err == iterator.Done {
+		log.V(1).Info("could not get any time series metrics")
+		return nil, errors.New("no such spanner instance metrics")
+	}
+	if err != nil {
+		log.Error(err, "unable to get metrics list time series response with iterator")
+		return nil, err
 	}
 
-	log.V(1).Info("could not get any time series metrics")
+	log.V(1).Info("got time series data points", "points", resp.GetPoints())
 
-	return nil, errors.New("no such spanner instance metrics")
+	// monitoringpb.Point.GetValue().GetDoubleValue() for CPU is in [0, 1].
+	cpuPercent, err := firstPointAsPercent(resp.GetPoints())
+	if err != nil {
+		return nil, err
+	}
+
+	return &InstanceMetrics{
+		CurrentHighPriorityCPUUtilization: cpuPercent,
+	}, nil
 }
 
 func firstPointAsPercent(points []*monitoringpb.Point) (percent int, err error) {

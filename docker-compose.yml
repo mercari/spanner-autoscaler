@@ -1,0 +1,23 @@
+services:
+  spanner-emulator:
+    build:
+      context: .
+      dockerfile: cmd/spanner-emulator/Dockerfile
+    ports:
+      - "9010:9010"  # gRPC (InstanceAdmin)
+      - "9011:9011"  # HTTP admin API
+
+  monitoring-emulator:
+    build:
+      context: .
+      dockerfile: cmd/monitoring-emulator/Dockerfile
+    ports:
+      - "9090:9090"  # gRPC (MetricService)
+      - "9091:9091"  # HTTP admin API
+    environment:
+      - SPANNER_EMULATOR_HOST=spanner-emulator:9010
+      - SCENARIO_FILE=${SCENARIO_FILE:-/scenarios/default.yaml}
+    volumes:
+      - ./scenarios:/scenarios:ro
+    depends_on:
+      - spanner-emulator
