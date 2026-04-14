@@ -53,7 +53,7 @@ var _ = Describe("SpannerAutoscaler controller", func() {
 					},
 					ScaledownStepSize: intstr.FromInt(2000),
 					TargetCPUUtilization: spannerv1beta1.TargetCPUUtilization{
-						HighPriority: 30,
+						HighPriority: intPtr(30),
 					},
 				},
 			},
@@ -207,7 +207,7 @@ var _ = DescribeTable("Calculate Desired Processing Units",
 			ScaledownStepSize: scaledownStepSize,
 			ScaleupStepSize:   scaleupStepSize,
 			TargetCPUUtilization: spannerv1beta1.TargetCPUUtilization{
-				HighPriority: targetCPU,
+				HighPriority: intPtr(targetCPU),
 			},
 		}
 		got := calcDesiredProcessingUnits(baseObj)
@@ -224,9 +224,10 @@ var _ = DescribeTable("Calculate Desired Processing Units",
 	Entry("should scale down 5", 25, 700, 65, 300, 10000, intstr.FromInt(800), intstr.FromInt(0), 300),
 	Entry("should scale up to max PUs 1", 50, 300, 30, 100, 400, intstr.FromInt(2000), intstr.FromInt(0), 400),
 	Entry("should scale up to max PUs 2", 50, 3000, 30, 1000, 4000, intstr.FromInt(2000), intstr.FromInt(0), 4000),
-	Entry("should scale down to min PUs 1", 0, 500, 50, 100, 1000, intstr.FromInt(2000), intstr.FromInt(0), 100),
-	Entry("should scale down to min PUs 2", 0, 5000, 50, 1000, 10000, intstr.FromInt(5000), intstr.FromInt(0), 1000),
-	Entry("should scale down to min PUs 3", 0, 5000, 50, 100, 10000, intstr.FromInt(5000), intstr.FromInt(0), 100),
+	// currentCPU=0 means status not yet synced for this metric type; keep current PU unchanged.
+	Entry("should keep current PU when high priority CPU is 0 (metric not yet available) 1", 0, 500, 50, 100, 1000, intstr.FromInt(2000), intstr.FromInt(0), 500),
+	Entry("should keep current PU when high priority CPU is 0 (metric not yet available) 2", 0, 5000, 50, 1000, 10000, intstr.FromInt(5000), intstr.FromInt(0), 5000),
+	Entry("should keep current PU when high priority CPU is 0 (metric not yet available) 3", 0, 5000, 50, 100, 10000, intstr.FromInt(5000), intstr.FromInt(0), 5000),
 	Entry("should scale down with ScaledownStepSize 1", 30, 10000, 50, 5000, 10000, intstr.FromInt(2000), intstr.FromInt(0), 8000),
 	Entry("should scale down with ScaledownStepSize 2", 30, 10000, 50, 5000, 12000, intstr.FromInt(200), intstr.FromInt(0), 9000),
 	Entry("should scale down with ScaledownStepSize 3", 30, 10000, 50, 5000, 12000, intstr.FromInt(100), intstr.FromInt(0), 9000),
@@ -272,6 +273,99 @@ var _ = DescribeTable("Calculate Desired Processing Units",
 	Entry("should scale up with ScaleupStepSize when currentPU is more than 1000 5", 20, 2000, 10, 100, 10000, intstr.FromInt(2000), intstr.FromString("100%"), 4000),
 	Entry("should scale up with ScaleupStepSize when currentPU is more than 1000 6", 100, 2000, 10, 100, 10000, intstr.FromInt(2000), intstr.FromString("200%"), 6000),
 )
+
+var _ = DescribeTable("Calculate Desired Processing Units (total CPU mode)",
+	func(currentCPU, currentProcessingUnits, targetCPU, minProcessingUnits, maxProcessingUnits int, scaledownStepSize, scaleupStepSize intstr.IntOrString, want int) {
+		baseObj := spannerv1beta1.SpannerAutoscaler{}
+		baseObj.Status.CurrentProcessingUnits = currentProcessingUnits
+		baseObj.Status.CurrentTotalCPUUtilization = currentCPU
+		baseObj.Spec.ScaleConfig = spannerv1beta1.ScaleConfig{
+			ComputeType: spannerv1beta1.ComputeTypePU,
+			ProcessingUnits: spannerv1beta1.ScaleConfigPUs{
+				Min: minProcessingUnits,
+				Max: maxProcessingUnits,
+			},
+			ScaledownStepSize: scaledownStepSize,
+			ScaleupStepSize:   scaleupStepSize,
+			TargetCPUUtilization: spannerv1beta1.TargetCPUUtilization{
+				Total: intPtr(targetCPU),
+			},
+		}
+		got := calcDesiredProcessingUnits(baseObj)
+		Expect(got).To(Equal(want))
+	},
+	Entry("should not scale", 25, 200, 30, 100, 1000, intstr.FromInt(2000), intstr.FromInt(0), 200),
+	Entry("should scale up", 50, 300, 30, 100, 1000, intstr.FromInt(2000), intstr.FromInt(0), 600),
+	Entry("should scale down", 30, 500, 50, 100, 10000, intstr.FromInt(2000), intstr.FromInt(0), 400),
+	Entry("should scale up to max PUs", 50, 300, 30, 100, 400, intstr.FromInt(2000), intstr.FromInt(0), 400),
+	Entry("should scale down to min PUs", 5, 500, 50, 100, 1000, intstr.FromInt(2000), intstr.FromInt(0), 100),
+	// currentCPU=0 means status not yet synced for this metric type; keep current PU unchanged.
+	Entry("should keep current PU when total CPU is 0 (metric not yet available)", 0, 3000, 40, 100, 10000, intstr.FromInt(2000), intstr.FromInt(0), 3000),
+)
+
+var _ = Describe("Calculate Desired Processing Units (metric type switching guard)", func() {
+	baseScaleConfig := func() spannerv1beta1.ScaleConfig {
+		return spannerv1beta1.ScaleConfig{
+			ComputeType: spannerv1beta1.ComputeTypePU,
+			ProcessingUnits: spannerv1beta1.ScaleConfigPUs{
+				Min: 100,
+				Max: 10000,
+			},
+			ScaledownStepSize: intstr.FromInt(2000),
+			ScaleupStepSize:   intstr.FromInt(0),
+		}
+	}
+
+	It("keeps current PU when switching highPriority→total before first sync (currentTotalCPU=0)", func() {
+		sa := spannerv1beta1.SpannerAutoscaler{}
+		sa.Status.CurrentProcessingUnits = 3000
+		sa.Status.CurrentHighPriorityCPUUtilization = 0 // cleared by syncer after switch
+		sa.Status.CurrentTotalCPUUtilization = 0        // not yet populated
+		sa.Spec.ScaleConfig = baseScaleConfig()
+		sa.Spec.ScaleConfig.TargetCPUUtilization = spannerv1beta1.TargetCPUUtilization{
+			Total: intPtr(40),
+		}
+		Expect(calcDesiredProcessingUnits(sa)).To(Equal(3000))
+	})
+
+	It("keeps current PU when switching total→highPriority before first sync (currentHighPriorityCPU=0)", func() {
+		sa := spannerv1beta1.SpannerAutoscaler{}
+		sa.Status.CurrentProcessingUnits = 3000
+		sa.Status.CurrentTotalCPUUtilization = 0        // cleared by syncer after switch
+		sa.Status.CurrentHighPriorityCPUUtilization = 0 // not yet populated
+		sa.Spec.ScaleConfig = baseScaleConfig()
+		sa.Spec.ScaleConfig.TargetCPUUtilization = spannerv1beta1.TargetCPUUtilization{
+			HighPriority: intPtr(40),
+		}
+		Expect(calcDesiredProcessingUnits(sa)).To(Equal(3000))
+	})
+
+	It("scales normally after first sync following highPriority→total switch", func() {
+		sa := spannerv1beta1.SpannerAutoscaler{}
+		sa.Status.CurrentProcessingUnits = 3000
+		sa.Status.CurrentHighPriorityCPUUtilization = 0 // cleared
+		sa.Status.CurrentTotalCPUUtilization = 60       // now populated
+		sa.Spec.ScaleConfig = baseScaleConfig()
+		sa.Spec.ScaleConfig.TargetCPUUtilization = spannerv1beta1.TargetCPUUtilization{
+			Total: intPtr(40),
+		}
+		// 60/40 * 3000 = 4500 → rounds up to 5000
+		Expect(calcDesiredProcessingUnits(sa)).To(Equal(5000))
+	})
+
+	It("scales normally after first sync following total→highPriority switch", func() {
+		sa := spannerv1beta1.SpannerAutoscaler{}
+		sa.Status.CurrentProcessingUnits = 3000
+		sa.Status.CurrentTotalCPUUtilization = 0         // cleared
+		sa.Status.CurrentHighPriorityCPUUtilization = 20 // now populated
+		sa.Spec.ScaleConfig = baseScaleConfig()
+		sa.Spec.ScaleConfig.TargetCPUUtilization = spannerv1beta1.TargetCPUUtilization{
+			HighPriority: intPtr(40),
+		}
+		// 20/40 * 3000 = 1500 → rounds up to 2000
+		Expect(calcDesiredProcessingUnits(sa)).To(Equal(2000))
+	})
+})
 
 var _ = Describe("Fetch Credentials", func() {
 	type testResult struct {
@@ -432,3 +526,5 @@ var _ = Describe("Get and overwrite interval", func() {
 		Expect(got).To(Equal(want))
 	})
 })
+
+func intPtr(i int) *int { return &i }

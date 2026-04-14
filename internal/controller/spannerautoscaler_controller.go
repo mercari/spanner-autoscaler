@@ -625,9 +625,26 @@ func (r *SpannerAutoscalerReconciler) needUpdateProcessingUnits(log logr.Logger,
 
 // calcDesiredProcessingUnits calculates the values needed to keep CPU utilization below TargetCPU.
 func calcDesiredProcessingUnits(sa spannerv1beta1.SpannerAutoscaler) int {
-	totalCPU := sa.Status.CurrentHighPriorityCPUUtilization * sa.Status.CurrentProcessingUnits
+	var currentCPU, targetCPU int
+	if sa.Spec.ScaleConfig.TargetCPUUtilization.Total != nil {
+		currentCPU = sa.Status.CurrentTotalCPUUtilization
+		targetCPU = *sa.Spec.ScaleConfig.TargetCPUUtilization.Total
+	} else {
+		currentCPU = sa.Status.CurrentHighPriorityCPUUtilization
+		targetCPU = *sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority
+	}
 
-	requiredPU := totalCPU / *sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority
+	// currentCPU is 0 when the status has not yet been populated for the
+	// current metric type (e.g. immediately after switching between highPriority
+	// and total modes). Treating 0 as actual CPU usage would produce a bogus
+	// scale-down to the minimum PU, so keep the current value unchanged.
+	if currentCPU == 0 {
+		return sa.Status.CurrentProcessingUnits
+	}
+
+	totalCPU := currentCPU * sa.Status.CurrentProcessingUnits
+
+	requiredPU := totalCPU / targetCPU
 
 	var desiredPU int
 
