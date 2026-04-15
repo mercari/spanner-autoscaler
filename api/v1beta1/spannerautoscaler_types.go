@@ -21,6 +21,19 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
+// CPUMetricType identifies which Cloud Monitoring CPU metric is being used
+// for autoscaling decisions.
+// +kubebuilder:validation:Enum=HighPriority;Total
+type CPUMetricType string
+
+const (
+	// CPUMetricTypeHighPriority uses spanner.googleapis.com/instance/cpu/utilization_by_priority
+	// with priority=high filter.
+	CPUMetricTypeHighPriority CPUMetricType = "HighPriority"
+	// CPUMetricTypeTotal uses spanner.googleapis.com/instance/cpu/utilization (all priorities).
+	CPUMetricTypeTotal CPUMetricType = "Total"
+)
+
 // Type for specifying authentication methods
 // +kubebuilder:validation:Enum=gcp-sa-key;impersonation;adc
 type AuthType string
@@ -238,6 +251,11 @@ type SpannerAutoscalerStatus struct {
 	// Current total CPU utilization (all priorities), represented as a percentage.
 	// This field is populated only when spec.scaleConfig.targetCPUUtilization.total is specified.
 	CurrentTotalCPUUtilization int `json:"currentTotalCPUUtilization,omitempty"`
+
+	// CurrentCPUMetricType is the CPU metric type that was used in the last sync cycle.
+	// The controller uses this to detect metric-type switches and skip scaling until
+	// the status reflects the newly configured metric type.
+	CurrentCPUMetricType CPUMetricType `json:"currentCPUMetricType,omitempty"`
 }
 
 //+kubebuilder:object:root=true

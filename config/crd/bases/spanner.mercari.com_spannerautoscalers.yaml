@@ -441,6 +441,15 @@ spec:
           status:
             description: SpannerAutoscalerStatus defines the observed state of SpannerAutoscaler
             properties:
+              currentCPUMetricType:
+                description: |-
+                  CurrentCPUMetricType is the CPU metric type that was used in the last sync cycle.
+                  The controller uses this to detect metric-type switches and skip scaling until
+                  the status reflects the newly configured metric type.
+                enum:
+                - HighPriority
+                - Total
+                type: string
               currentHighPriorityCPUUtilization:
                 description: Current average CPU utilization for high priority task,
                   represented as a percentage
