@@ -291,6 +291,12 @@ func (s *syncer) syncResource(ctx context.Context) error {
 		// This prevents stale data when switching between metric types.
 		sa.Status.CurrentHighPriorityCPUUtilization = instanceMetrics.CurrentHighPriorityCPUUtilization
 		sa.Status.CurrentTotalCPUUtilization = instanceMetrics.CurrentTotalCPUUtilization
+		// Record which metric type was used so the controller can detect mode switches.
+		if metricType == metrics.MetricTypeTotal {
+			sa.Status.CurrentCPUMetricType = spannerv1beta1.CPUMetricTypeTotal
+		} else {
+			sa.Status.CurrentCPUMetricType = spannerv1beta1.CPUMetricTypeHighPriority
+		}
 		sa.Status.LastSyncTime = metav1.Time{Time: s.clock.Now()}
 
 		return s.ctrlClient.Status().Update(ctx, &sa)

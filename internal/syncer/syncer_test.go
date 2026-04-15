@@ -109,6 +109,7 @@ func Test_syncer_syncResource(t *testing.T) {
 				o.Status.CurrentProcessingUnits = 3000
 				o.Status.InstanceState = spannerv1beta1.InstanceStateReady
 				o.Status.CurrentHighPriorityCPUUtilization = 30
+				o.Status.CurrentCPUMetricType = spannerv1beta1.CPUMetricTypeHighPriority
 				o.Status.LastSyncTime = metav1.Time{Time: fakeTime}
 				return o
 			}(),
