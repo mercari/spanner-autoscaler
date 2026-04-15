@@ -287,14 +287,17 @@ func (s *syncer) syncResource(ctx context.Context) error {
 		}
 		sa.Status.CurrentProcessingUnits = instance.ProcessingUnits
 		sa.Status.InstanceState = instance.InstanceState
-		// Reset both fields and set only the one that corresponds to the current metric type.
-		// This prevents stale data when switching between metric types.
-		sa.Status.CurrentHighPriorityCPUUtilization = instanceMetrics.CurrentHighPriorityCPUUtilization
-		sa.Status.CurrentTotalCPUUtilization = instanceMetrics.CurrentTotalCPUUtilization
-		// Record which metric type was used so the controller can detect mode switches.
-		if metricType == metrics.MetricTypeTotal {
+		// Zero both CPU fields first, then set only the one for the active metric type.
+		// This makes the reset explicit and independent of whether the metrics client
+		// zeros the unused field itself.
+		sa.Status.CurrentHighPriorityCPUUtilization = 0
+		sa.Status.CurrentTotalCPUUtilization = 0
+		switch metricType {
+		case metrics.MetricTypeTotal:
+			sa.Status.CurrentTotalCPUUtilization = instanceMetrics.CurrentTotalCPUUtilization
 			sa.Status.CurrentCPUMetricType = spannerv1beta1.CPUMetricTypeTotal
-		} else {
+		default: // MetricTypeHighPriority
+			sa.Status.CurrentHighPriorityCPUUtilization = instanceMetrics.CurrentHighPriorityCPUUtilization
 			sa.Status.CurrentCPUMetricType = spannerv1beta1.CPUMetricTypeHighPriority
 		}
 		sa.Status.LastSyncTime = metav1.Time{Time: s.clock.Now()}
