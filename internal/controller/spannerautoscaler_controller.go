@@ -626,19 +626,23 @@ func (r *SpannerAutoscalerReconciler) needUpdateProcessingUnits(log logr.Logger,
 // calcDesiredProcessingUnits calculates the values needed to keep CPU utilization below TargetCPU.
 func calcDesiredProcessingUnits(sa spannerv1beta1.SpannerAutoscaler) int {
 	var currentCPU, targetCPU int
+	var expectedMetricType spannerv1beta1.CPUMetricType
 	if sa.Spec.ScaleConfig.TargetCPUUtilization.Total != nil {
 		currentCPU = sa.Status.CurrentTotalCPUUtilization
 		targetCPU = *sa.Spec.ScaleConfig.TargetCPUUtilization.Total
+		expectedMetricType = spannerv1beta1.CPUMetricTypeTotal
 	} else {
 		currentCPU = sa.Status.CurrentHighPriorityCPUUtilization
 		targetCPU = *sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority
+		expectedMetricType = spannerv1beta1.CPUMetricTypeHighPriority
 	}
 
-	// currentCPU is 0 when the status has not yet been populated for the
-	// current metric type (e.g. immediately after switching between highPriority
-	// and total modes). Treating 0 as actual CPU usage would produce a bogus
-	// scale-down to the minimum PU, so keep the current value unchanged.
-	if currentCPU == 0 {
+	// If the status was last synced for a different metric type, the CPU value
+	// in status belongs to the old metric and cannot be used for scaling decisions
+	// (highPriority and total measure different Cloud Monitoring metrics and are
+	// not interchangeable). Skip this reconcile; the syncer will update
+	// CurrentCPUMetricType within one sync cycle (≤1 minute).
+	if sa.Status.CurrentCPUMetricType != expectedMetricType {
 		return sa.Status.CurrentProcessingUnits
 	}
 
