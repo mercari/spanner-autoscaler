@@ -627,14 +627,19 @@ func (r *SpannerAutoscalerReconciler) needUpdateProcessingUnits(log logr.Logger,
 func calcDesiredProcessingUnits(sa spannerv1beta1.SpannerAutoscaler) int {
 	var currentCPU, targetCPU int
 	var expectedMetricType spannerv1beta1.CPUMetricType
-	if sa.Spec.ScaleConfig.TargetCPUUtilization.Total != nil {
+	switch {
+	case sa.Spec.ScaleConfig.TargetCPUUtilization.Total != nil:
 		currentCPU = sa.Status.CurrentTotalCPUUtilization
 		targetCPU = *sa.Spec.ScaleConfig.TargetCPUUtilization.Total
 		expectedMetricType = spannerv1beta1.CPUMetricTypeTotal
-	} else {
+	case sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority != nil:
 		currentCPU = sa.Status.CurrentHighPriorityCPUUtilization
 		targetCPU = *sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority
 		expectedMetricType = spannerv1beta1.CPUMetricTypeHighPriority
+	default:
+		// Defensively handle invalid specs when admission validation is bypassed
+		// or malformed objects already exist in-cluster.
+		return sa.Status.CurrentProcessingUnits
 	}
 
 	// If the status was last synced for a different metric type, the CPU value

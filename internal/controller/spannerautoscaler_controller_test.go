@@ -383,6 +383,16 @@ var _ = Describe("Calculate Desired Processing Units (metric type switching guar
 		}
 		Expect(calcDesiredProcessingUnits(sa)).To(Equal(1000))
 	})
+
+	It("keeps current PU when neither highPriority nor total is set (invalid spec)", func() {
+		sa := spannerv1beta1.SpannerAutoscaler{}
+		sa.Status.CurrentProcessingUnits = 3000
+		sa.Status.CurrentCPUMetricType = spannerv1beta1.CPUMetricTypeHighPriority
+		sa.Spec.ScaleConfig = baseScaleConfig()
+		// Both HighPriority and Total are nil — invalid spec that bypassed webhook validation
+		sa.Spec.ScaleConfig.TargetCPUUtilization = spannerv1beta1.TargetCPUUtilization{}
+		Expect(calcDesiredProcessingUnits(sa)).To(Equal(3000))
+	})
 })
 
 var _ = Describe("Fetch Credentials", func() {
