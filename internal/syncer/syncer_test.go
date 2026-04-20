@@ -75,7 +75,7 @@ func Test_syncer_syncResource(t *testing.T) {
 					},
 					ScaledownStepSize: intstr.FromInt(1000),
 					TargetCPUUtilization: spannerv1beta1.TargetCPUUtilization{
-						HighPriority: 50,
+						HighPriority: intPtr(50),
 					},
 				},
 			},
@@ -109,6 +109,7 @@ func Test_syncer_syncResource(t *testing.T) {
 				o.Status.CurrentProcessingUnits = 3000
 				o.Status.InstanceState = spannerv1beta1.InstanceStateReady
 				o.Status.CurrentHighPriorityCPUUtilization = 30
+				o.Status.CurrentCPUMetricType = spannerv1beta1.CPUMetricTypeHighPriority
 				o.Status.LastSyncTime = metav1.Time{Time: fakeTime}
 				return o
 			}(),
@@ -224,7 +225,7 @@ func Test_syncer_getInstanceInfo(t *testing.T) {
 			}
 
 			ctx := context.Background()
-			gotInstance, gotInstanceMetrics, err := s.getInstanceInfo(ctx)
+			gotInstance, gotInstanceMetrics, err := s.getInstanceInfo(ctx, metrics.MetricTypeHighPriority)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("getInstanceInfo() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -238,3 +239,5 @@ func Test_syncer_getInstanceInfo(t *testing.T) {
 		})
 	}
 }
+
+func intPtr(i int) *int { return &i }

@@ -161,8 +161,34 @@ func (r *SpannerAutoscaler) validateAuthentication() *field.Error {
 	return nil
 }
 
+// exactlyOneOfBools returns true if exactly one of the given values is true.
+func exactlyOneOfBools(values ...bool) bool {
+	count := 0
+	for _, v := range values {
+		if v {
+			count++
+		}
+	}
+	return count == 1
+}
+
+func validateTargetCPUUtilization(cpu TargetCPUUtilization) *field.Error {
+	if !exactlyOneOfBools(cpu.HighPriority != nil, cpu.Total != nil) {
+		return field.Invalid(
+			field.NewPath("spec", "scaleConfig", "targetCPUUtilization"),
+			cpu,
+			"exactly one of 'highPriority' or 'total' must be specified",
+		)
+	}
+	return nil
+}
+
 func (r *SpannerAutoscaler) validateScaleConfig() *field.Error {
 	sc := r.Spec.ScaleConfig
+
+	if err := validateTargetCPUUtilization(sc.TargetCPUUtilization); err != nil {
+		return err
+	}
 
 	if sc.Nodes != (ScaleConfigNodes{}) {
 		if sc.Nodes.Max < sc.Nodes.Min {

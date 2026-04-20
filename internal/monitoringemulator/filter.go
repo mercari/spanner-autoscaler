@@ -6,6 +6,34 @@ import (
 	"strings"
 )
 
+var (
+	metricTypeHighPriorityPattern = regexp.MustCompile(
+		`metric\.type\s*=\s*"spanner\.googleapis\.com/instance/cpu/utilization_by_priority"`)
+	metricTypeTotalPattern = regexp.MustCompile(
+		`metric\.type\s*=\s*"spanner\.googleapis\.com/instance/cpu/utilization"`)
+)
+
+// MetricKind represents the kind of Cloud Monitoring metric in a filter string.
+type MetricKind int
+
+const (
+	MetricKindHighPriority MetricKind = iota
+	MetricKindTotal
+	MetricKindUnknown
+)
+
+// extractMetricKind determines the metric kind from a Cloud Monitoring filter string.
+func extractMetricKind(filter string) MetricKind {
+	switch {
+	case metricTypeHighPriorityPattern.MatchString(filter):
+		return MetricKindHighPriority
+	case metricTypeTotalPattern.MatchString(filter):
+		return MetricKindTotal
+	default:
+		return MetricKindUnknown
+	}
+}
+
 var instanceIDRegex = regexp.MustCompile(`resource\.label\.instance_id\s*=\s*"([^"]+)"`)
 
 // extractInstanceID extracts the instance_id value from a Cloud Monitoring filter string.

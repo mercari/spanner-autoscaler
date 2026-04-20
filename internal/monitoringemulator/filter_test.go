@@ -1,6 +1,8 @@
 package monitoringemulator
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestExtractInstanceID(t *testing.T) {
 	tests := []struct {
@@ -41,6 +43,46 @@ func TestExtractInstanceID(t *testing.T) {
 			}
 			if got != tt.want {
 				t.Errorf("extractInstanceID() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestExtractMetricKind(t *testing.T) {
+	tests := []struct {
+		name   string
+		filter string
+		want   MetricKind
+	}{
+		{
+			name: "high priority filter",
+			filter: `metric.type = "spanner.googleapis.com/instance/cpu/utilization_by_priority" AND
+	metric.label.priority = "high" AND
+	resource.label.instance_id = "my-instance"`,
+			want: MetricKindHighPriority,
+		},
+		{
+			name: "total CPU filter",
+			filter: `metric.type = "spanner.googleapis.com/instance/cpu/utilization" AND
+	resource.label.instance_id = "my-instance"`,
+			want: MetricKindTotal,
+		},
+		{
+			name:   "unknown metric type",
+			filter: `metric.type = "spanner.googleapis.com/instance/storage/used_bytes"`,
+			want:   MetricKindUnknown,
+		},
+		{
+			name:   "empty filter",
+			filter: "",
+			want:   MetricKindUnknown,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractMetricKind(tt.filter)
+			if got != tt.want {
+				t.Errorf("extractMetricKind() = %v, want %v", got, tt.want)
 			}
 		})
 	}

@@ -38,7 +38,7 @@ var _ = Describe("ConvertTo", func() {
 				},
 				ScaleConfig: v1beta1.ScaleConfig{
 					TargetCPUUtilization: v1beta1.TargetCPUUtilization{
-						HighPriority: 50,
+						HighPriority: intPtr(50),
 					},
 				},
 			},
@@ -126,7 +126,7 @@ var _ = Describe("ConvertTo", func() {
 				},
 				ScaledownStepSize: intstr.FromInt(1000),
 				TargetCPUUtilization: v1beta1.TargetCPUUtilization{
-					HighPriority: 50,
+					HighPriority: intPtr(50),
 				},
 			},
 		),
@@ -139,7 +139,7 @@ var _ = Describe("ConvertTo", func() {
 				},
 				ScaledownStepSize: intstr.FromInt(1000),
 				TargetCPUUtilization: v1beta1.TargetCPUUtilization{
-					HighPriority: 50,
+					HighPriority: intPtr(50),
 				},
 			},
 		),
@@ -203,7 +203,7 @@ var _ = Describe("ConvertFrom", func() {
 				},
 				ScaleConfig: v1beta1.ScaleConfig{
 					TargetCPUUtilization: v1beta1.TargetCPUUtilization{
-						HighPriority: 50,
+						HighPriority: intPtr(50),
 					},
 				},
 			},
@@ -256,7 +256,7 @@ var _ = Describe("ConvertFrom", func() {
 			src.Spec.ScaleConfig = scaleConfig
 			src.Spec.ScaleConfig.ScaledownStepSize = intstr.FromInt(1000)
 			src.Spec.ScaleConfig.TargetCPUUtilization = v1beta1.TargetCPUUtilization{
-				HighPriority: 50,
+				HighPriority: intPtr(50),
 			}
 
 			err := dest.ConvertFrom(src)
@@ -335,3 +335,5 @@ var _ = Describe("ConvertFrom", func() {
 		})
 	})
 })
+
+func intPtr(i int) *int { return &i }

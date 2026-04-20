@@ -69,7 +69,8 @@ type SpannerAutoscalerReconciler struct {
 	scaleUpInterval   time.Duration
 
 	// spannerEndpoint and metricsEndpoint allow overriding the API endpoints
-	// for testing with emulators. When both are set, authentication is skipped.
+	// independently (e.g. point one client at an emulator while the other uses
+	// real GCP). When set, the corresponding client skips token-based auth.
 	spannerEndpoint string
 	metricsEndpoint string
 
@@ -529,21 +530,27 @@ func parseNamespacedName(name string, defaultNamespace string) types.NamespacedN
 }
 
 func (r *SpannerAutoscalerReconciler) startSyncer(ctx context.Context, log logr.Logger, nn types.NamespacedName, projectID, instanceID string, credentials *syncerpkg.Credentials) error {
-	useEmulators := r.spannerEndpoint != "" && r.metricsEndpoint != ""
-
 	var spannerOpts []spanner.Option
 	var metricsOpts []metrics.Option
 
-	if useEmulators {
-		spannerOpts = append(spannerOpts, spanner.WithEndpoint(r.spannerEndpoint))
-		metricsOpts = append(metricsOpts, metrics.WithEndpoint(r.metricsEndpoint))
-	} else {
+	// Fetch a token source only when at least one client needs real GCP auth.
+	if r.spannerEndpoint == "" || r.metricsEndpoint == "" {
 		ts, err := credentials.TokenSource(ctx)
 		if err != nil {
 			return err
 		}
-		spannerOpts = append(spannerOpts, spanner.WithTokenSource(ts))
-		metricsOpts = append(metricsOpts, metrics.WithTokenSource(ts))
+		if r.spannerEndpoint == "" {
+			spannerOpts = append(spannerOpts, spanner.WithTokenSource(ts))
+		}
+		if r.metricsEndpoint == "" {
+			metricsOpts = append(metricsOpts, metrics.WithTokenSource(ts))
+		}
+	}
+	if r.spannerEndpoint != "" {
+		spannerOpts = append(spannerOpts, spanner.WithEndpoint(r.spannerEndpoint))
+	}
+	if r.metricsEndpoint != "" {
+		metricsOpts = append(metricsOpts, metrics.WithEndpoint(r.metricsEndpoint))
 	}
 
 	spannerOpts = append(spannerOpts, spanner.WithLog(log))
@@ -618,9 +625,35 @@ func (r *SpannerAutoscalerReconciler) needUpdateProcessingUnits(log logr.Logger,
 
 // calcDesiredProcessingUnits calculates the values needed to keep CPU utilization below TargetCPU.
 func calcDesiredProcessingUnits(sa spannerv1beta1.SpannerAutoscaler) int {
-	totalCPU := sa.Status.CurrentHighPriorityCPUUtilization * sa.Status.CurrentProcessingUnits
+	var currentCPU, targetCPU int
+	var expectedMetricType spannerv1beta1.CPUMetricType
+	switch {
+	case sa.Spec.ScaleConfig.TargetCPUUtilization.Total != nil:
+		currentCPU = sa.Status.CurrentTotalCPUUtilization
+		targetCPU = *sa.Spec.ScaleConfig.TargetCPUUtilization.Total
+		expectedMetricType = spannerv1beta1.CPUMetricTypeTotal
+	case sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority != nil:
+		currentCPU = sa.Status.CurrentHighPriorityCPUUtilization
+		targetCPU = *sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority
+		expectedMetricType = spannerv1beta1.CPUMetricTypeHighPriority
+	default:
+		// Defensively handle invalid specs when admission validation is bypassed
+		// or malformed objects already exist in-cluster.
+		return sa.Status.CurrentProcessingUnits
+	}
 
-	requiredPU := totalCPU / sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority
+	// If the status was last synced for a different metric type, the CPU value
+	// in status belongs to the old metric and cannot be used for scaling decisions
+	// (highPriority and total measure different Cloud Monitoring metrics and are
+	// not interchangeable). Skip this reconcile; the syncer will update
+	// CurrentCPUMetricType within one sync cycle (≤1 minute).
+	if sa.Status.CurrentCPUMetricType != expectedMetricType {
+		return sa.Status.CurrentProcessingUnits
+	}
+
+	totalCPU := currentCPU * sa.Status.CurrentProcessingUnits
+
+	requiredPU := totalCPU / targetCPU
 
 	var desiredPU int
 

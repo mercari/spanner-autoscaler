@@ -7,7 +7,7 @@
 # To disable webhooks (for pure controller logic development):
 #   tilt up -- --enable_webhooks=false
 # Or create tilt_config.json (gitignored) with: {"enable_webhooks": false}
-config.define_bool("enable_webhooks", args=False,
+config.define_bool("enable_webhooks", args=True,
     usage="Enable webhook support (default: true). Set false for controller-only development.")
 cfg = config.parse()
 ENABLE_WEBHOOKS = cfg.get("enable_webhooks", True)
@@ -107,19 +107,35 @@ local_resource(
     labels=['setup'],
 )
 
-sample_deps = ['controller', 'setup-emulator-instance']
-local_resource(
-    'apply-sample',
-    cmd="""
-        until kubectl apply -f config/samples/spanner_v1beta1_spannerautoscaler_local.yaml 2>&1; do
-            echo 'Waiting for webhook to be ready...'
-            sleep 3
-        done
-    """,
-    deps=['config/samples/spanner_v1beta1_spannerautoscaler_local.yaml'],
-    resource_deps=sample_deps,
-    labels=['setup'],
-)
+if ENABLE_WEBHOOKS:
+    # In webhook mode, retry until the webhook is ready to admit the resource.
+    local_resource(
+        'apply-sample',
+        cmd="""
+            until kubectl apply -f config/samples/spanner_v1beta1_spannerautoscaler_local.yaml 2>&1; do
+                echo 'Retrying sample apply until webhook is ready...'
+                sleep 3
+            done
+        """,
+        deps=['config/samples/spanner_v1beta1_spannerautoscaler_local.yaml'],
+        resource_deps=['controller', 'setup-emulator-instance'],
+        labels=['setup'],
+    )
+else:
+    # In no-webhook mode, manifests (including the namespace) are not applied via
+    # apply-manifests, so ensure the namespace exists before applying the sample.
+    local_resource(
+        'ensure-namespace',
+        cmd='kubectl create namespace {} --dry-run=client -o yaml | kubectl apply -f -'.format(WEBHOOK_NAMESPACE),
+        labels=['setup'],
+    )
+    local_resource(
+        'apply-sample',
+        cmd='kubectl apply -f config/samples/spanner_v1beta1_spannerautoscaler_local.yaml',
+        deps=['config/samples/spanner_v1beta1_spannerautoscaler_local.yaml'],
+        resource_deps=['controller', 'setup-emulator-instance', 'ensure-namespace'],
+        labels=['setup'],
+    )
 
 if ENABLE_WEBHOOKS:
     local_resource(
