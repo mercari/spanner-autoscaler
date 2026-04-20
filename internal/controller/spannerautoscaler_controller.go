@@ -756,12 +756,8 @@ func calcDesiredProcessingUnits(sa spannerv1beta1.SpannerAutoscaler) int {
 func calcDesiredPURange(sa spannerv1beta1.SpannerAutoscaler) (int, int, bool) {
 	changed := false
 	var desiredMin, desiredMax int
-	for i, sched := range sa.Status.CurrentlyActiveSchedules {
-		if i == 0 {
-			desiredMin = sched.AdditionalPU
-		} else if sched.AdditionalPU < desiredMin {
-			desiredMin = sched.AdditionalPU
-		}
+	for _, sched := range sa.Status.CurrentlyActiveSchedules {
+		desiredMin += sched.AdditionalPU
 		desiredMax += sched.AdditionalPU
 	}
 
