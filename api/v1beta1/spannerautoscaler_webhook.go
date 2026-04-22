@@ -161,19 +161,9 @@ func (r *SpannerAutoscaler) validateAuthentication() *field.Error {
 	return nil
 }
 
-// exactlyOneOfBools returns true if exactly one of the given values is true.
-func exactlyOneOfBools(values ...bool) bool {
-	count := 0
-	for _, v := range values {
-		if v {
-			count++
-		}
-	}
-	return count == 1
-}
-
 func validateTargetCPUUtilization(cpu TargetCPUUtilization) *field.Error {
-	if !exactlyOneOfBools(cpu.HighPriority != nil, cpu.Total != nil) {
+	// XOR: exactly one of the two fields must be set.
+	if (cpu.HighPriority != nil) == (cpu.Total != nil) {
 		return field.Invalid(
 			field.NewPath("spec", "scaleConfig", "targetCPUUtilization"),
 			cpu,
