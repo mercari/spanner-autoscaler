@@ -555,4 +555,83 @@ var _ = Describe("Get and overwrite interval", func() {
 	})
 })
 
+var _ = Describe("Calculate Desired PU Range", func() {
+	baseSpec := func(min, max int) spannerv1beta1.SpannerAutoscaler {
+		sa := spannerv1beta1.SpannerAutoscaler{}
+		sa.Spec.ScaleConfig.ProcessingUnits.Min = min
+		sa.Spec.ScaleConfig.ProcessingUnits.Max = max
+		return sa
+	}
+
+	It("returns spec min/max when no active schedules", func() {
+		sa := baseSpec(1000, 10000)
+		sa.Status.DesiredMinPUs = 1000
+		sa.Status.DesiredMaxPUs = 10000
+		gotMin, gotMax, changed := calcDesiredPURange(sa)
+		Expect(gotMin).To(Equal(1000))
+		Expect(gotMax).To(Equal(10000))
+		Expect(changed).To(BeFalse())
+	})
+
+	It("adds AdditionalPU to spec min/max for a single active schedule", func() {
+		sa := baseSpec(1000, 10000)
+		sa.Status.CurrentlyActiveSchedules = []spannerv1beta1.ActiveSchedule{
+			{AdditionalPU: 2000},
+		}
+		gotMin, gotMax, changed := calcDesiredPURange(sa)
+		Expect(gotMin).To(Equal(3000))
+		Expect(gotMax).To(Equal(12000))
+		Expect(changed).To(BeTrue())
+	})
+
+	It("sums AdditionalPU from all active schedules for both min and max", func() {
+		sa := baseSpec(1000, 10000)
+		sa.Status.CurrentlyActiveSchedules = []spannerv1beta1.ActiveSchedule{
+			{AdditionalPU: 1000},
+			{AdditionalPU: 5000},
+		}
+		gotMin, gotMax, changed := calcDesiredPURange(sa)
+		// desiredMin = 1000 + (1000 + 5000) = 7000
+		// desiredMax = 10000 + (1000 + 5000) = 16000
+		Expect(gotMin).To(Equal(7000))
+		Expect(gotMax).To(Equal(16000))
+		Expect(changed).To(BeTrue())
+	})
+
+	It("rounds up desiredMin and desiredMax to the next 1000 when above 1000 and not a multiple", func() {
+		sa := baseSpec(1000, 10000)
+		sa.Status.CurrentlyActiveSchedules = []spannerv1beta1.ActiveSchedule{
+			{AdditionalPU: 1500},
+		}
+		gotMin, gotMax, changed := calcDesiredPURange(sa)
+		// desiredMin = 1000 + 1500 = 2500 → rounded up to 3000
+		// desiredMax = 10000 + 1500 = 11500 → rounded up to 12000
+		Expect(gotMin).To(Equal(3000))
+		Expect(gotMax).To(Equal(12000))
+		Expect(changed).To(BeTrue())
+	})
+
+	It("does not round when desiredMin/Max is already a multiple of 1000", func() {
+		sa := baseSpec(1000, 10000)
+		sa.Status.CurrentlyActiveSchedules = []spannerv1beta1.ActiveSchedule{
+			{AdditionalPU: 3000},
+		}
+		gotMin, gotMax, changed := calcDesiredPURange(sa)
+		Expect(gotMin).To(Equal(4000))
+		Expect(gotMax).To(Equal(13000))
+		Expect(changed).To(BeTrue())
+	})
+
+	It("reports no change when computed values match current status", func() {
+		sa := baseSpec(1000, 10000)
+		sa.Status.CurrentlyActiveSchedules = []spannerv1beta1.ActiveSchedule{
+			{AdditionalPU: 2000},
+		}
+		sa.Status.DesiredMinPUs = 3000
+		sa.Status.DesiredMaxPUs = 12000
+		_, _, changed := calcDesiredPURange(sa)
+		Expect(changed).To(BeFalse())
+	})
+})
+
 func intPtr(i int) *int { return &i }
