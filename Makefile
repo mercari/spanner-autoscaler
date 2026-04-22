@@ -249,7 +249,7 @@ $(KUSTOMIZE): $(LOCALBIN)
 
 .PHONY: controller-gen
 controller-gen: $(LOCALBIN) ## Download controller-gen locally if necessary.
-	GOBIN=$(LOCALBIN) go install sigs.k8s.io/controller-tools/cmd/controller-gen
+	cd tools && GOBIN=$(LOCALBIN) go install sigs.k8s.io/controller-tools/cmd/controller-gen
 
 .PHONY: envtest
 envtest: $(ENVTEST) ## Download envtest-setup locally if necessary.
@@ -258,7 +258,7 @@ $(ENVTEST): $(LOCALBIN)
 
 .PHONY: kind
 kind: $(LOCALBIN) ## Download 'kind' locally if necessary
-	GOBIN=$(LOCALBIN) go install sigs.k8s.io/kind
+	cd tools && GOBIN=$(LOCALBIN) go install sigs.k8s.io/kind
 
 .PHONY: kpt
 kpt: ## Downlaod 'kpt' locally if necessary
@@ -267,11 +267,11 @@ kpt: ## Downlaod 'kpt' locally if necessary
 
 .PHONY: golangci-lint
 golangci-lint: $(LOCALBIN) ## Download 'golangci-lint' locally if necessary
-	GOBIN=$(LOCALBIN) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint
+	cd tools && GOBIN=$(LOCALBIN) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint
 
 .PHONY: crd-ref-docs
 crd-ref-docs: $(LOCALBIN) ## Download 'crd-ref-docs' locally if necessary
-	GOBIN=$(LOCALBIN) go install github.com/elastic/crd-ref-docs
+	cd tools && GOBIN=$(LOCALBIN) go install github.com/elastic/crd-ref-docs
 
 .PHONY: tilt
 tilt: $(LOCALBIN) ## Download 'tilt' locally if necessary
