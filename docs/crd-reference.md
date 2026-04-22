@@ -69,6 +69,25 @@ _Appears in:_
 | `iamKeySecret` _[IAMKeySecret](#iamkeysecret)_ | Details of the k8s secret which contains the GCP service account authentication key (in JSON).<br />[[Ref](https://cloud.google.com/kubernetes-engine/docs/tutorials/authenticating-to-cloud-platform)].<br />This is a pointer because structs with string slices can not be compared for zero values |  |  |
 
 
+#### CPUMetricType
+
+_Underlying type:_ _string_
+
+CPUMetricType identifies which Cloud Monitoring CPU metric is being used
+for autoscaling decisions.
+
+_Validation:_
+- Enum: [HighPriority Total]
+
+_Appears in:_
+- [SpannerAutoscalerStatus](#spannerautoscalerstatus)
+
+| Field | Description |
+| --- | --- |
+| `HighPriority` | CPUMetricTypeHighPriority uses spanner.googleapis.com/instance/cpu/utilization_by_priority<br />with priority=high filter.<br /> |
+| `Total` | CPUMetricTypeTotal uses spanner.googleapis.com/instance/cpu/utilization (all priorities).<br /> |
+
+
 #### ComputeType
 
 _Underlying type:_ _string_
@@ -158,7 +177,7 @@ _Appears in:_
 | `processingUnits` _[ScaleConfigPUs](#scaleconfigpus)_ | ProcessingUnits for scaling of the Spanner instance. Ref: [Spanner Compute Capacity](https://cloud.google.com/spanner/docs/compute-capacity#compute_capacity) |  |  |
 | `scaledownStepSize` _[IntOrString](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.22/#intorstring-intstr-util)_ | The maximum number of processing units which can be deleted in one scale-down operation. It can be a multiple of 100 for values < 1000, or a multiple of 1000 otherwise.<br />It can also be a percentage of the total number of processing units at the start of the scale-down operation. | 2000 |  |
 | `scaledownInterval` _[Duration](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.22/#duration-v1-meta)_ | How often autoscaler is reevaluated for scale down.<br />The cool down period between two consecutive scaledown operations. If this option is omitted, the value of the `--scale-down-interval` command line option is taken as the default value. |  |  |
-| `scaleupStepSize` _[IntOrString](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.22/#intorstring-intstr-util)_ | The maximum number of processing units which can be added in one scale-up operation. It can be a multiple of 100 for values < 1000, or a multiple of 1000 otherwise.<br />It can also be a percentage of the total number of processing units at the start of the scale-down operation. | 0 |  |
+| `scaleupStepSize` _[IntOrString](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.22/#intorstring-intstr-util)_ | The maximum number of processing units which can be added in one scale-up operation. It can be a multiple of 100 for values < 1000, or a multiple of 1000 otherwise.<br />It can also be a percentage of the total number of processing units at the start of the scale-up operation. | 0 |  |
 | `scaleupInterval` _[Duration](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.22/#duration-v1-meta)_ | How often autoscaler is reevaluated for scale up.<br />The warm up period between two consecutive scaleup operations. If this option is omitted, the value of the `--scale-up-interval` command line option is taken as the default value. |  |  |
 | `targetCPUUtilization` _[TargetCPUUtilization](#targetcpuutilization)_ | The CPU utilization which the autoscaling will try to achieve. Ref: [Spanner CPU utilization](https://cloud.google.com/spanner/docs/cpu-utilization#task-priority) |  |  |
 
@@ -246,9 +265,9 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `targetResource` _string_ | The `SpannerAutoscaler` resource name with which this schedule will be registered |  |  |
-| `additionalProcessingUnits` _integer_ | The extra compute capacity which will be added when this schedule is active |  |  |
-| `schedule` _[Schedule](#schedule)_ | The details of when and for how long this schedule will be active |  |  |
+| `targetResource` _string_ | The `SpannerAutoscaler` resource name with which this schedule will be registered.<br />Immutable after creation. |  |  |
+| `additionalProcessingUnits` _integer_ | The extra compute capacity which will be added when this schedule is active.<br />This is the only field that can be updated after creation. |  |  |
+| `schedule` _[Schedule](#schedule)_ | The details of when and for how long this schedule will be active.<br />Immutable after creation. |  |  |
 
 
 #### SpannerAutoscaleScheduleStatus
@@ -324,6 +343,8 @@ _Appears in:_
 | `desiredMaxPUs` _integer_ | Maximum number of processing units based on the currently active schedules |  |  |
 | `instanceState` _[InstanceState](#instancestate)_ | State of the Cloud Spanner instance |  |  |
 | `currentHighPriorityCPUUtilization` _integer_ | Current average CPU utilization for high priority task, represented as a percentage |  |  |
+| `currentTotalCPUUtilization` _integer_ | Current total CPU utilization (all priorities), represented as a percentage.<br />This field is populated only when spec.scaleConfig.targetCPUUtilization.total is specified. |  |  |
+| `currentCPUMetricType` _[CPUMetricType](#cpumetrictype)_ | CurrentCPUMetricType is the CPU metric type that was used in the last sync cycle.<br />The controller uses this to detect metric-type switches and skip scaling until<br />the status reflects the newly configured metric type. |  | Enum: [HighPriority Total] <br /> |
 
 
 #### TargetCPUUtilization
@@ -339,7 +360,8 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `highPriority` _integer_ | Desired CPU utilization for 'High Priority' CPU consumption category. Ref: [Spanner CPU utilization](https://cloud.google.com/spanner/docs/cpu-utilization#task-priority) |  | ExclusiveMaximum: true <br />ExclusiveMinimum: true <br />Maximum: 100 <br />Minimum: 0 <br /> |
+| `highPriority` _integer_ | Desired CPU utilization for 'High Priority' CPU consumption category. Ref: [Spanner CPU utilization](https://cloud.google.com/spanner/docs/cpu-utilization#task-priority)<br />Mutually exclusive with 'total'. Exactly one of 'highPriority' or 'total' must be specified. |  | ExclusiveMaximum: true <br />ExclusiveMinimum: true <br />Maximum: 100 <br />Minimum: 0 <br />Optional: \{\} <br /> |
+| `total` _integer_ | Desired total CPU utilization (all priorities combined). Ref: [Spanner CPU utilization](https://cloud.google.com/spanner/docs/cpu-utilization)<br />Mutually exclusive with 'highPriority'. Exactly one of 'highPriority' or 'total' must be specified. |  | ExclusiveMaximum: true <br />ExclusiveMinimum: true <br />Maximum: 100 <br />Minimum: 0 <br />Optional: \{\} <br /> |
 
 
 #### TargetInstance

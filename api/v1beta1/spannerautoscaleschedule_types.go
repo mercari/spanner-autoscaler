@@ -31,13 +31,16 @@ type Schedule struct {
 
 // SpannerAutoscaleScheduleSpec defines the desired state of SpannerAutoscaleSchedule
 type SpannerAutoscaleScheduleSpec struct {
-	// The `SpannerAutoscaler` resource name with which this schedule will be registered
+	// The `SpannerAutoscaler` resource name with which this schedule will be registered.
+	// Immutable after creation.
 	TargetResource string `json:"targetResource"`
 
-	// The extra compute capacity which will be added when this schedule is active
+	// The extra compute capacity which will be added when this schedule is active.
+	// This is the only field that can be updated after creation.
 	AdditionalProcessingUnits int `json:"additionalProcessingUnits"`
 
-	// The details of when and for how long this schedule will be active
+	// The details of when and for how long this schedule will be active.
+	// Immutable after creation.
 	Schedule Schedule `json:"schedule"`
 }
 

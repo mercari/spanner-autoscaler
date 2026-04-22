@@ -45,6 +45,8 @@ spec:
 
 > **Note:** `spec.targetResource` and `spec.schedule` (cron and duration) are **immutable** after creation. To change the target or schedule, delete the `SpannerAutoscaleSchedule` and create a new one. Only `spec.additionalProcessingUnits` can be updated in place.
 
+> **Note:** When multiple schedules are active simultaneously (i.e. their windows overlap), the `additionalProcessingUnits` from all active schedules are **summed** and added to both `desiredMinPUs` and `desiredMaxPUs`. For example, if schedule A adds +1,000 PU and schedule B adds +5,000 PU and both are active at the same time, `desiredMinPUs = spec.processingUnits.min + 6,000`.
+
 ## Installation
 
 Spanner Autoscaler can be installed using [KPT](https://kpt.dev/installation/) by following 2 steps:
@@ -109,6 +111,28 @@ spec:
     targetCPUUtilization:
       highPriority: 60
 ```
+
+#### Using total CPU utilization as scaling target:
+
+```yaml
+apiVersion: spanner.mercari.com/v1beta1
+kind: SpannerAutoscaler
+metadata:
+  name: spannerautoscaler-sample
+  namespace: your-namespace
+spec:
+  targetInstance:
+    projectId: your-gcp-project-id
+    instanceId: your-spanner-instance-id
+  scaleConfig:
+    processingUnits:
+      min: 1000
+      max: 10000
+    targetCPUUtilization:
+      total: 65
+```
+
+> **Note:** `highPriority` and `total` are mutually exclusive — exactly one must be specified. They use different Cloud Monitoring metrics (`spanner.googleapis.com/instance/cpu/utilization_by_priority` and `spanner.googleapis.com/instance/cpu/utilization` respectively) and the values are not directly comparable. When switching between them on a live resource, no scaling occurs during the first reconcile after the change because the status for the new metric type has not yet been populated by the syncer. Scaling resumes normally on the next sync cycle (default: 1 minute).
 
 #### Single Service Account using Workload Identity:
 
@@ -182,8 +206,6 @@ spec:
 ```
 
 > **Note:** `spec.targetInstance` (`projectId` and `instanceId`) is **immutable** after creation. To change the target Spanner instance, delete the `SpannerAutoscaler` and create a new one.
-
-> **Note:** `highPriority` and `total` in `targetCPUUtilization` are mutually exclusive — exactly one must be specified. They use different Cloud Monitoring metrics (`spanner.googleapis.com/instance/cpu/utilization_by_priority` and `spanner.googleapis.com/instance/cpu/utilization` respectively), so the values are not directly comparable. When switching between them on a live resource, no scaling occurs during the first reconcile after the change because the status for the new metric type has not yet been populated by the syncer. Scaling resumes normally on the next sync cycle (default: 1 minute).
 
 ## GCP Setup
 
