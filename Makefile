@@ -227,12 +227,10 @@ CRD_REF_DOCS = $(LOCALBIN)/crd-ref-docs
 TILT = $(LOCALBIN)/tilt
 
 ## Tool Versions
+# Versions for Go-installed tools are pinned in go.mod via tools/tools.go (managed by dependabot).
+# Versions for curl-installed tools (kustomize, kpt, tilt) remain hardcoded here.
 KUSTOMIZE_VERSION ?= v5.8.1
-CONTROLLER_TOOLS_VERSION ?= v0.20.1
-KIND_VERSION ?= v0.31.0
 KPT_VERSION ?= v1.0.0-beta.34
-GOLANGCI_LINT_VERSION ?= v2.1.6
-CRD_REF_DOCS_VERSION ?= v0.3.0
 TILT_VERSION ?= v0.33.21
 
 KUSTOMIZE_INSTALL_SCRIPT ?= "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh"
@@ -250,10 +248,8 @@ $(KUSTOMIZE): $(LOCALBIN)
 	test -s $(LOCALBIN)/kustomize || { curl -Ss $(KUSTOMIZE_INSTALL_SCRIPT) --output install_kustomize.sh && bash install_kustomize.sh $(subst v,,$(KUSTOMIZE_VERSION)) $(LOCALBIN); rm install_kustomize.sh; }
 
 .PHONY: controller-gen
-controller-gen: $(CONTROLLER_GEN) ## Download controller-gen locally if necessary. If wrong version is installed, it will be overwritten.
-$(CONTROLLER_GEN): $(LOCALBIN)
-	test -s $(LOCALBIN)/controller-gen && $(LOCALBIN)/controller-gen --version | grep -q $(CONTROLLER_TOOLS_VERSION) || \
-	GOBIN=$(LOCALBIN) go install sigs.k8s.io/controller-tools/cmd/controller-gen@$(CONTROLLER_TOOLS_VERSION)
+controller-gen: $(LOCALBIN) ## Download controller-gen locally if necessary.
+	cd tools && GOBIN=$(LOCALBIN) go install sigs.k8s.io/controller-tools/cmd/controller-gen
 
 .PHONY: envtest
 envtest: $(ENVTEST) ## Download envtest-setup locally if necessary.
@@ -261,9 +257,8 @@ $(ENVTEST): $(LOCALBIN)
 	test -s $(LOCALBIN)/setup-envtest || GOBIN=$(LOCALBIN) go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
 
 .PHONY: kind
-kind: ## Downlaod 'kind' locally if necessary
-	test -s $(LOCALBIN)/kind && $(LOCALBIN)/kind --version | grep -q $(KIND_VERSION) || \
-	GOBIN=$(LOCALBIN) go install sigs.k8s.io/kind@$(KIND_VERSION)
+kind: $(LOCALBIN) ## Download 'kind' locally if necessary
+	cd tools && GOBIN=$(LOCALBIN) go install sigs.k8s.io/kind
 
 .PHONY: kpt
 kpt: ## Downlaod 'kpt' locally if necessary
@@ -271,14 +266,12 @@ kpt: ## Downlaod 'kpt' locally if necessary
 	GOBIN=$(LOCALBIN) go install github.com/GoogleContainerTools/kpt@$(KPT_VERSION)
 
 .PHONY: golangci-lint
-golangci-lint: ## Downlaod 'golangci-lint' locally if necessary
-	test -s $(LOCALBIN)/golangci-lint && $(LOCALBIN)/golangci-lint --version | grep -q $(GOLANGCI_LINT_VERSION) || \
-	GOBIN=$(LOCALBIN) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+golangci-lint: $(LOCALBIN) ## Download 'golangci-lint' locally if necessary
+	cd tools && GOBIN=$(LOCALBIN) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint
 
 .PHONY: crd-ref-docs
-crd-ref-docs: ## Downlaod 'crd-ref-docs' locally if necessary
-	test -s $(LOCALBIN)/crd-ref-docs || \
-	GOBIN=$(LOCALBIN) go install github.com/elastic/crd-ref-docs@$(CRD_REF_DOCS_VERSION)
+crd-ref-docs: $(LOCALBIN) ## Download 'crd-ref-docs' locally if necessary
+	cd tools && GOBIN=$(LOCALBIN) go install github.com/elastic/crd-ref-docs
 
 .PHONY: tilt
 tilt: $(LOCALBIN) ## Download 'tilt' locally if necessary
