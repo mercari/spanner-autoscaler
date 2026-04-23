@@ -52,12 +52,14 @@ spec:
               SpannerAutoscaleSchedule
             properties:
               additionalProcessingUnits:
-                description: The extra compute capacity which will be added when this
-                  schedule is active
+                description: |-
+                  The extra compute capacity which will be added when this schedule is active.
+                  This is the only field that can be updated after creation.
                 type: integer
               schedule:
-                description: The details of when and for how long this schedule will
-                  be active
+                description: |-
+                  The details of when and for how long this schedule will be active.
+                  Immutable after creation.
                 properties:
                   cron:
                     description: 'The recurring frequency of the schedule in [standard
@@ -73,8 +75,9 @@ spec:
                 - duration
                 type: object
               targetResource:
-                description: The `SpannerAutoscaler` resource name with which this
-                  schedule will be registered
+                description: |-
+                  The `SpannerAutoscaler` resource name with which this schedule will be registered.
+                  Immutable after creation.
                 type: string
             required:
             - additionalProcessingUnits
