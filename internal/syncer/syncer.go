@@ -94,7 +94,12 @@ func (c *Credentials) TokenSource(ctx context.Context) (oauth2.TokenSource, erro
 	case CredentialsTypeADC:
 		return initializedBaseTokenSource()
 	case CredentialsTypeServiceAccountJSON:
-		cred, err := google.CredentialsFromJSON(ctx, c.ServiceAccountJSON, cloudPlatformScope)
+		cred, err := google.CredentialsFromJSONWithTypeAndParams(
+			ctx,
+			c.ServiceAccountJSON,
+			google.ServiceAccount,
+			google.CredentialsParams{Scopes: []string{cloudPlatformScope}},
+		)
 		if err != nil {
 			return nil, err
 		}

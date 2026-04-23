@@ -6,7 +6,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/conversion"
 )
 
@@ -102,16 +102,16 @@ func (dst *SpannerAutoscaler) ConvertFrom(srcRaw conversion.Hub) error {
 	log.V(2).Info("begin conversion from v1beta1 to v1alpha1", "src", src)
 
 	dst.Spec.ScaleTargetRef = ScaleTargetRef{
-		ProjectID:  pointer.String(src.Spec.TargetInstance.ProjectID),
-		InstanceID: pointer.String(src.Spec.TargetInstance.InstanceID),
+		ProjectID:  ptr.To(src.Spec.TargetInstance.ProjectID),
+		InstanceID: ptr.To(src.Spec.TargetInstance.InstanceID),
 	}
 
 	switch src.Spec.Authentication.Type {
 	case v1beta1.AuthTypeSA:
 		dst.Spec.ServiceAccountSecretRef = &ServiceAccountSecretRef{
-			Name:      pointer.String(src.Spec.Authentication.IAMKeySecret.Name),
-			Namespace: pointer.String(src.Spec.Authentication.IAMKeySecret.Namespace),
-			Key:       pointer.String(src.Spec.Authentication.IAMKeySecret.Key),
+			Name:      ptr.To(src.Spec.Authentication.IAMKeySecret.Name),
+			Namespace: ptr.To(src.Spec.Authentication.IAMKeySecret.Namespace),
+			Key:       ptr.To(src.Spec.Authentication.IAMKeySecret.Key),
 		}
 	case v1beta1.AuthTypeImpersonation:
 		dst.Spec.ImpersonateConfig = &ImpersonateConfig{
@@ -122,22 +122,22 @@ func (dst *SpannerAutoscaler) ConvertFrom(srcRaw conversion.Hub) error {
 
 	switch src.Spec.ScaleConfig.ComputeType {
 	case v1beta1.ComputeTypeNode:
-		dst.Spec.MinNodes = pointer.Int32(int32(src.Spec.ScaleConfig.Nodes.Min))
-		dst.Spec.MaxNodes = pointer.Int32(int32(src.Spec.ScaleConfig.Nodes.Max))
+		dst.Spec.MinNodes = ptr.To[int32](int32(src.Spec.ScaleConfig.Nodes.Min))
+		dst.Spec.MaxNodes = ptr.To[int32](int32(src.Spec.ScaleConfig.Nodes.Max))
 
 	case v1beta1.ComputeTypePU:
-		dst.Spec.MinProcessingUnits = pointer.Int32(int32(src.Spec.ScaleConfig.ProcessingUnits.Min))
-		dst.Spec.MaxProcessingUnits = pointer.Int32(int32(src.Spec.ScaleConfig.ProcessingUnits.Max))
+		dst.Spec.MinProcessingUnits = ptr.To[int32](int32(src.Spec.ScaleConfig.ProcessingUnits.Min))
+		dst.Spec.MaxProcessingUnits = ptr.To[int32](int32(src.Spec.ScaleConfig.ProcessingUnits.Max))
 	}
 
 	if src.Spec.ScaleConfig.ScaledownStepSize.Type == intstr.Int {
-		dst.Spec.MaxScaleDownNodes = pointer.Int32(src.Spec.ScaleConfig.ScaledownStepSize.IntVal / 1000)
+		dst.Spec.MaxScaleDownNodes = ptr.To[int32](src.Spec.ScaleConfig.ScaledownStepSize.IntVal / 1000)
 	} else {
-		dst.Spec.MaxScaleDownNodes = pointer.Int32(2) // From the default scaledownStepSize value
+		dst.Spec.MaxScaleDownNodes = ptr.To[int32](2) // From the default scaledownStepSize value
 	}
 	if src.Spec.ScaleConfig.TargetCPUUtilization.HighPriority != nil {
 		dst.Spec.TargetCPUUtilization = TargetCPUUtilization{
-			HighPriority: pointer.Int32(int32(*src.Spec.ScaleConfig.TargetCPUUtilization.HighPriority)),
+			HighPriority: ptr.To[int32](int32(*src.Spec.ScaleConfig.TargetCPUUtilization.HighPriority)),
 		}
 	}
 
@@ -147,11 +147,11 @@ func (dst *SpannerAutoscaler) ConvertFrom(srcRaw conversion.Hub) error {
 	// Copy the resource status
 	dst.Status.LastScaleTime = &metav1.Time{Time: src.Status.LastScaleTime.Time}
 	dst.Status.LastSyncTime = &metav1.Time{Time: src.Status.LastSyncTime.Time}
-	dst.Status.CurrentNodes = pointer.Int32(int32(src.Status.CurrentProcessingUnits / 1000))
-	dst.Status.CurrentProcessingUnits = pointer.Int32(int32(src.Status.CurrentProcessingUnits))
-	dst.Status.DesiredNodes = pointer.Int32(int32(src.Status.DesiredProcessingUnits / 1000))
-	dst.Status.DesiredProcessingUnits = pointer.Int32(int32(src.Status.DesiredProcessingUnits))
-	dst.Status.CurrentHighPriorityCPUUtilization = pointer.Int32(int32(src.Status.CurrentHighPriorityCPUUtilization))
+	dst.Status.CurrentNodes = ptr.To[int32](int32(src.Status.CurrentProcessingUnits / 1000))
+	dst.Status.CurrentProcessingUnits = ptr.To[int32](int32(src.Status.CurrentProcessingUnits))
+	dst.Status.DesiredNodes = ptr.To[int32](int32(src.Status.DesiredProcessingUnits / 1000))
+	dst.Status.DesiredProcessingUnits = ptr.To[int32](int32(src.Status.DesiredProcessingUnits))
+	dst.Status.CurrentHighPriorityCPUUtilization = ptr.To[int32](int32(src.Status.CurrentHighPriorityCPUUtilization))
 	dst.Status.InstanceState = InstanceState(src.Status.InstanceState)
 	log.V(2).Info("finished conversion from v1beta1 to v1alpha1", "src", src, "dst", dst)
 
