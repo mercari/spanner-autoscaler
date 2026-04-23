@@ -1,0 +1,18 @@
+# Local development sample for use with the emulators (make tilt-up).
+#
+# Targets the spannerautoscaler-sample-beta resource defined in
+# spanner_v1beta1_spannerautoscaler_local.yaml. Every 2 minutes the schedule
+# becomes active for 1 minute, lifting the effective max processing units by
+# +2000 so you can watch the controller scale beyond the steady-state ceiling
+# in response to the scenario CPU.
+apiVersion: spanner.mercari.com/v1beta1
+kind: SpannerAutoscaleSchedule
+metadata:
+  name: spannerautoscaleschedule-sample-beta
+  namespace: spanner-autoscaler
+spec:
+  targetResource: spannerautoscaler-sample-beta
+  additionalProcessingUnits: 2000
+  schedule:
+    cron: "*/2 * * * *" ## Every 2 minutes
+    duration: 1m

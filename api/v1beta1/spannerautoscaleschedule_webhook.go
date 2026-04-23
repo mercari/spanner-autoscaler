@@ -17,93 +17,98 @@ limitations under the License.
 package v1beta1
 
 import (
+	"context"
+	"fmt"
 	"time"
 
 	cronpkg "github.com/robfig/cron/v3"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	ctrl "sigs.k8s.io/controller-runtime"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/webhook"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
 
 // log is for logging in this package.
 var spannerautoscaleschedulelog = logf.Log.WithName("spannerautoscaleschedule-resource.webhook")
 
 func (r *SpannerAutoscaleSchedule) SetupWebhookWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewWebhookManagedBy(mgr).
-		For(r).
+	return ctrl.NewWebhookManagedBy(mgr, r).
+		WithValidator(&spannerAutoscaleScheduleWebhook{}).
 		Complete()
 }
 
 //+kubebuilder:webhook:path=/validate-spanner-mercari-com-v1beta1-spannerautoscaleschedule,mutating=false,failurePolicy=fail,sideEffects=None,groups=spanner.mercari.com,resources=spannerautoscaleschedules,verbs=create;update,versions=v1beta1,name=vspannerautoscaleschedule.kb.io,admissionReviewVersions=v1
 
-var _ webhook.Validator = &SpannerAutoscaleSchedule{}
+// spannerAutoscaleScheduleWebhook implements admission.Validator for the
+// SpannerAutoscaleSchedule resource.
+type spannerAutoscaleScheduleWebhook struct{}
 
-// ValidateCreate implements webhook.Validator so a webhook will be registered for the type
-func (r *SpannerAutoscaleSchedule) ValidateCreate() error {
-	spannerautoscaleschedulelog.Info("validate create", "name", r.Name)
-	spannerautoscaleschedulelog.V(1).Info("validating creation of SpannerAutoscaleSchedule resource", "name", r.Name, "resource", r)
+// ValidateCreate implements admission.Validator so a webhook will be registered for the type.
+func (*spannerAutoscaleScheduleWebhook) ValidateCreate(_ context.Context, obj *SpannerAutoscaleSchedule) (admission.Warnings, error) {
+	spannerautoscaleschedulelog.Info("validate create", "name", obj.Name)
+	spannerautoscaleschedulelog.V(1).Info("validating creation of SpannerAutoscaleSchedule resource", "name", obj.Name, "resource", obj)
 
-	allErrs := r.validateSchedule()
+	allErrs := validateSchedule(obj)
 
 	if len(allErrs) == 0 {
-		return nil
+		return nil, nil
 	}
 
-	return apierrors.NewInvalid(
+	return nil, apierrors.NewInvalid(
 		schema.GroupKind{Group: "spanner.mercari.com", Kind: "SpannerAutoscaleSchedule"},
-		r.Name, allErrs)
+		obj.Name, allErrs)
 }
 
-// ValidateUpdate implements webhook.Validator so a webhook will be registered for the type
-func (r *SpannerAutoscaleSchedule) ValidateUpdate(old runtime.Object) error {
-	spannerautoscaleschedulelog.Info("validate update", "name", r.Name)
-	spannerautoscaleschedulelog.V(1).Info("validating updates to SpannerAutoscaleSchedule resource", "name", r.Name, "resource", r)
+// ValidateUpdate implements admission.Validator so a webhook will be registered for the type.
+func (*spannerAutoscaleScheduleWebhook) ValidateUpdate(_ context.Context, oldObj, newObj *SpannerAutoscaleSchedule) (admission.Warnings, error) {
+	spannerautoscaleschedulelog.Info("validate update", "name", newObj.Name)
+	spannerautoscaleschedulelog.V(1).Info("validating updates to SpannerAutoscaleSchedule resource", "name", newObj.Name, "resource", newObj)
+
+	if oldObj == nil {
+		return nil, fmt.Errorf("expected old SpannerAutoscaleSchedule but got nil")
+	}
 
 	var allErrs field.ErrorList
-	oldResource := old.(*SpannerAutoscaleSchedule)
 
 	// TargetResource should not be changed after creation
-	if oldResource.Spec.TargetResource != r.Spec.TargetResource {
+	if oldObj.Spec.TargetResource != newObj.Spec.TargetResource {
 		err := field.Invalid(
 			field.NewPath("spec").Child("targetResource"),
-			r.Spec.TargetResource,
+			newObj.Spec.TargetResource,
 			"'targetResource' can not be changed after resource has been created")
 		allErrs = append(allErrs, err)
 	}
 
 	// Disable schedule updates until reconciler is modified to propagate this change to the actual cronjobs
-	if oldResource.Spec.Schedule != r.Spec.Schedule {
+	if oldObj.Spec.Schedule != newObj.Spec.Schedule {
 		err := field.Invalid(
 			field.NewPath("spec").Child("schedule"),
-			r.Spec.Schedule,
+			newObj.Spec.Schedule,
 			"'schedule' can not be changed after resource has been created")
 		allErrs = append(allErrs, err)
 	}
 
-	allErrs = append(allErrs, r.validateSchedule()...)
+	allErrs = append(allErrs, validateSchedule(newObj)...)
 
 	if len(allErrs) == 0 {
-		return nil
+		return nil, nil
 	}
 
-	return apierrors.NewInvalid(
+	return nil, apierrors.NewInvalid(
 		schema.GroupKind{Group: "spanner.mercari.com", Kind: "SpannerAutoscaleSchedule"},
-		r.Name, allErrs)
+		newObj.Name, allErrs)
 }
 
-// ValidateDelete implements webhook.Validator so a webhook will be registered for the type
-func (r *SpannerAutoscaleSchedule) ValidateDelete() error {
-	spannerautoscaleschedulelog.Info("validate delete", "name", r.Name)
+// ValidateDelete implements admission.Validator so a webhook will be registered for the type.
+func (*spannerAutoscaleScheduleWebhook) ValidateDelete(_ context.Context, obj *SpannerAutoscaleSchedule) (admission.Warnings, error) {
+	spannerautoscaleschedulelog.Info("validate delete", "name", obj.Name)
 
-	// TODO(user): fill in your validation logic upon object deletion.
-	return nil
+	return nil, nil
 }
 
-func (r *SpannerAutoscaleSchedule) validateSchedule() field.ErrorList {
+func validateSchedule(r *SpannerAutoscaleSchedule) field.ErrorList {
 	var allErrs field.ErrorList
 
 	if _, err := cronpkg.ParseStandard(r.Spec.Schedule.Cron); err != nil {

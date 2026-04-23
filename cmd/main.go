@@ -20,8 +20,6 @@ import (
 	"os"
 	"time"
 
-	ctrl "sigs.k8s.io/controller-runtime"
-
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -32,6 +30,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	ctrlmanager "sigs.k8s.io/controller-runtime/pkg/manager"
 	ctrlsignals "sigs.k8s.io/controller-runtime/pkg/manager/signals"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	ctrlwebhook "sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
 	// +kubebuilder:scaffold:imports
@@ -104,17 +104,14 @@ func main() {
 		Scheme:                 scheme,
 		LeaderElection:         *enableLeaderElection,
 		LeaderElectionID:       *leaderElectionID,
-		MetricsBindAddress:     *metricsAddr,
+		Metrics:                metricsserver.Options{BindAddress: *metricsAddr},
 		HealthProbeBindAddress: *probeAddr,
-		CertDir:                *certDir,
+		WebhookServer:          ctrlwebhook.NewServer(ctrlwebhook.Options{CertDir: *certDir}),
 	}
 	if *configFile != "" {
-		// TODO: discussion thread for deprecating `ComponentConfig`: https://github.com/kubernetes-sigs/controller-runtime/issues/895, move to some alternatives when a conclusion is reached
-		options, err = options.AndFrom(ctrl.ConfigFile().AtPath(*configFile)) //nolint:staticcheck
-		if err != nil {
-			setupLog.Error(err, "unable to load the config file")
-			os.Exit(exitCode)
-		}
+		// ComponentConfig (`AndFrom`/`ConfigFile`) was removed in controller-runtime
+		// v0.19. The flag is preserved to avoid breaking deployments, but is now a no-op.
+		setupLog.Info("--config flag is no longer supported and will be ignored", "configFile", *configFile)
 	}
 
 	mgr, err := ctrlmanager.New(cfg, options)

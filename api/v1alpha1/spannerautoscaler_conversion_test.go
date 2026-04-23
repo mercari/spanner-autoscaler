@@ -8,7 +8,7 @@ import (
 	. "github.com/onsi/gomega"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 )
 
 var _ = Describe("ConvertTo", func() {
@@ -22,11 +22,11 @@ var _ = Describe("ConvertTo", func() {
 		src = &SpannerAutoscaler{
 			Spec: SpannerAutoscalerSpec{
 				ScaleTargetRef: ScaleTargetRef{
-					ProjectID:  pointer.String("src-project-id"),
-					InstanceID: pointer.String("src-instance-id"),
+					ProjectID:  ptr.To("src-project-id"),
+					InstanceID: ptr.To("src-instance-id"),
 				},
 				TargetCPUUtilization: TargetCPUUtilization{
-					HighPriority: pointer.Int32(50),
+					HighPriority: ptr.To[int32](50),
 				},
 			},
 		}
@@ -74,9 +74,9 @@ var _ = Describe("ConvertTo", func() {
 		Entry("AuthType is SA with Namespace",
 			nil,
 			&ServiceAccountSecretRef{
-				Name:      pointer.String("src-service-account-secret-name"),
-				Namespace: pointer.String("src-service-account-secret-namespace"),
-				Key:       pointer.String("src-service-account-secret-key"),
+				Name:      ptr.To("src-service-account-secret-name"),
+				Namespace: ptr.To("src-service-account-secret-namespace"),
+				Key:       ptr.To("src-service-account-secret-key"),
 			},
 			v1beta1.Authentication{
 				Type: v1beta1.AuthTypeSA,
@@ -90,8 +90,8 @@ var _ = Describe("ConvertTo", func() {
 		Entry("AuthType is SA without Namespace",
 			nil,
 			&ServiceAccountSecretRef{
-				Name: pointer.String("src-service-account-secret-name"),
-				Key:  pointer.String("src-service-account-secret-key"),
+				Name: ptr.To("src-service-account-secret-name"),
+				Key:  ptr.To("src-service-account-secret-key"),
 			},
 			v1beta1.Authentication{
 				Type: v1beta1.AuthTypeSA,
@@ -117,7 +117,7 @@ var _ = Describe("ConvertTo", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(dest).To(Equal(expected))
 		},
-		Entry("ComputeType is Node", pointer.Int32(1), pointer.Int32(10), nil, nil, pointer.Int32(1),
+		Entry("ComputeType is Node", ptr.To[int32](1), ptr.To[int32](10), nil, nil, ptr.To[int32](1),
 			v1beta1.ScaleConfig{
 				ComputeType: v1beta1.ComputeTypeNode,
 				Nodes: v1beta1.ScaleConfigNodes{
@@ -130,7 +130,7 @@ var _ = Describe("ConvertTo", func() {
 				},
 			},
 		),
-		Entry("ComputeType is PU", nil, nil, pointer.Int32(100), pointer.Int32(1000), pointer.Int32(1),
+		Entry("ComputeType is PU", nil, nil, ptr.To[int32](100), ptr.To[int32](1000), ptr.To[int32](1),
 			v1beta1.ScaleConfig{
 				ComputeType: v1beta1.ComputeTypePU,
 				ProcessingUnits: v1beta1.ScaleConfigPUs{
@@ -172,11 +172,11 @@ var _ = Describe("ConvertTo", func() {
 		Entry("All statuses", SpannerAutoscalerStatus{
 			LastScaleTime:                     &metav1.Time{Time: timestamp},
 			LastSyncTime:                      &metav1.Time{Time: timestamp.Add(-1 * time.Hour)},
-			CurrentNodes:                      pointer.Int32(0),
-			CurrentProcessingUnits:            pointer.Int32(100),
-			DesiredNodes:                      pointer.Int32(0),
-			DesiredProcessingUnits:            pointer.Int32(200),
-			CurrentHighPriorityCPUUtilization: pointer.Int32(10),
+			CurrentNodes:                      ptr.To[int32](0),
+			CurrentProcessingUnits:            ptr.To[int32](100),
+			DesiredNodes:                      ptr.To[int32](0),
+			DesiredProcessingUnits:            ptr.To[int32](200),
+			CurrentHighPriorityCPUUtilization: ptr.To[int32](10),
 			InstanceState:                     InstanceStateReady,
 		}, v1beta1.SpannerAutoscalerStatus{
 			LastScaleTime:                     metav1.Time{Time: timestamp},
@@ -229,9 +229,9 @@ var _ = Describe("ConvertFrom", func() {
 				},
 			},
 			&ServiceAccountSecretRef{
-				Name:      pointer.String("src-service-account-secret-name"),
-				Namespace: pointer.String("src-service-account-secret-namespace"),
-				Key:       pointer.String("src-service-account-secret-key"),
+				Name:      ptr.To("src-service-account-secret-name"),
+				Namespace: ptr.To("src-service-account-secret-namespace"),
+				Key:       ptr.To("src-service-account-secret-key"),
 			},
 			nil,
 		),
@@ -265,8 +265,8 @@ var _ = Describe("ConvertFrom", func() {
 			Expect(dest.Spec.MaxNodes).To(Equal(expectedMaxNodes))
 			Expect(dest.Spec.MinProcessingUnits).To(Equal(expectedMinPU))
 			Expect(dest.Spec.MaxProcessingUnits).To(Equal(expectedMaxPU))
-			Expect(dest.Spec.MaxScaleDownNodes).To(Equal(pointer.Int32(1)))
-			Expect(dest.Spec.TargetCPUUtilization.HighPriority).To(Equal(pointer.Int32(50)))
+			Expect(dest.Spec.MaxScaleDownNodes).To(Equal(ptr.To[int32](1)))
+			Expect(dest.Spec.TargetCPUUtilization.HighPriority).To(Equal(ptr.To[int32](50)))
 		},
 		Entry("ComputeType is Node",
 			v1beta1.ScaleConfig{
@@ -276,7 +276,7 @@ var _ = Describe("ConvertFrom", func() {
 					Max: 10,
 				},
 			},
-			pointer.Int32(1), pointer.Int32(10), nil, nil,
+			ptr.To[int32](1), ptr.To[int32](10), nil, nil,
 		),
 		Entry("ComputeType is PU",
 			v1beta1.ScaleConfig{
@@ -286,7 +286,7 @@ var _ = Describe("ConvertFrom", func() {
 					Max: 1000,
 				},
 			},
-			nil, nil, pointer.Int32(100), pointer.Int32(1000),
+			nil, nil, ptr.To[int32](100), ptr.To[int32](1000),
 		),
 	)
 
@@ -321,11 +321,11 @@ var _ = Describe("ConvertFrom", func() {
 			expectedStatus := SpannerAutoscalerStatus{
 				LastScaleTime:                     &metav1.Time{Time: timestamp},
 				LastSyncTime:                      &metav1.Time{Time: timestamp.Add(-1 * time.Hour)},
-				CurrentNodes:                      pointer.Int32(0),
-				CurrentProcessingUnits:            pointer.Int32(100),
-				DesiredNodes:                      pointer.Int32(0),
-				DesiredProcessingUnits:            pointer.Int32(200),
-				CurrentHighPriorityCPUUtilization: pointer.Int32(10),
+				CurrentNodes:                      ptr.To[int32](0),
+				CurrentProcessingUnits:            ptr.To[int32](100),
+				DesiredNodes:                      ptr.To[int32](0),
+				DesiredProcessingUnits:            ptr.To[int32](200),
+				CurrentHighPriorityCPUUtilization: ptr.To[int32](10),
 				InstanceState:                     InstanceStateReady,
 			}
 

@@ -17,141 +17,146 @@ limitations under the License.
 package v1beta1
 
 import (
+	"context"
+	"fmt"
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	ctrl "sigs.k8s.io/controller-runtime"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/webhook"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
 
 // log is for logging in this package.
 var log = logf.Log.WithName("spannerautoscaler-resource.webhook")
 
 func (r *SpannerAutoscaler) SetupWebhookWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewWebhookManagedBy(mgr).
-		For(r).
+	w := &spannerAutoscalerWebhook{}
+	return ctrl.NewWebhookManagedBy(mgr, r).
+		WithDefaulter(w).
+		WithValidator(w).
 		Complete()
 }
 
 //+kubebuilder:webhook:path=/mutate-spanner-mercari-com-v1beta1-spannerautoscaler,mutating=true,failurePolicy=fail,sideEffects=None,groups=spanner.mercari.com,resources=spannerautoscalers,verbs=create;update,versions=v1beta1,name=mspannerautoscaler.kb.io,admissionReviewVersions=v1
+//+kubebuilder:webhook:path=/validate-spanner-mercari-com-v1beta1-spannerautoscaler,mutating=false,failurePolicy=fail,sideEffects=None,groups=spanner.mercari.com,resources=spannerautoscalers,verbs=create;update,versions=v1beta1,name=vspannerautoscaler.kb.io,admissionReviewVersions=v1
 
-var _ webhook.Defaulter = &SpannerAutoscaler{}
+// spannerAutoscalerWebhook implements admission.Defaulter and admission.Validator
+// for the SpannerAutoscaler resource.
+type spannerAutoscalerWebhook struct{}
 
-// Default implements webhook.Defaulter so a webhook will be registered for the type
-func (r *SpannerAutoscaler) Default() {
-	log.Info("default", "name", r.Name)
-	log.V(1).Info("received spannerautoscaler resource for setting defaults", "name", r.Name, "resource", r)
+// Default implements admission.Defaulter so a webhook will be registered for the type.
+func (*spannerAutoscalerWebhook) Default(_ context.Context, obj *SpannerAutoscaler) error {
+	log.Info("default", "name", obj.Name)
+	log.V(1).Info("received spannerautoscaler resource for setting defaults", "name", obj.Name, "resource", obj)
 
 	// set the correct AuthType in Spec
 	switch {
-	case r.Spec.Authentication.IAMKeySecret != nil:
-		r.Spec.Authentication.Type = AuthTypeSA
-	case r.Spec.Authentication.ImpersonateConfig != nil:
-		r.Spec.Authentication.Type = AuthTypeImpersonation
+	case obj.Spec.Authentication.IAMKeySecret != nil:
+		obj.Spec.Authentication.Type = AuthTypeSA
+	case obj.Spec.Authentication.ImpersonateConfig != nil:
+		obj.Spec.Authentication.Type = AuthTypeImpersonation
 	default:
-		r.Spec.Authentication.Type = AuthTypeADC
+		obj.Spec.Authentication.Type = AuthTypeADC
 	}
 
 	// set appropriate namespace for secret
-	if r.Spec.Authentication.Type == AuthTypeSA && r.Spec.Authentication.IAMKeySecret.Namespace == "" {
-		r.Spec.Authentication.IAMKeySecret.Namespace = r.ObjectMeta.Namespace
+	if obj.Spec.Authentication.Type == AuthTypeSA && obj.Spec.Authentication.IAMKeySecret.Namespace == "" {
+		obj.Spec.Authentication.IAMKeySecret.Namespace = obj.ObjectMeta.Namespace
 	}
 
 	// set default ComputeType
-	if r.Spec.ScaleConfig.ProcessingUnits != (ScaleConfigPUs{}) {
-		r.Spec.ScaleConfig.ComputeType = ComputeTypePU
+	if obj.Spec.ScaleConfig.ProcessingUnits != (ScaleConfigPUs{}) {
+		obj.Spec.ScaleConfig.ComputeType = ComputeTypePU
 	}
 
 	// convert the nodes to processing units
-	if r.Spec.ScaleConfig.Nodes != (ScaleConfigNodes{}) {
-		r.Spec.ScaleConfig.ComputeType = ComputeTypeNode
-		r.Spec.ScaleConfig.ProcessingUnits = ScaleConfigPUs{
-			Min: r.Spec.ScaleConfig.Nodes.Min * 1000,
-			Max: r.Spec.ScaleConfig.Nodes.Max * 1000,
+	if obj.Spec.ScaleConfig.Nodes != (ScaleConfigNodes{}) {
+		obj.Spec.ScaleConfig.ComputeType = ComputeTypeNode
+		obj.Spec.ScaleConfig.ProcessingUnits = ScaleConfigPUs{
+			Min: obj.Spec.ScaleConfig.Nodes.Min * 1000,
+			Max: obj.Spec.ScaleConfig.Nodes.Max * 1000,
 		}
 	}
 
 	// set default ScaledownStepSize
-	if r.Spec.ScaleConfig.ScaledownStepSize.IntValue() == 0 {
-		r.Spec.ScaleConfig.ScaledownStepSize = intstr.FromInt(2000)
+	if obj.Spec.ScaleConfig.ScaledownStepSize.IntValue() == 0 {
+		obj.Spec.ScaleConfig.ScaledownStepSize = intstr.FromInt(2000)
 	}
 
-	log.V(1).Info("finished setting defaults for spannerautoscaler resource", "name", r.Name, "resource", r)
+	log.V(1).Info("finished setting defaults for spannerautoscaler resource", "name", obj.Name, "resource", obj)
+	return nil
 }
 
-//+kubebuilder:webhook:path=/validate-spanner-mercari-com-v1beta1-spannerautoscaler,mutating=false,failurePolicy=fail,sideEffects=None,groups=spanner.mercari.com,resources=spannerautoscalers,verbs=create;update,versions=v1beta1,name=vspannerautoscaler.kb.io,admissionReviewVersions=v1
+// ValidateCreate implements admission.Validator so a webhook will be registered for the type.
+func (*spannerAutoscalerWebhook) ValidateCreate(_ context.Context, obj *SpannerAutoscaler) (admission.Warnings, error) {
+	log.Info("validate create", "name", obj.Name)
+	log.V(1).Info("validating creation of SpannerAutoscaler resource", "name", obj.Name, "resource", obj)
 
-var _ webhook.Validator = &SpannerAutoscaler{}
-
-// ValidateCreate implements webhook.Validator so a webhook will be registered for the type
-func (r *SpannerAutoscaler) ValidateCreate() error {
-	log.Info("validate create", "name", r.Name)
-	log.V(1).Info("validating creation of SpannerAutoscaler resource", "name", r.Name, "resource", r)
-
-	allErrs := r.validateSpec()
+	allErrs := validateSpec(obj)
 
 	if len(allErrs) == 0 {
-		return nil
+		return nil, nil
 	}
 
-	return apierrors.NewInvalid(
+	return nil, apierrors.NewInvalid(
 		schema.GroupKind{Group: "spanner.mercari.com", Kind: "SpannerAutoscaler"},
-		r.Name, allErrs)
+		obj.Name, allErrs)
 }
 
-// ValidateUpdate implements webhook.Validator so a webhook will be registered for the type
-func (r *SpannerAutoscaler) ValidateUpdate(old runtime.Object) error {
-	log.Info("validate update", "name", r.Name)
-	log.V(1).Info("validating updates to SpannerAutoscaler resource", "name", r.Name, "resource", r)
+// ValidateUpdate implements admission.Validator so a webhook will be registered for the type.
+func (*spannerAutoscalerWebhook) ValidateUpdate(_ context.Context, oldObj, newObj *SpannerAutoscaler) (admission.Warnings, error) {
+	log.Info("validate update", "name", newObj.Name)
+	log.V(1).Info("validating updates to SpannerAutoscaler resource", "name", newObj.Name, "resource", newObj)
 
 	var allErrs field.ErrorList
-	oldResource := old.(*SpannerAutoscaler)
 
-	if oldResource.Spec.TargetInstance != r.Spec.TargetInstance {
+	if oldObj == nil {
+		return nil, fmt.Errorf("expected old SpannerAutoscaler but got nil")
+	}
+
+	if oldObj.Spec.TargetInstance != newObj.Spec.TargetInstance {
 		err := field.Invalid(
 			field.NewPath("spec").Child("targetInstance"),
-			r.Spec.TargetInstance,
+			newObj.Spec.TargetInstance,
 			"'targetInstance' is not allowed to be changed after resource has been created")
 		allErrs = append(allErrs, err)
 	}
 
-	allErrs = append(allErrs, r.validateSpec()...)
+	allErrs = append(allErrs, validateSpec(newObj)...)
 
 	if len(allErrs) == 0 {
-		return nil
+		return nil, nil
 	}
 
-	return apierrors.NewInvalid(
+	return nil, apierrors.NewInvalid(
 		schema.GroupKind{Group: "spanner.mercari.com", Kind: "SpannerAutoscaler"},
-		r.Name, allErrs)
+		newObj.Name, allErrs)
 }
 
-// ValidateDelete implements webhook.Validator so a webhook will be registered for the type
-func (r *SpannerAutoscaler) ValidateDelete() error {
-	log.Info("validate delete", "name", r.Name)
+// ValidateDelete implements admission.Validator so a webhook will be registered for the type.
+func (*spannerAutoscalerWebhook) ValidateDelete(_ context.Context, obj *SpannerAutoscaler) (admission.Warnings, error) {
+	log.Info("validate delete", "name", obj.Name)
 
-	// TODO(user): fill in your validation logic upon object deletion.
-	return nil
+	return nil, nil
 }
 
-func (r *SpannerAutoscaler) validateSpec() (allErrs field.ErrorList) {
-	if err := r.validateAuthentication(); err != nil {
+func validateSpec(r *SpannerAutoscaler) (allErrs field.ErrorList) {
+	if err := validateAuthentication(r); err != nil {
 		allErrs = append(allErrs, err)
 	}
-	if err := r.validateScaleConfig(); err != nil {
+	if err := validateScaleConfig(r); err != nil {
 		allErrs = append(allErrs, err)
 	}
 
 	return allErrs
 }
 
-func (r *SpannerAutoscaler) validateAuthentication() *field.Error {
+func validateAuthentication(r *SpannerAutoscaler) *field.Error {
 	if r.Spec.Authentication.ImpersonateConfig != nil && r.Spec.Authentication.IAMKeySecret != nil {
 		return field.Invalid(
 			field.NewPath("spec").Child("authentication"),
@@ -173,7 +178,7 @@ func validateTargetCPUUtilization(cpu TargetCPUUtilization) *field.Error {
 	return nil
 }
 
-func (r *SpannerAutoscaler) validateScaleConfig() *field.Error {
+func validateScaleConfig(r *SpannerAutoscaler) *field.Error {
 	sc := r.Spec.ScaleConfig
 
 	if err := validateTargetCPUUtilization(sc.TargetCPUUtilization); err != nil {

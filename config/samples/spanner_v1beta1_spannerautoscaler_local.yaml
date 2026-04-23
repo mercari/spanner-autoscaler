@@ -18,7 +18,9 @@ spec:
     type: adc
   scaleConfig:
     processingUnits:
-      min: 100
-      max: 10000
+      min: 200
+      max: 7000
     targetCPUUtilization:
       highPriority: 40
+    scaledownInterval: 10s ## Only for local testing, to observe scale up/down cycles rapidly
+    scaleupInterval:   10s ## Only for local testing, to observe scale up/down cycles rapidly

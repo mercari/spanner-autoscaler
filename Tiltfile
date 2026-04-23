@@ -107,23 +107,29 @@ local_resource(
     labels=['setup'],
 )
 
+SAMPLE_FILES = [
+    'config/samples/spanner_v1beta1_spannerautoscaler_local.yaml',
+    'config/samples/spanner_v1beta1_spannerautoscaleschedule_local.yaml',
+]
+SAMPLE_APPLY_ARGS = ' '.join(['-f ' + f for f in SAMPLE_FILES])
+
 if ENABLE_WEBHOOKS:
-    # In webhook mode, retry until the webhook is ready to admit the resource.
+    # In webhook mode, retry until the webhook is ready to admit the resources.
     local_resource(
         'apply-sample',
         cmd="""
-            until kubectl apply -f config/samples/spanner_v1beta1_spannerautoscaler_local.yaml 2>&1; do
+            until kubectl apply {args} 2>&1; do
                 echo 'Retrying sample apply until webhook is ready...'
                 sleep 3
             done
-        """,
-        deps=['config/samples/spanner_v1beta1_spannerautoscaler_local.yaml'],
+        """.format(args=SAMPLE_APPLY_ARGS),
+        deps=SAMPLE_FILES,
         resource_deps=['controller', 'setup-emulator-instance'],
         labels=['setup'],
     )
 else:
     # In no-webhook mode, manifests (including the namespace) are not applied via
-    # apply-manifests, so ensure the namespace exists before applying the sample.
+    # apply-manifests, so ensure the namespace exists before applying the samples.
     local_resource(
         'ensure-namespace',
         cmd='kubectl create namespace {} --dry-run=client -o yaml | kubectl apply -f -'.format(WEBHOOK_NAMESPACE),
@@ -131,8 +137,8 @@ else:
     )
     local_resource(
         'apply-sample',
-        cmd='kubectl apply -f config/samples/spanner_v1beta1_spannerautoscaler_local.yaml',
-        deps=['config/samples/spanner_v1beta1_spannerautoscaler_local.yaml'],
+        cmd='kubectl apply {args}'.format(args=SAMPLE_APPLY_ARGS),
+        deps=SAMPLE_FILES,
         resource_deps=['controller', 'setup-emulator-instance', 'ensure-namespace'],
         labels=['setup'],
     )

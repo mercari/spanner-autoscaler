@@ -24,8 +24,7 @@ import (
 // var spannerautoscalerlog = logf.Log.WithName("spannerautoscaler-resource")
 
 func (r *SpannerAutoscaler) SetupWebhookWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewWebhookManagedBy(mgr).
-		For(r).
+	return ctrl.NewWebhookManagedBy(mgr, r).
 		Complete()
 }
 
