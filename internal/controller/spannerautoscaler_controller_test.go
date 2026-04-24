@@ -690,6 +690,20 @@ var _ = Describe("Scale down time restriction", func() {
 			Expect(allowed).To(BeTrue())
 		})
 
+		It("should support CRON_TZ timezone specification", func() {
+			// Test with Tokyo timezone (UTC+9)
+			// When it's 3:00 AM UTC, it's 12:00 PM JST - should be denied
+			currentTime := time.Date(2026, 4, 24, 3, 0, 0, 0, time.UTC)
+			cronExprs := []string{"CRON_TZ=Asia/Tokyo 0 2-4 * * *"} // 2:00-4:59 AM JST
+			allowed := isScaledownAllowed(cronExprs, currentTime)
+			Expect(allowed).To(BeFalse())
+
+			// When it's 18:00 UTC, it's 3:00 AM JST - should be allowed
+			currentTime = time.Date(2026, 4, 24, 18, 0, 0, 0, time.UTC)
+			allowed = isScaledownAllowed(cronExprs, currentTime)
+			Expect(allowed).To(BeTrue())
+		})
+
 		It("should deny scale down when all cron expressions are invalid", func() {
 			currentTime := time.Date(2026, 4, 24, 3, 0, 0, 0, time.UTC) // 3:00 AM
 			cronExprs := []string{"invalid cron", "also invalid"}

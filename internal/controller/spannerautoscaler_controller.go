@@ -38,6 +38,7 @@ import (
 	ctrlreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
+	"github.com/mercari/spanner-autoscaler/internal/cron"
 	"github.com/mercari/spanner-autoscaler/internal/metrics"
 	schedulerpkg "github.com/mercari/spanner-autoscaler/internal/scheduler"
 	"github.com/mercari/spanner-autoscaler/internal/spanner"
@@ -855,9 +856,9 @@ func isScaledownAllowed(allowedTimes []string, currentTime time.Time) bool {
 
 	// Check each cron schedule to see if current time matches
 	for _, cronExpr := range allowedTimes {
-		schedule, err := cronpkg.ParseStandard(cronExpr)
+		schedule, err := cron.Parse(cronExpr)
 		if err != nil {
-			// If cron expression is invalid, log error but continue checking other expressions
+			// If cron expression is invalid, continue checking other expressions
 			continue
 		}
 

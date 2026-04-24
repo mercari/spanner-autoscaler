@@ -21,7 +21,7 @@ import (
 	"fmt"
 	"time"
 
-	cronpkg "github.com/robfig/cron/v3"
+	"github.com/mercari/spanner-autoscaler/internal/cron"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -111,7 +111,7 @@ func (*spannerAutoscaleScheduleWebhook) ValidateDelete(_ context.Context, obj *S
 func validateSchedule(r *SpannerAutoscaleSchedule) field.ErrorList {
 	var allErrs field.ErrorList
 
-	if _, err := cronpkg.ParseStandard(r.Spec.Schedule.Cron); err != nil {
+	if _, err := cron.Parse(r.Spec.Schedule.Cron); err != nil {
 		fldErr := field.Invalid(
 			field.NewPath("spec").Child("schedule").Child("cron"),
 			r.Spec.Schedule.Cron,

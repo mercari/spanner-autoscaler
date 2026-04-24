@@ -74,7 +74,7 @@ scaledownAllowedTimes:
 
 > **Note:** When `scaledownAllowedTimes` is not specified, scale down operations are allowed at any time (default behavior). Scale up operations are never restricted and will always be executed immediately when needed, regardless of time restrictions.
 
-> **Note:** Time restrictions use standard [cron format](https://crontab.guru/) and are evaluated in UTC timezone (default for Kubernetes pods).
+> **Note:** Time restrictions use standard [cron format](https://crontab.guru/) and are evaluated in the timezone specified by the `TZ` environment variable. If `TZ` is not set, UTC timezone is used (default for Kubernetes pods). To use a different timezone, set the `TZ` environment variable (e.g., `TZ=Asia/Tokyo`).
 
 ## Installation
 
@@ -209,6 +209,33 @@ spec:
     targetCPUUtilization:
       total: 70
 ```
+
+#### Timezone Support
+
+Scale down time restrictions support timezone specification using the CRON_TZ format:
+
+```yaml
+apiVersion: spanner.mercari.com/v1beta1
+kind: SpannerAutoscaler
+metadata:
+  name: spannerautoscaler-sample
+  namespace: your-namespace
+spec:
+  targetInstance:
+    projectId: your-gcp-project-id
+    instanceId: your-spanner-instance-id
+  scaleConfig:
+    processingUnits:
+      min: 1000
+      max: 10000
+    # Allow scale down only during late night hours in Tokyo timezone
+    scaledownAllowedTimes:
+      - "CRON_TZ=Asia/Tokyo 0 2-4 * * *"
+    targetCPUUtilization:
+      highPriority: 65
+```
+
+When using CRON_TZ format, times are evaluated in the specified timezone rather than the controller's local timezone. This is useful for deployments where the controller runs in a different timezone than your business hours.
 
 #### Single Service Account using Workload Identity:
 
