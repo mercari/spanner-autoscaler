@@ -35,3 +35,22 @@ spec:
     cron: "*/25 * * * *" ## Every 25 minutes
     duration: 15m30s
 
+---
+apiVersion: spanner.mercari.com/v1beta1
+kind: SpannerAutoscaleSchedule
+metadata:
+  labels:
+    app.kubernetes.io/name: spannerautoscaleschedule
+    app.kubernetes.io/instance: timezone-sample
+    app.kubernetes.io/part-of: spanner-autoscaler
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/created-by: spanner-autoscaler
+  name: timezone-sample
+  namespace: test
+spec:
+  targetResource: spannerautoscaler-sample-beta
+  additionalProcessingUnits: 3000
+  schedule:
+    cron: "CRON_TZ=Asia/Tokyo 0 1 * * *" ## Daily at 1:00 AM JST
+    duration: 2h
+
