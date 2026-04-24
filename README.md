@@ -74,7 +74,7 @@ scaledownAllowedTimes:
 
 > **Note:** When `scaledownAllowedTimes` is not specified, scale down operations are allowed at any time (default behavior). Scale up operations are never restricted and will always be executed immediately when needed, regardless of time restrictions.
 
-> **Note:** Time restrictions use standard [cron format](https://crontab.guru/) and are evaluated in the local timezone where the controller is running.
+> **Note:** Time restrictions use standard [cron format](https://crontab.guru/) and are evaluated in UTC timezone (default for Kubernetes pods).
 
 ## Installation
 

@@ -29,10 +29,10 @@ spec:
     scaledownInterval: 10s  ## Only for local testing
     scaleupInterval: 10s    ## Only for local testing
     # Scale down allowed only during late afternoon/evening hours for testing
-    # Modify these hours based on your current local time for testing
+    # NOTE: Times are evaluated in the controller's local timezone
     scaledownAllowedTimes:
-      - "0 16-18 * * *"  # 4:00 PM to 6:59 PM (JST)
-      - "0 20-22 * * *"  # 8:00 PM to 10:59 PM (JST)
+      - "0 16-18 * * *"  # 4:00 PM to 6:59 PM
+      - "0 20-22 * * *"  # 8:00 PM to 10:59 PM
 
 ---
 # Instance 2: Scale down with midnight crossing restriction for testing
