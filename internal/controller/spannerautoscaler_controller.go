@@ -612,6 +612,15 @@ func (r *SpannerAutoscalerReconciler) needUpdateProcessingUnits(log logr.Logger,
 		)
 		return false
 
+	case desiredProcessingUnits < currentProcessingUnits && !isScaledownAllowed(sa.Spec.ScaleConfig.ScaledownAllowedTimes, now):
+		log.Info("scale down is not allowed at current time",
+			"now", now.String(),
+			"currentPU", currentProcessingUnits,
+			"desiredPU", desiredProcessingUnits,
+			"scaledownAllowedTimes", sa.Spec.ScaleConfig.ScaledownAllowedTimes,
+		)
+		return false
+
 	default:
 		return true
 	}
@@ -834,4 +843,32 @@ func getOrConvertTimeDuration(customDuration *metav1.Duration, defaultDuration t
 	}
 
 	return defaultDuration
+}
+
+// isScaledownAllowed checks if the current time matches any of the allowed cron schedules for scale down.
+// Returns true if scale down is allowed at the current time, or if no schedules are specified (allowing scale down anytime).
+func isScaledownAllowed(allowedTimes []string, currentTime time.Time) bool {
+	// If no schedules are specified, allow scale down anytime
+	if len(allowedTimes) == 0 {
+		return true
+	}
+
+	// Check each cron schedule to see if current time matches
+	for _, cronExpr := range allowedTimes {
+		schedule, err := cronpkg.ParseStandard(cronExpr)
+		if err != nil {
+			// If cron expression is invalid, log error but continue checking other expressions
+			continue
+		}
+
+		// Get the next scheduled time from the current time
+		nextTime := schedule.Next(currentTime.Add(-time.Minute))
+
+		// If the next scheduled time is within the current minute, then we're in an allowed period
+		if nextTime.Truncate(time.Minute).Equal(currentTime.Truncate(time.Minute)) {
+			return true
+		}
+	}
+
+	return false
 }

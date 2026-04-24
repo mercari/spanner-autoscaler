@@ -47,6 +47,35 @@ spec:
 
 > **Note:** When multiple schedules are active simultaneously (i.e. their windows overlap), the `additionalProcessingUnits` from all active schedules are **summed** and added to both `desiredMinPUs` and `desiredMaxPUs`. For example, if schedule A adds +1,000 PU and schedule B adds +5,000 PU and both are active at the same time, `desiredMinPUs = spec.processingUnits.min + 6,000`.
 
+### Scale down time restrictions
+
+To prevent unexpected scale down operations during business hours or critical periods, you can restrict scale down operations to specific time windows using cron expressions. This feature allows you to limit scale downs to maintenance windows or low-traffic periods (such as late night hours).
+
+```yaml
+apiVersion: spanner.mercari.com/v1beta1
+kind: SpannerAutoscaler
+metadata:
+  name: spannerautoscaler-sample
+spec:
+  scaleConfig:
+    # Scale down only during late night hours (2:00 AM to 4:59 AM daily)
+    scaledownAllowedTimes:
+      - "0 2-4 * * *"
+    # Other configuration...
+```
+
+For time windows that cross midnight (e.g., 11:00 PM to 5:59 AM), you can specify multiple cron expressions:
+
+```yaml
+scaledownAllowedTimes:
+  - "0 23-23 * * *"  # 11:00 PM to 11:59 PM
+  - "0 0-5 * * *"    # 12:00 AM to 5:59 AM
+```
+
+> **Note:** When `scaledownAllowedTimes` is not specified, scale down operations are allowed at any time (default behavior). Scale up operations are never restricted and will always be executed immediately when needed, regardless of time restrictions.
+
+> **Note:** Time restrictions use standard [cron format](https://crontab.guru/) and are evaluated in the local timezone where the controller is running.
+
 ## Installation
 
 Spanner Autoscaler can be installed using [KPT](https://kpt.dev/installation/) by following 2 steps:
@@ -133,6 +162,53 @@ spec:
 ```
 
 > **Note:** `highPriority` and `total` are mutually exclusive — exactly one must be specified. They use different Cloud Monitoring metrics (`spanner.googleapis.com/instance/cpu/utilization_by_priority` and `spanner.googleapis.com/instance/cpu/utilization` respectively) and the values are not directly comparable. When switching between them on a live resource, no scaling occurs during the first reconcile after the change because the status for the new metric type has not yet been populated by the syncer. Scaling resumes normally on the next sync cycle (default: 1 minute).
+
+#### Restricting scale down to specific time windows:
+
+```yaml
+apiVersion: spanner.mercari.com/v1beta1
+kind: SpannerAutoscaler
+metadata:
+  name: spannerautoscaler-sample
+  namespace: your-namespace
+spec:
+  targetInstance:
+    projectId: your-gcp-project-id
+    instanceId: your-spanner-instance-id
+  scaleConfig:
+    processingUnits:
+      min: 1000
+      max: 10000
+    # Allow scale down only during late night hours (2:00 AM to 4:59 AM daily)
+    scaledownAllowedTimes:
+      - "0 2-4 * * *"
+    targetCPUUtilization:
+      highPriority: 65
+```
+
+For time windows crossing midnight:
+
+```yaml
+apiVersion: spanner.mercari.com/v1beta1
+kind: SpannerAutoscaler
+metadata:
+  name: spannerautoscaler-sample
+  namespace: your-namespace
+spec:
+  targetInstance:
+    projectId: your-gcp-project-id
+    instanceId: your-spanner-instance-id
+  scaleConfig:
+    processingUnits:
+      min: 1000
+      max: 5000
+    # Allow scale down from 11:00 PM to 5:59 AM daily (crossing midnight)
+    scaledownAllowedTimes:
+      - "0 23-23 * * *"  # 11:00 PM to 11:59 PM
+      - "0 0-5 * * *"    # 12:00 AM to 5:59 AM
+    targetCPUUtilization:
+      total: 70
+```
 
 #### Single Service Account using Workload Identity:
 
