@@ -21,13 +21,14 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/mercari/spanner-autoscaler/internal/cron"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	ctrl "sigs.k8s.io/controller-runtime"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
+
+	"github.com/mercari/spanner-autoscaler/internal/cron"
 )
 
 // log is for logging in this package.
