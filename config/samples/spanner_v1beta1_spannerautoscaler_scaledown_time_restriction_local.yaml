@@ -31,8 +31,8 @@ spec:
     # Scale down allowed only during late afternoon/evening hours for testing
     # NOTE: Times are evaluated in the controller's local timezone
     scaledownAllowedTimes:
-      - "0 16-18 * * *"  # 4:00 PM to 6:59 PM
-      - "0 20-22 * * *"  # 8:00 PM to 10:59 PM
+      - "* 16-18 * * *"  # 4:00 PM to 6:59 PM
+      - "* 20-22 * * *"  # 8:00 PM to 10:59 PM
 
 ---
 # Instance 2: Scale down with midnight crossing restriction for testing
@@ -57,5 +57,5 @@ spec:
     scaleupInterval: 10s    ## Only for local testing
     # Scale down allowed crossing midnight (late night hours)
     scaledownAllowedTimes:
-      - "0 23-23 * * *"  # 11:00 PM to 11:59 PM
-      - "0 0-2 * * *"    # 12:00 AM to 2:59 AM
+      - "* 23 * * *"     # 11:00 PM to 11:59 PM
+      - "* 0-2 * * *"    # 12:00 AM to 2:59 AM

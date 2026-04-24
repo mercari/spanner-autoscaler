@@ -181,7 +181,7 @@ spec:
       max: 10000
     # Allow scale down only during late night hours (2:00 AM to 4:59 AM daily)
     scaledownAllowedTimes:
-      - "0 2-4 * * *"
+      - "* 2-4 * * *"
     targetCPUUtilization:
       highPriority: 65
 ```
@@ -230,7 +230,7 @@ spec:
       max: 10000
     # Allow scale down only during late night hours in Tokyo timezone
     scaledownAllowedTimes:
-      - "CRON_TZ=Asia/Tokyo 0 2-4 * * *"
+      - "CRON_TZ=Asia/Tokyo * 2-4 * * *"
     targetCPUUtilization:
       highPriority: 65
 ```

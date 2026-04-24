@@ -136,8 +136,8 @@ type ScaleConfig struct {
 	// Multiple cron expressions can be specified to handle complex time ranges including periods that cross midnight.
 	// If not specified, scale down is allowed at any time.
 	// Examples:
-	//   - ["0 2-4 * * *"] allows scale down from 2:00 AM to 4:59 AM daily
-	//   - ["0 23-23 * * *", "0 0-5 * * *"] allows scale down from 11:00 PM to 5:59 AM daily (crossing midnight)
+	//   - ["* 2-4 * * *"] allows scale down from 2:00 AM to 4:59 AM daily
+	//   - ["* 23 * * *", "* 0-5 * * *"] allows scale down from 11:00 PM to 5:59 AM daily (crossing midnight)
 	// +optional
 	ScaledownAllowedTimes []string `json:"scaledownAllowedTimes,omitempty"`
 
