@@ -60,7 +60,7 @@ spec:
   scaleConfig:
     # Scale down only during late night hours (2:00 AM to 4:59 AM daily)
     scaledownAllowedTimes:
-      - "0 2-4 * * *"
+      - "* 2-4 * * *"
     # Other configuration...
 ```
 
@@ -68,13 +68,11 @@ For time windows that cross midnight (e.g., 11:00 PM to 5:59 AM), you can specif
 
 ```yaml
 scaledownAllowedTimes:
-  - "0 23-23 * * *"  # 11:00 PM to 11:59 PM
-  - "0 0-5 * * *"    # 12:00 AM to 5:59 AM
+  - "* 23 * * *"     # 11:00 PM to 11:59 PM
+  - "* 0-5 * * *"    # 12:00 AM to 5:59 AM
 ```
 
 > **Note:** When `scaledownAllowedTimes` is not specified, scale down operations are allowed at any time (default behavior). Scale up operations are never restricted and will always be executed immediately when needed, regardless of time restrictions.
-
-> **Note:** Time restrictions use standard [cron format](https://crontab.guru/) and are evaluated in the timezone specified by the `TZ` environment variable. If `TZ` is not set, UTC timezone is used (default for Kubernetes pods). To use a different timezone, set the `TZ` environment variable (e.g., `TZ=Asia/Tokyo`).
 
 ## Installation
 
@@ -204,8 +202,8 @@ spec:
       max: 5000
     # Allow scale down from 11:00 PM to 5:59 AM daily (crossing midnight)
     scaledownAllowedTimes:
-      - "0 23-23 * * *"  # 11:00 PM to 11:59 PM
-      - "0 0-5 * * *"    # 12:00 AM to 5:59 AM
+      - "* 23 * * *"     # 11:00 PM to 11:59 PM
+      - "* 0-5 * * *"    # 12:00 AM to 5:59 AM
     targetCPUUtilization:
       total: 70
 ```
