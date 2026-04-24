@@ -55,17 +55,18 @@ func init() {
 }
 
 var (
-	metricsAddr          = flag.String("metrics-bind-address", "", "The address the metric endpoint binds to.")
-	probeAddr            = flag.String("health-probe-bind-address", "", "The address the probe endpoint binds to.")
-	enableLeaderElection = flag.Bool("leader-elect", false, "Enable leader election for controller manager. Enabling this will ensure there is only one active controller manager.")
-	leaderElectionID     = flag.String("leader-elect-id", "", "Lease name for leader election.")
+	// Defaults match the values previously shipped in
+	// config/manager/controller_manager_config.yaml so deployments that don't
+	// pass these flags explicitly keep their existing behavior.
+	metricsAddr          = flag.String("metrics-bind-address", "127.0.0.1:8080", "The address the metric endpoint binds to.")
+	probeAddr            = flag.String("health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
+	enableLeaderElection = flag.Bool("leader-elect", true, "Enable leader election for controller manager. Enabling this will ensure there is only one active controller manager.")
+	leaderElectionID     = flag.String("leader-elect-id", "54b82eb3.mercari.com", "Lease name for leader election.")
 	scaleDownInterval    = flag.Duration("scale-down-interval", 55*time.Minute, "The scale down interval.")
 	scaleUpInterval      = flag.Duration("scale-up-interval", 60*time.Second, "The scale up interval.")
 	certDir              = flag.String("cert-dir", "", "Directory containing TLS certificates for the webhook server. Used for local development with webhook forwarding (see docs/development.md).")
 	spannerEndpoint      = flag.String("spanner-endpoint", "", "Override the Spanner API endpoint (e.g. localhost:9010 for the emulator).")
 	metricsEndpoint      = flag.String("metrics-endpoint", "", "Override the Cloud Monitoring API endpoint (e.g. localhost:9090 for the emulator).")
-	configFile           = flag.String("config", "", "The controller will load its initial configuration from this file. "+
-		"Omit this flag to use the default configuration values. Command-line flags override configuration from this file.")
 )
 
 const (
@@ -107,11 +108,6 @@ func main() {
 		Metrics:                metricsserver.Options{BindAddress: *metricsAddr},
 		HealthProbeBindAddress: *probeAddr,
 		WebhookServer:          ctrlwebhook.NewServer(ctrlwebhook.Options{CertDir: *certDir}),
-	}
-	if *configFile != "" {
-		// ComponentConfig (`AndFrom`/`ConfigFile`) was removed in controller-runtime
-		// v0.19. The flag is preserved to avoid breaking deployments, but is now a no-op.
-		setupLog.Info("--config flag is no longer supported and will be ignored", "configFile", *configFile)
 	}
 
 	mgr, err := ctrlmanager.New(cfg, options)

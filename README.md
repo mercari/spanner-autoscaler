@@ -327,6 +327,12 @@ The older version `0.3.0` (with `apiVersion: spanner.mercari.com/v1alpha1`) is n
 
 Version `0.4.0` is backward compatible with `0.3.0`, but there is a restructuring of the `SpannerAutoscaler` resource definition and names of many fields have changed. Thus it is recommended to go through the [`SpannerAutoscaler` CRD reference](docs/crd-reference.md#spannerautoscaler) and replace `v1alpha1` resources with `v1beta1` spec definition.
 
+### :information_source: Migration from `0.7.x` to `0.8.0`:
+
+The `--config` flag has been removed (`ControllerManagerConfig` was dropped upstream in `controller-runtime` v0.19). Deployments still passing `--config=...` will fail to start with `flag provided but not defined: -config`.
+
+The values previously in `controller_manager_config.yaml` are now flag defaults in the binary (`--health-probe-bind-address=:8081`, `--metrics-bind-address=127.0.0.1:8080`, `--leader-elect=true`, `--leader-elect-id=54b82eb3.mercari.com`), so behavior is preserved. The `controller_manager_config.yaml` ConfigMap and the `manager_config_patch.yaml` kustomize patch have been deleted — remove any references in downstream overlays. To override the defaults, pass the flag in the manager Deployment's `args:` list (see `config/manager/manager.yaml`). CRDs are unchanged.
+
 ## License
 
 Spanner Autoscaler is released under the [Apache License 2.0](./LICENSE).
