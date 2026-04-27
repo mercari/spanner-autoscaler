@@ -276,7 +276,7 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 
 	r.mu.RLock()
 	syncer, syncerExists := r.syncers[nnsa]
-	cron, cronExists := r.crons[nnsa]
+	cronScheduler, cronExists := r.crons[nnsa]
 	scheduler, schedulerExists := r.schedulers[nnsa]
 	r.mu.RUnlock()
 
@@ -294,7 +294,7 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 			}
 
 			if cronExists {
-				cron.Stop()
+				cronScheduler.Stop()
 				r.mu.Lock()
 				delete(r.crons, nnsa)
 				r.mu.Unlock()
@@ -354,29 +354,29 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 	}
 
 	if !cronExists && len(sa.Status.Schedules) > 0 {
-		cron = cronpkg.New(cronpkg.WithChain(
+		cronScheduler = cronpkg.New(cronpkg.WithChain(
 			cronpkg.Recover(log),
 		))
-		cron.Start()
+		cronScheduler.Start()
 
 		scheduler = schedulerpkg.New(log, r.ctrlClient, r.crons, nnsa)
 		go scheduler.Start()
 
 		r.mu.Lock()
-		r.crons[nnsa] = cron
+		r.crons[nnsa] = cronScheduler
 		cronExists = true
 		r.schedulers[nnsa] = scheduler
 		r.mu.Unlock()
 	}
 
-	if err := r.addCronJob(ctx, log, sa, cron); err != nil {
+	if err := r.addCronJob(ctx, log, sa, cronScheduler); err != nil {
 		return ctrlreconcile.Result{}, err
 	}
 
 	// TODO: implement cronjob schedule update whenever SpannerAutoscaleSchedule cron is changed (or block changes to Schedule after creation)
 
 	if cronExists {
-		pruneCronJobs(log, sa, cron)
+		pruneCronJobs(log, sa, cronScheduler)
 	}
 
 	if newActiveSchedules, updated := pruneActiveSchedules(log, sa); updated {
@@ -450,7 +450,7 @@ func (r *SpannerAutoscalerReconciler) SetupWithManager(mgr ctrlmanager.Manager) 
 		Complete(r)
 }
 
-func (r *SpannerAutoscalerReconciler) addCronJob(ctx context.Context, log logr.Logger, sa spannerv1beta1.SpannerAutoscaler, cron *cronpkg.Cron) error {
+func (r *SpannerAutoscalerReconciler) addCronJob(ctx context.Context, log logr.Logger, sa spannerv1beta1.SpannerAutoscaler, cronScheduler *cronpkg.Cron) error {
 	for _, v := range sa.Status.Schedules {
 		var sas spannerv1beta1.SpannerAutoscaleSchedule
 		nnsa := ctrlclient.ObjectKeyFromObject(&sa)
@@ -465,8 +465,8 @@ func (r *SpannerAutoscalerReconciler) addCronJob(ctx context.Context, log logr.L
 				Log:            log.WithName("job").WithValues("schedule", nnsas, "autoscaler", nnsa),
 				CtrlClient:     r.ctrlClient,
 			}
-			if !jobExists(cron, job) {
-				if _, err := cron.AddJob(sas.Spec.Schedule.Cron, job); err != nil {
+			if !jobExists(cronScheduler, job) {
+				if _, err := cronScheduler.AddJob(sas.Spec.Schedule.Cron, job); err != nil {
 					log.Error(err, "failed to add cron job to the cron")
 				}
 				log.Info("new cron job has been registered", "cron", sas.Spec.Schedule.Cron, "schedule", nnsas.String())
@@ -476,12 +476,12 @@ func (r *SpannerAutoscalerReconciler) addCronJob(ctx context.Context, log logr.L
 	return nil
 }
 
-func pruneCronJobs(log logr.Logger, sa spannerv1beta1.SpannerAutoscaler, cron *cronpkg.Cron) {
-	for _, entry := range cron.Entries() {
+func pruneCronJobs(log logr.Logger, sa spannerv1beta1.SpannerAutoscaler, cronScheduler *cronpkg.Cron) {
+	for _, entry := range cronScheduler.Entries() {
 		job := entry.Job.(schedulerpkg.Job)
 		if _, found := findInArray(sa.Status.Schedules, job.ScheduleName.String()); !found {
-			cron.Remove(entry.ID)
-			log.V(1).Info("removed cron job", "job", job, "cronjob-count", len(cron.Entries()))
+			cronScheduler.Remove(entry.ID)
+			log.V(1).Info("removed cron job", "job", job, "cronjob-count", len(cronScheduler.Entries()))
 		}
 	}
 }
@@ -500,8 +500,8 @@ func pruneActiveSchedules(log logr.Logger, sa spannerv1beta1.SpannerAutoscaler) 
 	return result, changed
 }
 
-func jobExists(cron *cronpkg.Cron, job schedulerpkg.Job) bool {
-	for _, e := range cron.Entries() {
+func jobExists(cronScheduler *cronpkg.Cron, job schedulerpkg.Job) bool {
+	for _, e := range cronScheduler.Entries() {
 		entryJob := e.Job.(schedulerpkg.Job)
 		if entryJob.ScheduleName == job.ScheduleName {
 			return true
