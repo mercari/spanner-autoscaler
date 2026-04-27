@@ -1,0 +1,61 @@
+# Local development sample for testing scale down time restrictions with emulators (make tilt-up).
+#
+# This sample demonstrates scale down time restrictions. It creates two SpannerAutoscaler
+# instances with different time restrictions to show the feature working.
+#
+# The monitoring emulator runs the default scenario which simulates load that should
+# trigger scale up/down events, allowing you to observe how time restrictions affect
+# scale down behavior.
+
+---
+# Instance 1: Scale down allowed only during specific hours (modify as needed for testing)
+apiVersion: spanner.mercari.com/v1beta1
+kind: SpannerAutoscaler
+metadata:
+  name: spannerautoscaler-time-restricted
+  namespace: spanner-autoscaler
+spec:
+  targetInstance:
+    projectId: beta-project
+    instanceId: beta-instance-restricted
+  authentication:
+    type: adc
+  scaleConfig:
+    processingUnits:
+      min: 200
+      max: 7000
+    targetCPUUtilization:
+      highPriority: 40
+    scaledownInterval: 10s  ## Only for local testing
+    scaleupInterval: 10s    ## Only for local testing
+    # Scale down allowed only during late afternoon/evening hours for testing
+    # NOTE: Times are evaluated in the controller's local timezone
+    scaledownAllowedTimes:
+      - "* 16-18 * * *"  # 4:00 PM to 6:59 PM
+      - "* 20-22 * * *"  # 8:00 PM to 10:59 PM
+
+---
+# Instance 2: Scale down with midnight crossing restriction for testing
+apiVersion: spanner.mercari.com/v1beta1
+kind: SpannerAutoscaler
+metadata:
+  name: spannerautoscaler-midnight-crossing
+  namespace: spanner-autoscaler
+spec:
+  targetInstance:
+    projectId: beta-project
+    instanceId: beta-instance-midnight
+  authentication:
+    type: adc
+  scaleConfig:
+    processingUnits:
+      min: 200
+      max: 5000
+    targetCPUUtilization:
+      highPriority: 45
+    scaledownInterval: 10s  ## Only for local testing
+    scaleupInterval: 10s    ## Only for local testing
+    # Scale down allowed crossing midnight (late night hours)
+    scaledownAllowedTimes:
+      - "* 23 * * *"     # 11:00 PM to 11:59 PM
+      - "* 0-2 * * *"    # 12:00 AM to 2:59 AM

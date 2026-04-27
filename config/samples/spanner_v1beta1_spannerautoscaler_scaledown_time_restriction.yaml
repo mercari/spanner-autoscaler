@@ -1,0 +1,63 @@
+apiVersion: spanner.mercari.com/v1beta1
+kind: SpannerAutoscaler
+metadata:
+  name: spannerautoscaler-sample-with-time-restriction
+  namespace: default
+spec:
+  targetInstance:
+    projectId: my-gcp-project-id
+    instanceId: my-spanner-instance-id
+  authentication:
+    type: adc
+  scaleConfig:
+    processingUnits:
+      min: 1000
+      max: 10000
+    # Scale down is only allowed during late night hours (2:00 AM to 4:59 AM daily)
+    scaledownAllowedTimes:
+      - "* 2-4 * * *"
+    targetCPUUtilization:
+      highPriority: 65
+---
+apiVersion: spanner.mercari.com/v1beta1
+kind: SpannerAutoscaler
+metadata:
+  name: spannerautoscaler-sample-cross-midnight
+  namespace: default
+spec:
+  targetInstance:
+    projectId: my-gcp-project-id
+    instanceId: my-spanner-instance-id-2
+  authentication:
+    type: adc
+  scaleConfig:
+    processingUnits:
+      min: 1000
+      max: 5000
+    # Scale down is allowed from 11:00 PM to 5:59 AM daily (crossing midnight)
+    scaledownAllowedTimes:
+      - "* 23 * * *"     # 11:00 PM to 11:59 PM
+      - "* 0-5 * * *"    # 12:00 AM to 5:59 AM
+    targetCPUUtilization:
+      total: 70
+---
+apiVersion: spanner.mercari.com/v1beta1
+kind: SpannerAutoscaler
+metadata:
+  name: spannerautoscaler-sample-timezone
+  namespace: default
+spec:
+  targetInstance:
+    projectId: my-gcp-project-id
+    instanceId: my-spanner-instance-id-3
+  authentication:
+    type: adc
+  scaleConfig:
+    processingUnits:
+      min: 1000
+      max: 8000
+    # Scale down allowed only during late night hours in Tokyo timezone
+    scaledownAllowedTimes:
+      - "CRON_TZ=Asia/Tokyo * 2-4 * * *"
+    targetCPUUtilization:
+      highPriority: 60

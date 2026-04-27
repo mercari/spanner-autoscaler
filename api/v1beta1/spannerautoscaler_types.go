@@ -132,6 +132,15 @@ type ScaleConfig struct {
 	// The warm up period between two consecutive scaleup operations. If this option is omitted, the value of the `--scale-up-interval` command line option is taken as the default value.
 	ScaleupInterval *metav1.Duration `json:"scaleupInterval,omitempty"`
 
+	// Scale down is allowed only during the time periods specified in standard cron format.
+	// Multiple cron expressions can be specified to handle complex time ranges including periods that cross midnight.
+	// If not specified, scale down is allowed at any time.
+	// Examples:
+	//   - ["* 2-4 * * *"] allows scale down from 2:00 AM to 4:59 AM daily
+	//   - ["* 23 * * *", "* 0-5 * * *"] allows scale down from 11:00 PM to 5:59 AM daily (crossing midnight)
+	// +optional
+	ScaledownAllowedTimes []string `json:"scaledownAllowedTimes,omitempty"`
+
 	// The CPU utilization which the autoscaling will try to achieve. Ref: [Spanner CPU utilization](https://cloud.google.com/spanner/docs/cpu-utilization#task-priority)
 	TargetCPUUtilization TargetCPUUtilization `json:"targetCPUUtilization"`
 }
