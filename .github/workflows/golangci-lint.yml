@@ -20,3 +20,4 @@ jobs:
         uses: golangci/golangci-lint-action@v9
         with:
           version: latest
+          skip-cache: true ## caching leads to false positives even when lint errors are fixed in a subsequent commit on a PR
