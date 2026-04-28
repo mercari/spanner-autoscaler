@@ -112,7 +112,9 @@ spec:
       highPriority: 60
 ```
 
-#### Using total CPU utilization as scaling target:
+#### Dual CPU scaling mode (highPriority + total):
+
+Scale based on both High Priority and total CPU utilization simultaneously. The controller scales **out** when *either* metric exceeds its target (OR condition) and scales **in** only when *both* metrics are below their respective targets.
 
 ```yaml
 apiVersion: spanner.mercari.com/v1beta1
@@ -129,10 +131,11 @@ spec:
       min: 1000
       max: 10000
     targetCPUUtilization:
-      total: 65
+      highPriority: 60  # required
+      total: 65         # optional; enables dual-metric scaling when set
 ```
 
-> **Note:** `highPriority` and `total` are mutually exclusive — exactly one must be specified. They use different Cloud Monitoring metrics (`spanner.googleapis.com/instance/cpu/utilization_by_priority` and `spanner.googleapis.com/instance/cpu/utilization` respectively) and the values are not directly comparable. When switching between them on a live resource, no scaling occurs during the first reconcile after the change because the status for the new metric type has not yet been populated by the syncer. Scaling resumes normally on the next sync cycle (default: 1 minute).
+> **Note:** `highPriority` is **required**. `total` is optional — when omitted, scaling uses only the High Priority CPU metric. When both are specified, they use independent Cloud Monitoring metrics (`spanner.googleapis.com/instance/cpu/utilization_by_priority` for High Priority and `spanner.googleapis.com/instance/cpu/utilization` for total). The desired processing units for each metric are calculated independently (respecting `scaleupStepSize` / `scaledownStepSize`), and the **maximum** is applied. Scale-out fires when either metric exceeds its target; scale-in fires only when both are below their targets.
 
 #### Single Service Account using Workload Identity:
 
@@ -327,6 +330,14 @@ The older version `0.3.0` (with `apiVersion: spanner.mercari.com/v1alpha1`) is n
 
 Version `0.4.0` is backward compatible with `0.3.0`, but there is a restructuring of the `SpannerAutoscaler` resource definition and names of many fields have changed. Thus it is recommended to go through the [`SpannerAutoscaler` CRD reference](docs/crd-reference.md#spannerautoscaler) and replace `v1alpha1` resources with `v1beta1` spec definition.
 
+### :warning: Migration from `0.6.x` to `0.7.x`:
+
+**Breaking change:** `targetCPUUtilization.highPriority` is now **required**. Configurations that set only `targetCPUUtilization.total` (without `highPriority`) are no longer valid and will be rejected by the webhook.
+
+To migrate:
+- If you were using only `total`, add a `highPriority` target. The controller will now scale out when *either* metric exceeds its target and scale in only when *both* are below their targets.
+- If you were using only `highPriority`, no change is required.
+
 ### :information_source: Migration from `0.7.x` to `0.8.x`:
 
 The `--config` flag has been removed (`ControllerManagerConfig` was dropped upstream in `controller-runtime` v0.19). Deployments still passing `--config=...` will fail to start with `flag provided but not defined: -config`.
@@ -340,7 +351,7 @@ Spanner Autoscaler is released under the [Apache License 2.0](./LICENSE).
 :warning: **NOTE:**
 
 1. This project is currently in active development phase and there might be some backward incompatible changes in future versions.
-1. Spanner Autoscaler supports scaling based on `High Priority` CPU utilization (`targetCPUUtilization.highPriority`) or total CPU utilization (`targetCPUUtilization.total`). It doesn't watch `Low Priority` CPU utilization and Rolling average 24 hour utilization.
+1. Spanner Autoscaler supports scaling based on `High Priority` CPU utilization (`targetCPUUtilization.highPriority`, required) and optionally total CPU utilization (`targetCPUUtilization.total`). When both are set, the controller scales out on either metric exceeding its target and scales in only when both are below their targets. It doesn't watch `Low Priority` CPU utilization or Rolling average 24-hour utilization.
 1. It doesn't check [the storage size and the number of databases](https://cloud.google.com/spanner/quotas?hl=en#database_limits) as well. You must take care of these metrics by yourself.
 
 
