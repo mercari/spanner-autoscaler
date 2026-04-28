@@ -619,29 +619,47 @@ func (r *SpannerAutoscalerReconciler) needUpdateProcessingUnits(log logr.Logger,
 
 // calcDesiredProcessingUnits calculates the values needed to keep CPU utilization below TargetCPU.
 func calcDesiredProcessingUnits(sa spannerv1beta1.SpannerAutoscaler) int {
+	// Dual CPU scaling mode: both highPriority and total are specified.
+	// Calculate desired PU for each metric independently and take the maximum
+	// so that scale-out occurs when either threshold is exceeded.
+	if sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority != nil &&
+		sa.Spec.ScaleConfig.TargetCPUUtilization.Total != nil {
+		// Guard: wait until syncer has populated both metrics in status.
+		if sa.Status.CurrentCPUMetricType != spannerv1beta1.CPUMetricTypeBoth {
+			return sa.Status.CurrentProcessingUnits
+		}
+		desiredByHigh := calcDesiredPUFromCPU(
+			sa.Status.CurrentHighPriorityCPUUtilization,
+			*sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority,
+			sa,
+		)
+		desiredByTotal := calcDesiredPUFromCPU(
+			sa.Status.CurrentTotalCPUUtilization,
+			*sa.Spec.ScaleConfig.TargetCPUUtilization.Total,
+			sa,
+		)
+		if desiredByHigh > desiredByTotal {
+			return desiredByHigh
+		}
+		return desiredByTotal
+	}
+
+	// Single mode: highPriority only (total-only is no longer supported).
 	var currentCPU, targetCPU int
-	var expectedMetricType spannerv1beta1.CPUMetricType
-	switch {
-	case sa.Spec.ScaleConfig.TargetCPUUtilization.Total != nil:
-		currentCPU = sa.Status.CurrentTotalCPUUtilization
-		targetCPU = *sa.Spec.ScaleConfig.TargetCPUUtilization.Total
-		expectedMetricType = spannerv1beta1.CPUMetricTypeTotal
-	case sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority != nil:
+	if sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority != nil {
 		currentCPU = sa.Status.CurrentHighPriorityCPUUtilization
 		targetCPU = *sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority
-		expectedMetricType = spannerv1beta1.CPUMetricTypeHighPriority
-	default:
+	} else {
 		// Defensively handle invalid specs when admission validation is bypassed
 		// or malformed objects already exist in-cluster.
 		return sa.Status.CurrentProcessingUnits
 	}
 
 	// If the status was last synced for a different metric type, the CPU value
-	// in status belongs to the old metric and cannot be used for scaling decisions
-	// (highPriority and total measure different Cloud Monitoring metrics and are
-	// not interchangeable). Skip this reconcile; the syncer will update
-	// CurrentCPUMetricType within one sync cycle (≤1 minute).
-	if sa.Status.CurrentCPUMetricType != expectedMetricType {
+	// in status belongs to the old metric and cannot be used for scaling decisions.
+	// Skip this reconcile; the syncer will update CurrentCPUMetricType within one
+	// sync cycle (≤1 minute).
+	if sa.Status.CurrentCPUMetricType != spannerv1beta1.CPUMetricTypeHighPriority {
 		return sa.Status.CurrentProcessingUnits
 	}
 
@@ -740,6 +758,83 @@ func calcDesiredProcessingUnits(sa spannerv1beta1.SpannerAutoscaler) int {
 		desiredPU = minPU
 	}
 
+	if desiredPU > maxPU {
+		desiredPU = maxPU
+	}
+
+	return desiredPU
+}
+
+// calcDesiredPUFromCPU calculates the desired PU from a single CPU metric,
+// applying step size limits and min/max clamping. Used in dual CPU scaling mode
+// to compute desired PU for each metric independently.
+func calcDesiredPUFromCPU(currentCPU, targetCPU int, sa spannerv1beta1.SpannerAutoscaler) int {
+	if targetCPU == 0 {
+		return sa.Status.CurrentProcessingUnits
+	}
+
+	totalCPU := currentCPU * sa.Status.CurrentProcessingUnits
+	requiredPU := totalCPU / targetCPU
+
+	var desiredPU int
+	if requiredPU < 1000 {
+		desiredPU = ((requiredPU / 100) + 1) * 100
+	} else {
+		desiredPU = ((requiredPU / 1000) + 1) * 1000
+	}
+
+	sdStepSize, sdStepSizeErr := intstr.GetScaledValueFromIntOrPercent(&sa.Spec.ScaleConfig.ScaledownStepSize, sa.Status.CurrentProcessingUnits, false)
+	if sdStepSizeErr != nil {
+		sdStepSize = 2000
+	}
+	suStepSize, suStepSizeErr := intstr.GetScaledValueFromIntOrPercent(&sa.Spec.ScaleConfig.ScaleupStepSize, sa.Status.CurrentProcessingUnits, false)
+	if suStepSizeErr != nil {
+		suStepSize = 0
+	}
+
+	if sdStepSize < 1000 {
+		sdStepSize = (sdStepSize / 100) * 100
+	} else {
+		sdStepSize = (sdStepSize / 1000) * 1000
+	}
+	if suStepSize < 1000 {
+		suStepSize = (suStepSize / 100) * 100
+	} else {
+		suStepSize = (suStepSize / 1000) * 1000
+	}
+
+	if sdStepSize < 1000 && sa.Status.CurrentProcessingUnits > 1000 {
+		sdStepSize = 1000
+	} else if sdStepSize < 100 && sa.Status.CurrentProcessingUnits <= 1000 {
+		sdStepSize = 100
+	}
+	if suStepSize != 0 && suStepSize < 1000 && sa.Status.CurrentProcessingUnits+suStepSize > 1000 {
+		suStepSize = 1000
+	} else if suStepSize != 0 && suStepSize < 100 && sa.Status.CurrentProcessingUnits+suStepSize <= 1000 {
+		suStepSize = 100
+	}
+
+	if scaledDownPU := sa.Status.CurrentProcessingUnits - sdStepSize; desiredPU < scaledDownPU {
+		desiredPU = scaledDownPU
+	}
+	if scaledUpPU := sa.Status.CurrentProcessingUnits + suStepSize; suStepSize != 0 && scaledUpPU < desiredPU {
+		desiredPU = scaledUpPU
+		if 1000 < desiredPU && desiredPU%1000 != 0 {
+			desiredPU = ((desiredPU / 1000) + 1) * 1000
+		}
+	}
+
+	minPU := sa.Spec.ScaleConfig.ProcessingUnits.Min
+	maxPU := sa.Spec.ScaleConfig.ProcessingUnits.Max
+	if sa.Status.DesiredMinPUs > 0 {
+		minPU = sa.Status.DesiredMinPUs
+	}
+	if sa.Status.DesiredMaxPUs > 0 {
+		maxPU = sa.Status.DesiredMaxPUs
+	}
+	if desiredPU < minPU {
+		desiredPU = minPU
+	}
 	if desiredPU > maxPU {
 		desiredPU = maxPU
 	}

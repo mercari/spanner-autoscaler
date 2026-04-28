@@ -266,13 +266,20 @@ func (s *syncer) syncResource(ctx context.Context) error {
 		"spannerautoscaler", sa,
 	)
 
-	// Determine metric type from spec.
-	metricType := metrics.MetricTypeHighPriority
-	if sa.Spec.ScaleConfig.TargetCPUUtilization.Total != nil {
-		metricType = metrics.MetricTypeTotal
-	}
+	// Dual mode: both highPriority and total are specified.
+	isDual := sa.Spec.ScaleConfig.TargetCPUUtilization.Total != nil
 
-	instance, instanceMetrics, err := s.getInstanceInfo(ctx, metricType)
+	var instance *spanner.Instance
+	var highPriorityMetrics, totalMetrics *metrics.InstanceMetrics
+	var err error
+
+	if isDual {
+		instance, highPriorityMetrics, totalMetrics, err = s.getInstanceInfoDual(ctx)
+	} else {
+		var m *metrics.InstanceMetrics
+		instance, m, err = s.getInstanceInfo(ctx, metrics.MetricTypeHighPriority)
+		highPriorityMetrics = m
+	}
 	if err != nil {
 		s.recorder.Eventf(&sa, corev1.EventTypeWarning, "FailedSpannerAPICall", err.Error())
 		log.Error(err, "unable to get instance info")
@@ -282,8 +289,13 @@ func (s *syncer) syncResource(ctx context.Context) error {
 	log.V(1).Info("spanner instance status",
 		"current processing units", instance.ProcessingUnits,
 		"instance state", instance.InstanceState,
-		"high priority cpu utilization", instanceMetrics.CurrentHighPriorityCPUUtilization,
-		"total cpu utilization", instanceMetrics.CurrentTotalCPUUtilization,
+		"high priority cpu utilization", highPriorityMetrics.CurrentHighPriorityCPUUtilization,
+		"total cpu utilization", func() int {
+			if totalMetrics != nil {
+				return totalMetrics.CurrentTotalCPUUtilization
+			}
+			return 0
+		}(),
 	)
 
 	err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
@@ -292,17 +304,15 @@ func (s *syncer) syncResource(ctx context.Context) error {
 		}
 		sa.Status.CurrentProcessingUnits = instance.ProcessingUnits
 		sa.Status.InstanceState = instance.InstanceState
-		// Zero both CPU fields first, then set only the one for the active metric type.
-		// This makes the reset explicit and independent of whether the metrics client
-		// zeros the unused field itself.
+		// Zero both CPU fields first, then populate based on mode.
 		sa.Status.CurrentHighPriorityCPUUtilization = 0
 		sa.Status.CurrentTotalCPUUtilization = 0
-		switch metricType {
-		case metrics.MetricTypeTotal:
-			sa.Status.CurrentTotalCPUUtilization = instanceMetrics.CurrentTotalCPUUtilization
-			sa.Status.CurrentCPUMetricType = spannerv1beta1.CPUMetricTypeTotal
-		default: // MetricTypeHighPriority
-			sa.Status.CurrentHighPriorityCPUUtilization = instanceMetrics.CurrentHighPriorityCPUUtilization
+		if isDual {
+			sa.Status.CurrentHighPriorityCPUUtilization = highPriorityMetrics.CurrentHighPriorityCPUUtilization
+			sa.Status.CurrentTotalCPUUtilization = totalMetrics.CurrentTotalCPUUtilization
+			sa.Status.CurrentCPUMetricType = spannerv1beta1.CPUMetricTypeBoth
+		} else {
+			sa.Status.CurrentHighPriorityCPUUtilization = highPriorityMetrics.CurrentHighPriorityCPUUtilization
 			sa.Status.CurrentCPUMetricType = spannerv1beta1.CPUMetricTypeHighPriority
 		}
 		sa.Status.LastSyncTime = metav1.Time{Time: s.clock.Now()}
@@ -365,4 +375,64 @@ func (s *syncer) getInstanceInfo(ctx context.Context, metricType metrics.MetricT
 	}
 
 	return instance, instanceMetrics, nil
+}
+
+// getInstanceInfoDual fetches the Spanner instance info and both CPU metrics concurrently.
+// Used when both highPriority and total CPU targets are specified (dual CPU scaling mode).
+func (s *syncer) getInstanceInfoDual(ctx context.Context) (*spanner.Instance, *metrics.InstanceMetrics, *metrics.InstanceMetrics, error) {
+	log := s.log
+	eg, ctx := errgroup.WithContext(ctx)
+
+	var (
+		instance            *spanner.Instance
+		highPriorityMetrics *metrics.InstanceMetrics
+		totalMetrics        *metrics.InstanceMetrics
+	)
+
+	eg.Go(func() error {
+		var err error
+		instance, err = s.spannerClient.GetInstance(ctx)
+		if err != nil {
+			log.Error(err, "unable to get spanner instance with spanner client")
+			return err
+		}
+		log.V(1).Info("successfully got spanner instance with spanner client",
+			"current processing units", instance.ProcessingUnits,
+			"instance state", instance.InstanceState,
+		)
+		return nil
+	})
+
+	eg.Go(func() error {
+		var err error
+		highPriorityMetrics, err = s.metricsClient.GetInstanceMetrics(ctx, metrics.MetricTypeHighPriority)
+		if err != nil {
+			log.Error(err, "unable to get high priority cpu metrics")
+			return err
+		}
+		log.V(1).Info("successfully got high priority cpu metrics",
+			"high priority cpu utilization", highPriorityMetrics.CurrentHighPriorityCPUUtilization,
+		)
+		return nil
+	})
+
+	eg.Go(func() error {
+		var err error
+		totalMetrics, err = s.metricsClient.GetInstanceMetrics(ctx, metrics.MetricTypeTotal)
+		if err != nil {
+			log.Error(err, "unable to get total cpu metrics")
+			return err
+		}
+		log.V(1).Info("successfully got total cpu metrics",
+			"total cpu utilization", totalMetrics.CurrentTotalCPUUtilization,
+		)
+		return nil
+	})
+
+	if err := eg.Wait(); err != nil {
+		log.Error(err, "unable to get spanner instance status")
+		return nil, nil, nil, err
+	}
+
+	return instance, highPriorityMetrics, totalMetrics, nil
 }
