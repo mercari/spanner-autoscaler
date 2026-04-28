@@ -142,7 +142,7 @@ func main() {
 		mgr.GetClient(),
 		mgr.GetAPIReader(),
 		mgr.GetScheme(),
-		mgr.GetEventRecorderFor("spannerautoscaler-controller"),
+		mgr.GetEventRecorderFor("spannerautoscaler-controller"), //nolint:staticcheck // Migrating to the new events.EventRecorder API requires a wholesale refactor of event call sites; tracked separately.
 		log,
 		reconcilerOpts...,
 	)
@@ -154,7 +154,7 @@ func main() {
 	sasr := controller.NewSpannerAutoscaleScheduleReconciler(
 		mgr.GetClient(),
 		mgr.GetScheme(),
-		mgr.GetEventRecorderFor("spannerautoscaleschedule-controller"),
+		mgr.GetEventRecorderFor("spannerautoscaleschedule-controller"), //nolint:staticcheck // Migrating to the new events.EventRecorder API requires a wholesale refactor of event call sites; tracked separately.
 		controller.WithLog(log),
 	)
 
