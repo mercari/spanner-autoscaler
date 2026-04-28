@@ -38,11 +38,12 @@ func TestController_E2E_ScaleUp(t *testing.T) {
 		instanceID        = "e2e-instance"
 		initPU            = 1000
 		referenceCPU      = 0.80
-		targetCPU         = 40 // percent
 		syncInterval      = 3 * time.Second
 		scaleUpInterval   = 1 * time.Second
 		scaleDownInterval = 55 * time.Minute
 	)
+	targetCPUVal := 40
+	targetCPU := &targetCPUVal // percent
 
 	logf.SetLogger(zap.New(zap.UseDevMode(true)))
 

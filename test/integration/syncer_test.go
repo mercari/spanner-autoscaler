@@ -63,7 +63,7 @@ func TestSyncer_SyncResource(t *testing.T) {
 				},
 				ScaledownStepSize: intstr.FromInt(2000),
 				TargetCPUUtilization: spannerv1beta1.TargetCPUUtilization{
-					HighPriority: 40,
+					HighPriority: func() *int { v := 40; return &v }(),
 				},
 			},
 		},

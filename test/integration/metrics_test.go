@@ -30,7 +30,7 @@ func TestMetricsClient_GetInstanceMetrics_Static(t *testing.T) {
 		t.Fatalf("failed to create metrics client: %v", err)
 	}
 
-	got, err := c.GetInstanceMetrics(ctx)
+	got, err := c.GetInstanceMetrics(ctx, metrics.MetricTypeHighPriority)
 	if err != nil {
 		t.Fatalf("GetInstanceMetrics() error: %v", err)
 	}
@@ -50,7 +50,7 @@ func TestMetricsClient_GetInstanceMetrics_NotFound(t *testing.T) {
 		t.Fatalf("failed to create metrics client: %v", err)
 	}
 
-	_, err = c.GetInstanceMetrics(ctx)
+	_, err = c.GetInstanceMetrics(ctx, metrics.MetricTypeHighPriority)
 	if err == nil {
 		t.Fatal("GetInstanceMetrics() expected error for unconfigured instance, got nil")
 	}
