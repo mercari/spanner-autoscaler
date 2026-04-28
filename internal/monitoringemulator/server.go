@@ -32,6 +32,9 @@ import (
 // If none is configured for the requested instance, an empty TimeSeries
 // list is returned, which causes metrics.Client.GetInstanceMetrics to return
 // "no such spanner instance metrics".
+//
+// Each mode supports independent values per CPU metric type (highPriority / total),
+// enabling dual CPU scaling mode testing with different values for each metric.
 type MetricServiceServer struct {
 	monitoringpb.UnimplementedMetricServiceServer
 	staticStore        *StaticStore
@@ -67,26 +70,32 @@ func (s *MetricServiceServer) ListTimeSeries(
 		return nil, err
 	}
 
-	if extractMetricKind(req.GetFilter()) == MetricKindUnknown {
+	kind := extractMetricKind(req.GetFilter())
+	if kind == MetricKindUnknown {
 		return nil, fmt.Errorf("unsupported metric type in filter: %s", req.GetFilter())
 	}
 
 	// Priority 1: ScenarioStore (time-based scenario mode)
 	if step, ok := s.scenarioStore.Get(projectID, instanceID); ok {
-		if step.Workload != nil {
+		metric := step.metricFor(kind)
+		if metric == nil {
+			// Scenario registered but no value configured for this metric kind.
+			return &monitoringpb.ListTimeSeriesResponse{}, nil
+		}
+		if metric.Workload != nil {
 			cpu, err := s.calcCPUFromWorkload(ctx, projectID, instanceID,
-				step.Workload.CPUUtilization*float64(step.Workload.ReferenceProcessingUnits))
+				metric.Workload.CPUUtilization*float64(metric.Workload.ReferenceProcessingUnits))
 			if err != nil {
 				return nil, err
 			}
 			return buildResponse(cpu), nil
 		}
-		return buildResponse(*step.CPUUtilization), nil
+		return buildResponse(*metric.CPUUtilization), nil
 	}
 
 	// Priority 2: WorkloadStore (dynamic mode)
-	if entry, ok := s.workloadStore.Get(projectID, instanceID); ok {
-		cpu, err := s.calcCPUFromWorkload(ctx, projectID, instanceID, entry.Workload)
+	if params, ok := s.workloadStore.Get(projectID, instanceID, kind); ok {
+		cpu, err := s.calcCPUFromWorkload(ctx, projectID, instanceID, params.Workload)
 		if err != nil {
 			return nil, err
 		}
@@ -94,7 +103,7 @@ func (s *MetricServiceServer) ListTimeSeries(
 	}
 
 	// Priority 3: StaticStore (static mode)
-	if cpu, ok := s.staticStore.Get(projectID, instanceID); ok {
+	if cpu, ok := s.staticStore.Get(projectID, instanceID, kind); ok {
 		return buildResponse(cpu), nil
 	}
 

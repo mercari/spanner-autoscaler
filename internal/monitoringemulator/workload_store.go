@@ -2,7 +2,7 @@ package monitoringemulator
 
 import "sync"
 
-// WorkloadEntry holds the constant workload value for a Spanner instance.
+// WorkloadParams holds the constant workload value for one CPU metric type.
 //
 // The relationship between CPU utilization, processing units, and workload is:
 //
@@ -11,10 +11,31 @@ import "sync"
 //
 // This models the behavior of real Cloud Spanner: scaling up PUs reduces CPU
 // utilization proportionally for the same workload.
-type WorkloadEntry struct {
+type WorkloadParams struct {
 	Workload     float64 // ReferenceCPU * ReferencePU
 	ReferenceCPU float64
 	ReferencePU  int
+}
+
+// WorkloadEntry holds workload parameters for each CPU metric type.
+// Either field may be nil if not configured for that metric kind.
+type WorkloadEntry struct {
+	HighPriority *WorkloadParams
+	Total        *WorkloadParams
+}
+
+func (e WorkloadEntry) get(kind MetricKind) (WorkloadParams, bool) {
+	switch kind {
+	case MetricKindHighPriority:
+		if e.HighPriority != nil {
+			return *e.HighPriority, true
+		}
+	case MetricKindTotal:
+		if e.Total != nil {
+			return *e.Total, true
+		}
+	}
+	return WorkloadParams{}, false
 }
 
 // WorkloadStore holds workload-based dynamic CPU calculation parameters per
@@ -30,19 +51,23 @@ func NewWorkloadStore() *WorkloadStore {
 	}
 }
 
-// Set stores a workload entry derived from the reference CPU utilization and
-// reference processing units.
-func (s *WorkloadStore) Set(project, instanceID string, cpuUtilization float64, referencePU int) {
+func (s *WorkloadStore) Set(project, instanceID string, entry WorkloadEntry) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.data[storeKey(project, instanceID)] = WorkloadEntry{
-		Workload:     cpuUtilization * float64(referencePU),
-		ReferenceCPU: cpuUtilization,
-		ReferencePU:  referencePU,
-	}
+	s.data[storeKey(project, instanceID)] = entry
 }
 
-func (s *WorkloadStore) Get(project, instanceID string) (WorkloadEntry, bool) {
+func (s *WorkloadStore) Get(project, instanceID string, kind MetricKind) (WorkloadParams, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	entry, ok := s.data[storeKey(project, instanceID)]
+	if !ok {
+		return WorkloadParams{}, false
+	}
+	return entry.get(kind)
+}
+
+func (s *WorkloadStore) GetEntry(project, instanceID string) (WorkloadEntry, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	v, ok := s.data[storeKey(project, instanceID)]
@@ -53,4 +78,12 @@ func (s *WorkloadStore) Delete(project, instanceID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.data, storeKey(project, instanceID))
+}
+
+func newWorkloadParams(cpuUtilization float64, referencePU int) WorkloadParams {
+	return WorkloadParams{
+		Workload:     cpuUtilization * float64(referencePU),
+		ReferenceCPU: cpuUtilization,
+		ReferencePU:  referencePU,
+	}
 }

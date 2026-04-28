@@ -9,16 +9,58 @@ import (
 	sigsyaml "sigs.k8s.io/yaml"
 )
 
-// ScenarioStep is one step in a scenario sequence.
+// ScenarioMetric holds the CPU value for one metric type within a scenario step.
 // Exactly one of CPUUtilization or Workload must be set.
+type ScenarioMetric struct {
+	// CPUUtilization returns a fixed CPU value regardless of current PU.
+	CPUUtilization *float64 `json:"cpu_utilization,omitempty"`
+	// Workload computes CPU dynamically (cpu = workload / current_pu),
+	// modeling real Cloud Spanner behavior where scaling up reduces CPU.
+	Workload *WorkloadScenario `json:"workload,omitempty"`
+}
+
+// ScenarioStep is one step in a scenario sequence.
 //
-//   - CPUUtilization: returns a fixed CPU value regardless of current PU.
-//   - Workload: computes CPU dynamically (cpu = workload / current_pu),
-//     modeling real Cloud Spanner behavior where scaling up reduces CPU.
+// Per-metric mode (recommended for dual CPU scaling): set HighPriority and/or Total.
+// Legacy mode (backward compat, applies same value to both metrics): set CPUUtilization or Workload.
+// Mixing per-metric and legacy fields in the same step is not allowed.
 type ScenarioStep struct {
-	Duration       Duration          `json:"duration"`
+	Duration Duration `json:"duration"`
+
+	// Per-metric CPU values for dual CPU scaling mode testing.
+	// If set, takes precedence over the legacy CPUUtilization/Workload fields.
+	HighPriority *ScenarioMetric `json:"high_priority,omitempty"`
+	Total        *ScenarioMetric `json:"total,omitempty"`
+
+	// Legacy: applies to both metrics if high_priority/total are not set.
+	//   - CPUUtilization: returns a fixed CPU value regardless of current PU.
+	//   - Workload: computes CPU dynamically (cpu = workload / current_pu).
 	CPUUtilization *float64          `json:"cpu_utilization,omitempty"`
 	Workload       *WorkloadScenario `json:"workload,omitempty"`
+}
+
+// metricFor returns the ScenarioMetric for the given metric kind.
+// Per-metric fields (HighPriority/Total) take precedence over legacy fields.
+// If neither per-metric nor legacy fields are configured for the kind, returns nil.
+func (s *ScenarioStep) metricFor(kind MetricKind) *ScenarioMetric {
+	switch kind {
+	case MetricKindHighPriority:
+		if s.HighPriority != nil {
+			return s.HighPriority
+		}
+	case MetricKindTotal:
+		if s.Total != nil {
+			return s.Total
+		}
+	}
+	// Fall back to legacy fields (same value for both metric kinds).
+	if s.CPUUtilization != nil || s.Workload != nil {
+		return &ScenarioMetric{
+			CPUUtilization: s.CPUUtilization,
+			Workload:       s.Workload,
+		}
+	}
+	return nil
 }
 
 // WorkloadScenario holds the parameters for a workload-based step.
@@ -96,14 +138,8 @@ func (s *ScenarioStore) Set(project, instanceID string, steps []ScenarioStep) er
 		if step.Duration.Duration <= 0 {
 			return fmt.Errorf("step %d: duration must be positive", i)
 		}
-		if step.CPUUtilization == nil && step.Workload == nil {
-			return fmt.Errorf("step %d: must set cpu_utilization or workload", i)
-		}
-		if step.CPUUtilization != nil && step.Workload != nil {
-			return fmt.Errorf("step %d: cpu_utilization and workload are mutually exclusive", i)
-		}
-		if step.CPUUtilization != nil && (*step.CPUUtilization < 0 || *step.CPUUtilization > 1) {
-			return fmt.Errorf("step %d: cpu_utilization must be between 0.0 and 1.0", i)
+		if err := validateScenarioStep(i, step); err != nil {
+			return err
 		}
 		total += step.Duration.Duration
 	}
@@ -113,6 +149,50 @@ func (s *ScenarioStore) Set(project, instanceID string, steps []ScenarioStep) er
 		steps:     steps,
 		total:     total,
 		startTime: time.Now(),
+	}
+	return nil
+}
+
+func validateScenarioStep(i int, step ScenarioStep) error {
+	hasPerMetric := step.HighPriority != nil || step.Total != nil
+	hasLegacy := step.CPUUtilization != nil || step.Workload != nil
+
+	if hasPerMetric && hasLegacy {
+		return fmt.Errorf("step %d: cannot mix per-metric (high_priority/total) and legacy (cpu_utilization/workload) fields", i)
+	}
+	if !hasPerMetric && !hasLegacy {
+		return fmt.Errorf("step %d: must set cpu_utilization, workload, or per-metric high_priority/total fields", i)
+	}
+
+	if hasLegacy {
+		if step.CPUUtilization != nil && step.Workload != nil {
+			return fmt.Errorf("step %d: cpu_utilization and workload are mutually exclusive", i)
+		}
+		if step.CPUUtilization != nil && (*step.CPUUtilization < 0 || *step.CPUUtilization > 1) {
+			return fmt.Errorf("step %d: cpu_utilization must be between 0.0 and 1.0", i)
+		}
+	}
+
+	for _, named := range []struct {
+		name   string
+		metric *ScenarioMetric
+	}{
+		{"high_priority", step.HighPriority},
+		{"total", step.Total},
+	} {
+		if named.metric == nil {
+			continue
+		}
+		m := named.metric
+		if m.CPUUtilization == nil && m.Workload == nil {
+			return fmt.Errorf("step %d: %s must set cpu_utilization or workload", i, named.name)
+		}
+		if m.CPUUtilization != nil && m.Workload != nil {
+			return fmt.Errorf("step %d: %s cpu_utilization and workload are mutually exclusive", i, named.name)
+		}
+		if m.CPUUtilization != nil && (*m.CPUUtilization < 0 || *m.CPUUtilization > 1) {
+			return fmt.Errorf("step %d: %s cpu_utilization must be between 0.0 and 1.0", i, named.name)
+		}
 	}
 	return nil
 }
