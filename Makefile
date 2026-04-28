@@ -73,6 +73,7 @@ vet: ## Run go vet against code.
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint against code.
+	$(GOLANGCI_LINT) cache clean
 	$(GOLANGCI_LINT) run
 
 .PHONY: test
