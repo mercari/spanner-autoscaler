@@ -327,7 +327,7 @@ The older version `0.3.0` (with `apiVersion: spanner.mercari.com/v1alpha1`) is n
 
 Version `0.4.0` is backward compatible with `0.3.0`, but there is a restructuring of the `SpannerAutoscaler` resource definition and names of many fields have changed. Thus it is recommended to go through the [`SpannerAutoscaler` CRD reference](docs/crd-reference.md#spannerautoscaler) and replace `v1alpha1` resources with `v1beta1` spec definition.
 
-### :information_source: Migration from `0.7.x` to `0.8.0`:
+### :information_source: Migration from `0.7.x` to `0.8.x`:
 
 The `--config` flag has been removed (`ControllerManagerConfig` was dropped upstream in `controller-runtime` v0.19). Deployments still passing `--config=...` will fail to start with `flag provided but not defined: -config`.
 
