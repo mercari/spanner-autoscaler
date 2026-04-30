@@ -13,7 +13,6 @@ require (
 	github.com/netresearch/go-cron v0.14.0
 	github.com/onsi/ginkgo/v2 v2.28.1
 	github.com/onsi/gomega v1.39.1
-	github.com/robfig/cron/v3 v3.0.1
 	go.uber.org/zap v1.27.1
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/sync v0.20.0

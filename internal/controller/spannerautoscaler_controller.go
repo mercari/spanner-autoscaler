@@ -499,7 +499,7 @@ func (r *SpannerAutoscalerReconciler) addCronJob(ctx context.Context, log logr.L
 }
 
 func pruneCronJobs(log logr.Logger, sa spannerv1beta1.SpannerAutoscaler, cron *cronpkg.Cron) {
-	for _, entry := range cron.Entries() {
+	for _, entry := range cron.Entries() { //nolint:gocritic
 		job := entry.Job.(schedulerpkg.Job)
 		if _, found := findInArray(sa.Status.Schedules, job.ScheduleName.String()); !found {
 			cron.RemoveByName(entry.Name)
