@@ -3,17 +3,24 @@ package controller
 import (
 	"time"
 
+	cronpkg "github.com/netresearch/go-cron"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/record"
 	testingclock "k8s.io/utils/clock/testing"
+	fakeclient "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/go-logr/logr"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/google/uuid"
 	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
+	schedulerpkg "github.com/mercari/spanner-autoscaler/internal/scheduler"
 	"github.com/mercari/spanner-autoscaler/internal/syncer"
+	fakesyncer "github.com/mercari/spanner-autoscaler/internal/syncer/fake"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -635,3 +642,229 @@ var _ = Describe("Calculate Desired PU Range", func() {
 })
 
 func intPtr(i int) *int { return &i }
+
+var _ = Describe("Cron mutability", func() {
+	Describe("addCronJob", func() {
+		var (
+			cronInst     *cronpkg.Cron
+			fakeRecorder *record.FakeRecorder
+			reconciler   *SpannerAutoscalerReconciler
+		)
+
+		BeforeEach(func() {
+			cronInst = cronpkg.New()
+			cronInst.Start()
+			fakeRecorder = record.NewFakeRecorder(10)
+			reconciler = &SpannerAutoscalerReconciler{
+				recorder: fakeRecorder,
+				log:      logr.Discard(),
+			}
+		})
+
+		AfterEach(func() {
+			cronInst.Stop()
+		})
+
+		makeSchedule := func(nn types.NamespacedName, expr string) *spannerv1beta1.SpannerAutoscaleSchedule {
+			return &spannerv1beta1.SpannerAutoscaleSchedule{
+				ObjectMeta: metav1.ObjectMeta{Name: nn.Name, Namespace: nn.Namespace},
+				Spec: spannerv1beta1.SpannerAutoscaleScheduleSpec{
+					TargetResource:            "test-sa",
+					AdditionalProcessingUnits: 1000,
+					Schedule: spannerv1beta1.Schedule{
+						Cron:     expr,
+						Duration: "1h",
+					},
+				},
+			}
+		}
+
+		saFor := func(saNN, schedNN types.NamespacedName) spannerv1beta1.SpannerAutoscaler {
+			return spannerv1beta1.SpannerAutoscaler{
+				ObjectMeta: metav1.ObjectMeta{Name: saNN.Name, Namespace: saNN.Namespace},
+				Status: spannerv1beta1.SpannerAutoscalerStatus{
+					Schedules: []string{schedNN.String()},
+				},
+			}
+		}
+
+		It("registers a new cron entry for a new schedule", func() {
+			schedNN := types.NamespacedName{Namespace: "default", Name: "sched-new"}
+			saNN := types.NamespacedName{Namespace: "default", Name: "sa-new"}
+
+			fc := fakeclient.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(makeSchedule(schedNN, "0 * * * *")).Build()
+			reconciler.ctrlClient = fc
+
+			Expect(reconciler.addCronJob(ctx, logr.Discard(), saFor(saNN, schedNN), cronInst)).To(Succeed())
+			Expect(cronInst.Entries()).To(HaveLen(1))
+			Expect(cronInst.Entries()[0].Job.(schedulerpkg.Job).Cron).To(Equal("0 * * * *"))
+		})
+
+		It("replaces the cron entry when the expression changes", func() {
+			schedNN := types.NamespacedName{Namespace: "default", Name: "sched-update"}
+			saNN := types.NamespacedName{Namespace: "default", Name: "sa-update"}
+
+			sas := makeSchedule(schedNN, "0 * * * *")
+			fc := fakeclient.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(sas).Build()
+			reconciler.ctrlClient = fc
+			sa := saFor(saNN, schedNN)
+
+			Expect(reconciler.addCronJob(ctx, logr.Discard(), sa, cronInst)).To(Succeed())
+			Expect(cronInst.Entries()).To(HaveLen(1))
+
+			updated := sas.DeepCopy()
+			updated.Spec.Schedule.Cron = "30 * * * *"
+			Expect(fc.Update(ctx, updated)).To(Succeed())
+
+			Expect(reconciler.addCronJob(ctx, logr.Discard(), sa, cronInst)).To(Succeed())
+			Expect(cronInst.Entries()).To(HaveLen(1), "upsert must not create a duplicate entry")
+			Expect(cronInst.Entries()[0].Job.(schedulerpkg.Job).Cron).To(Equal("30 * * * *"))
+		})
+
+		It("keeps the existing entry and emits a Warning on an invalid cron expression", func() {
+			schedNN := types.NamespacedName{Namespace: "default", Name: "sched-invalid"}
+			saNN := types.NamespacedName{Namespace: "default", Name: "sa-invalid"}
+
+			sas := makeSchedule(schedNN, "0 * * * *")
+			fc := fakeclient.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(sas).Build()
+			reconciler.ctrlClient = fc
+			sa := saFor(saNN, schedNN)
+
+			Expect(reconciler.addCronJob(ctx, logr.Discard(), sa, cronInst)).To(Succeed())
+			Expect(cronInst.Entries()).To(HaveLen(1))
+
+			updated := sas.DeepCopy()
+			updated.Spec.Schedule.Cron = "not-a-cron"
+			Expect(fc.Update(ctx, updated)).To(Succeed())
+
+			Expect(reconciler.addCronJob(ctx, logr.Discard(), sa, cronInst)).To(Succeed())
+			Expect(cronInst.Entries()).To(HaveLen(1), "invalid expression must leave existing entry intact")
+			Expect(cronInst.Entries()[0].Job.(schedulerpkg.Job).Cron).To(Equal("0 * * * *"))
+			Expect(fakeRecorder.Events).To(Receive(ContainSubstring("InvalidCronExpression")))
+		})
+	})
+
+	Describe("pruneCronJobs", func() {
+		It("removes entries no longer listed in sa.Status.Schedules", func() {
+			cronInst := cronpkg.New()
+			cronInst.Start()
+			DeferCleanup(cronInst.Stop)
+
+			keepNN := types.NamespacedName{Namespace: "default", Name: "sched-keep"}
+			removeNN := types.NamespacedName{Namespace: "default", Name: "sched-remove"}
+
+			for _, pair := range []struct {
+				nn   types.NamespacedName
+				expr string
+			}{
+				{keepNN, "0 * * * *"},
+				{removeNN, "30 * * * *"},
+			} {
+				job := schedulerpkg.Job{ScheduleName: pair.nn, Cron: pair.expr}
+				_, err := cronInst.UpsertJob(pair.expr, job, cronpkg.WithName(pair.nn.String()))
+				Expect(err).NotTo(HaveOccurred())
+			}
+			Expect(cronInst.Entries()).To(HaveLen(2))
+
+			sa := spannerv1beta1.SpannerAutoscaler{
+				Status: spannerv1beta1.SpannerAutoscalerStatus{
+					Schedules: []string{keepNN.String()},
+				},
+			}
+			pruneCronJobs(logr.Discard(), sa, cronInst)
+
+			Expect(cronInst.Entries()).To(HaveLen(1))
+			Expect(cronInst.Entries()[0].Job.(schedulerpkg.Job).ScheduleName).To(Equal(keepNN))
+		})
+	})
+
+	Context("envtest: SpannerAutoscaleSchedule cron update triggers reconcile", func() {
+		It("replaces the in-memory cron entry when spec.schedule.cron is updated", func() {
+			saName := "test-cron-mut-" + uuid.NewString()[:8]
+			schedName := "sched-" + uuid.NewString()[:8]
+			saNN := types.NamespacedName{Namespace: namespace, Name: saName}
+			schedNN := types.NamespacedName{Namespace: namespace, Name: schedName}
+
+			By("pre-seeding a fake syncer so reconcile bypasses syncer creation")
+			spReconciler.mu.Lock()
+			spReconciler.syncers[saNN] = &fakesyncer.Syncer{}
+			spReconciler.mu.Unlock()
+
+			By("creating the SpannerAutoscaleSchedule with initial cron '0 * * * *'")
+			sched := &spannerv1beta1.SpannerAutoscaleSchedule{
+				ObjectMeta: metav1.ObjectMeta{Name: schedName, Namespace: namespace},
+				Spec: spannerv1beta1.SpannerAutoscaleScheduleSpec{
+					TargetResource:            saName,
+					AdditionalProcessingUnits: 1000,
+					Schedule: spannerv1beta1.Schedule{
+						Cron:     "0 * * * *",
+						Duration: "1h",
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, sched)).To(Succeed())
+
+			By("creating the SpannerAutoscaler")
+			sa := &spannerv1beta1.SpannerAutoscaler{
+				ObjectMeta: metav1.ObjectMeta{Name: saName, Namespace: namespace},
+				Spec: spannerv1beta1.SpannerAutoscalerSpec{
+					TargetInstance: spannerv1beta1.TargetInstance{
+						ProjectID:  "test-proj",
+						InstanceID: "test-inst",
+					},
+					Authentication: spannerv1beta1.Authentication{
+						Type: spannerv1beta1.AuthTypeADC,
+					},
+					ScaleConfig: spannerv1beta1.ScaleConfig{
+						ComputeType: spannerv1beta1.ComputeTypePU,
+						ProcessingUnits: spannerv1beta1.ScaleConfigPUs{
+							Min: 100,
+							Max: 1000,
+						},
+						ScaledownStepSize: intstr.FromInt(100),
+						TargetCPUUtilization: spannerv1beta1.TargetCPUUtilization{
+							HighPriority: intPtr(40),
+						},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, sa)).To(Succeed())
+
+			By("setting Status.Schedules to include the schedule")
+			sa.Status.Schedules = []string{schedNN.String()}
+			Expect(k8sClient.Status().Update(ctx, sa)).To(Succeed())
+
+			By("waiting for the initial cron entry to be registered")
+			Eventually(func() string {
+				spReconciler.mu.RLock()
+				c, ok := spReconciler.crons[saNN]
+				spReconciler.mu.RUnlock()
+				if !ok || len(c.Entries()) == 0 {
+					return ""
+				}
+				return c.Entries()[0].Job.(schedulerpkg.Job).Cron
+			}, 5*time.Second, 200*time.Millisecond).Should(Equal("0 * * * *"))
+
+			By("updating spec.schedule.cron to '30 * * * *'")
+			Expect(k8sClient.Get(ctx, schedNN, sched)).To(Succeed())
+			sched.Spec.Schedule.Cron = "30 * * * *"
+			Expect(k8sClient.Update(ctx, sched)).To(Succeed())
+
+			By("waiting for the in-memory cron entry to reflect the new expression")
+			Eventually(func() string {
+				spReconciler.mu.RLock()
+				c, ok := spReconciler.crons[saNN]
+				spReconciler.mu.RUnlock()
+				if !ok || len(c.Entries()) == 0 {
+					return ""
+				}
+				return c.Entries()[0].Job.(schedulerpkg.Job).Cron
+			}, 5*time.Second, 200*time.Millisecond).Should(Equal("30 * * * *"))
+
+			spReconciler.mu.RLock()
+			entryCount := len(spReconciler.crons[saNN].Entries())
+			spReconciler.mu.RUnlock()
+			Expect(entryCount).To(Equal(1), "upsert must not duplicate the entry")
+		})
+	})
+})
