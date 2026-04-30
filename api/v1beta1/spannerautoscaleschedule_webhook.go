@@ -21,7 +21,7 @@ import (
 	"fmt"
 	"time"
 
-	cronpkg "github.com/robfig/cron/v3"
+	cronpkg "github.com/netresearch/go-cron"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/validation/field"
