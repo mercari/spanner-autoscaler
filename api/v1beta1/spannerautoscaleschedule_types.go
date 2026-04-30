@@ -40,7 +40,6 @@ type SpannerAutoscaleScheduleSpec struct {
 	AdditionalProcessingUnits int `json:"additionalProcessingUnits"`
 
 	// The details of when and for how long this schedule will be active.
-	// Immutable after creation.
 	Schedule Schedule `json:"schedule"`
 }
 

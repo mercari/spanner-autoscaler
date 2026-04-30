@@ -57,9 +57,8 @@ spec:
                   This is the only field that can be updated after creation.
                 type: integer
               schedule:
-                description: |-
-                  The details of when and for how long this schedule will be active.
-                  Immutable after creation.
+                description: The details of when and for how long this schedule will
+                  be active.
                 properties:
                   cron:
                     description: 'The recurring frequency of the schedule in [standard

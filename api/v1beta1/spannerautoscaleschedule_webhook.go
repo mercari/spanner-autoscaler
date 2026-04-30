@@ -81,15 +81,6 @@ func (*spannerAutoscaleScheduleWebhook) ValidateUpdate(_ context.Context, oldObj
 		allErrs = append(allErrs, err)
 	}
 
-	// Disable schedule updates until reconciler is modified to propagate this change to the actual cronjobs
-	if oldObj.Spec.Schedule != newObj.Spec.Schedule {
-		err := field.Invalid(
-			field.NewPath("spec").Child("schedule"),
-			newObj.Spec.Schedule,
-			"'schedule' can not be changed after resource has been created")
-		allErrs = append(allErrs, err)
-	}
-
 	allErrs = append(allErrs, validateSchedule(newObj)...)
 
 	if len(allErrs) == 0 {
