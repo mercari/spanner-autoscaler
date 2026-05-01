@@ -36,11 +36,9 @@ type SpannerAutoscaleScheduleSpec struct {
 	TargetResource string `json:"targetResource"`
 
 	// The extra compute capacity which will be added when this schedule is active.
-	// This is the only field that can be updated after creation.
 	AdditionalProcessingUnits int `json:"additionalProcessingUnits"`
 
 	// The details of when and for how long this schedule will be active.
-	// Immutable after creation.
 	Schedule Schedule `json:"schedule"`
 }
 

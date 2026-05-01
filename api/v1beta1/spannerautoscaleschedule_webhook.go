@@ -21,7 +21,7 @@ import (
 	"fmt"
 	"time"
 
-	cronpkg "github.com/robfig/cron/v3"
+	cronpkg "github.com/netresearch/go-cron"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -78,15 +78,6 @@ func (*spannerAutoscaleScheduleWebhook) ValidateUpdate(_ context.Context, oldObj
 			field.NewPath("spec").Child("targetResource"),
 			newObj.Spec.TargetResource,
 			"'targetResource' can not be changed after resource has been created")
-		allErrs = append(allErrs, err)
-	}
-
-	// Disable schedule updates until reconciler is modified to propagate this change to the actual cronjobs
-	if oldObj.Spec.Schedule != newObj.Spec.Schedule {
-		err := field.Invalid(
-			field.NewPath("spec").Child("schedule"),
-			newObj.Spec.Schedule,
-			"'schedule' can not be changed after resource has been created")
 		allErrs = append(allErrs, err)
 	}
 
