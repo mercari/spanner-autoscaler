@@ -6,7 +6,7 @@ import (
 
 	"github.com/go-logr/logr"
 	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
-	cronpkg "github.com/robfig/cron/v3"
+	cronpkg "github.com/netresearch/go-cron"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
@@ -33,8 +33,12 @@ type scheduler struct {
 type Job struct {
 	ScheduleName   types.NamespacedName
 	AutoscalerName types.NamespacedName
-	Log            logr.Logger
-	CtrlClient     ctrlclient.Client
+	// Cron is the spec string this job was registered with. Stored so that
+	// log lines (e.g. on prune) can surface the original expression — the
+	// cron library only retains the parsed Schedule, not the spec text.
+	Cron       string
+	Log        logr.Logger
+	CtrlClient ctrlclient.Client
 }
 
 func New(log logr.Logger, ctrlClient ctrlclient.Client, crons map[types.NamespacedName]*cronpkg.Cron, autoscalerName types.NamespacedName) scheduler {

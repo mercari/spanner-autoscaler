@@ -23,7 +23,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
-	cronpkg "github.com/robfig/cron/v3"
+	cronpkg "github.com/netresearch/go-cron"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -34,6 +34,7 @@ import (
 	utilclock "k8s.io/utils/clock"
 	ctrlbuilder "sigs.k8s.io/controller-runtime/pkg/builder"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
+	ctrlhandler "sigs.k8s.io/controller-runtime/pkg/handler"
 	ctrlmanager "sigs.k8s.io/controller-runtime/pkg/manager"
 	ctrlreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -372,8 +373,6 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 		return ctrlreconcile.Result{}, err
 	}
 
-	// TODO: implement cronjob schedule update whenever SpannerAutoscaleSchedule cron is changed (or block changes to Schedule after creation)
-
 	if cronExists {
 		pruneCronJobs(log, sa, cron)
 	}
@@ -446,6 +445,28 @@ func (r *SpannerAutoscalerReconciler) StopAll() {
 func (r *SpannerAutoscalerReconciler) SetupWithManager(mgr ctrlmanager.Manager) error {
 	return ctrlbuilder.ControllerManagedBy(mgr).
 		For(&spannerv1beta1.SpannerAutoscaler{}).
+		// Watch SpannerAutoscaleSchedule so that edits to its spec (e.g. the
+		// cron expression) enqueue the parent SpannerAutoscaler for reconcile.
+		// Without this, a cron-only change wouldn't touch sa.Status.Schedules
+		// and the in-memory cron entry would never be re-bound.
+		Watches(
+			&spannerv1beta1.SpannerAutoscaleSchedule{},
+			ctrlhandler.EnqueueRequestsFromMapFunc(func(_ context.Context, obj ctrlclient.Object) []ctrlreconcile.Request {
+				sas, ok := obj.(*spannerv1beta1.SpannerAutoscaleSchedule)
+				if !ok || sas.Spec.TargetResource == "" {
+					return nil
+				}
+				return []ctrlreconcile.Request{{
+					// SpannerAutoscaleSchedule and SpannerAutoscaler are assumed to
+					// always reside in the same namespace; TargetResource is a plain
+					// name (not namespaced), so we inherit the schedule's namespace.
+					NamespacedName: types.NamespacedName{
+						Namespace: sas.Namespace,
+						Name:      sas.Spec.TargetResource,
+					},
+				}}
+			}),
+		).
 		Complete(r)
 }
 
@@ -457,30 +478,46 @@ func (r *SpannerAutoscalerReconciler) addCronJob(ctx context.Context, log logr.L
 		if err := r.ctrlClient.Get(ctx, nnsas, &sas); err != nil {
 			log.Error(err, "failed to get spanner-autoscaler-schedule")
 			return err
-		} else {
-			job := schedulerpkg.Job{
-				ScheduleName:   nnsas,
-				AutoscalerName: nnsa,
-				Log:            log.WithName("job").WithValues("schedule", nnsas, "autoscaler", nnsa),
-				CtrlClient:     r.ctrlClient,
-			}
-			if !jobExists(cron, job) {
-				if _, err := cron.AddJob(sas.Spec.Schedule.Cron, job); err != nil {
-					log.Error(err, "failed to add cron job to the cron")
-				}
-				log.Info("new cron job has been registered", "cron", sas.Spec.Schedule.Cron, "schedule", nnsas.String())
-			}
 		}
+
+		job := schedulerpkg.Job{
+			ScheduleName:   nnsas,
+			AutoscalerName: nnsa,
+			Cron:           sas.Spec.Schedule.Cron,
+			Log:            log.WithName("job").WithValues("schedule", nnsas, "autoscaler", nnsa),
+			CtrlClient:     r.ctrlClient,
+		}
+		// UpsertJob (keyed by WithName) atomically replaces the schedule when
+		// sas.Spec.Schedule.Cron has changed; otherwise it creates a new entry.
+		// The new spec is parsed before the existing entry is touched, so an
+		// invalid expression leaves the previous schedule intact.
+		if _, err := cron.UpsertJob(sas.Spec.Schedule.Cron, job, cronpkg.WithName(nnsas.String())); err != nil {
+			log.Error(err, "failed to upsert cron job", "cron", sas.Spec.Schedule.Cron, "schedule", nnsas.String())
+			r.recorder.Event(&sas, corev1.EventTypeWarning, "InvalidCronExpression", err.Error())
+			// Intentionally using continue rather than returning the error: a bad cron
+			// expression on one schedule should not block the remaining schedules from
+			// being registered. The reconciler will retry when the user corrects the
+			// expression (the Watch on SpannerAutoscaleSchedule will trigger a new
+			// reconcile on the next update).
+			continue
+		}
+		log.V(1).Info("cron job upserted", "cron", sas.Spec.Schedule.Cron, "schedule", nnsas.String())
 	}
 	return nil
 }
 
 func pruneCronJobs(log logr.Logger, sa spannerv1beta1.SpannerAutoscaler, cron *cronpkg.Cron) {
-	for _, entry := range cron.Entries() {
+	// gocritic(rangeValCopy): cron.Entries() returns a snapshot, so
+	// calling RemoveByName on the live cron while iterating over the snapshot is safe.
+	for _, entry := range cron.Entries() { //nolint:gocritic
 		job := entry.Job.(schedulerpkg.Job)
 		if _, found := findInArray(sa.Status.Schedules, job.ScheduleName.String()); !found {
-			cron.Remove(entry.ID)
-			log.V(1).Info("removed cron job", "job", job, "cronjob-count", len(cron.Entries()))
+			if entry.Name == "" {
+				log.Error(nil, "cron entry has no name, skipping removal", "job", job.ScheduleName)
+				continue
+			}
+			cron.RemoveByName(entry.Name)
+			log.V(1).Info("removed cron job", "cron", job.Cron, "schedule", entry.Name, "cronjob-count", len(cron.Entries()))
 		}
 	}
 }
@@ -497,16 +534,6 @@ func pruneActiveSchedules(log logr.Logger, sa spannerv1beta1.SpannerAutoscaler) 
 		result = append(result, as)
 	}
 	return result, changed
-}
-
-func jobExists(cron *cronpkg.Cron, job schedulerpkg.Job) bool {
-	for _, e := range cron.Entries() {
-		entryJob := e.Job.(schedulerpkg.Job)
-		if entryJob.ScheduleName == job.ScheduleName {
-			return true
-		}
-	}
-	return false
 }
 
 // TODO: move this (and other similar functions) to 'internal/util' package
