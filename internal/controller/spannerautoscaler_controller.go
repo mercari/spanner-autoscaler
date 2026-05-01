@@ -677,6 +677,13 @@ func calcDesiredPUFromCPU(currentCPU, targetCPU int, sa spannerv1beta1.SpannerAu
 	totalCPU := currentCPU * sa.Status.CurrentProcessingUnits
 	requiredPU := totalCPU / targetCPU
 
+	// https://cloud.google.com/spanner/docs/compute-capacity?hl=en
+	// Valid values for processing units are:
+	// If processingUnits < 1000, processing units must be multiples of 100.
+	// If processingUnits >= 1000, processing units must be multiples of 1000.
+	//
+	// Round up the requiredPU value to make it valid.
+	// If it is already a valid PU, increment to next unit to keep CPU usage below desired threshold.
 	var desiredPU int
 	if requiredPU < 1000 {
 		desiredPU = ((requiredPU / 100) + 1) * 100
@@ -686,38 +693,53 @@ func calcDesiredPUFromCPU(currentCPU, targetCPU int, sa spannerv1beta1.SpannerAu
 
 	sdStepSize, sdStepSizeErr := intstr.GetScaledValueFromIntOrPercent(&sa.Spec.ScaleConfig.ScaledownStepSize, sa.Status.CurrentProcessingUnits, false)
 	if sdStepSizeErr != nil {
+		// unlikely, but revert to the default value if sdStepSize cannot be resolved
 		sdStepSize = 2000
 	}
 	suStepSize, suStepSizeErr := intstr.GetScaledValueFromIntOrPercent(&sa.Spec.ScaleConfig.ScaleupStepSize, sa.Status.CurrentProcessingUnits, false)
 	if suStepSizeErr != nil {
+		// unlikely, revert to the default value if suStepSize cannot be resolved
 		suStepSize = 0
 	}
 
+	// in case of percentages, round down to the scaledownStepSize to the nearest hundred or thousand
+	// to keep the scaledownStepSize within the percentage
 	if sdStepSize < 1000 {
 		sdStepSize = (sdStepSize / 100) * 100
 	} else {
 		sdStepSize = (sdStepSize / 1000) * 1000
 	}
+	// in case of percentages, round down to the scaleupStepSize to the nearest hundred or thousand
+	// to keep the scaleupStepSize within the percentage
 	if suStepSize < 1000 {
 		suStepSize = (suStepSize / 100) * 100
 	} else {
 		suStepSize = (suStepSize / 1000) * 1000
 	}
 
+	// round up the scaledownStepSize to avoid intermediate values
+	// for example: 8000 -> 7000 instead of 8000 -> 7400
+	//              800 -> 700 instead of 800 -> 740
 	if sdStepSize < 1000 && sa.Status.CurrentProcessingUnits > 1000 {
 		sdStepSize = 1000
 	} else if sdStepSize < 100 && sa.Status.CurrentProcessingUnits <= 1000 {
 		sdStepSize = 100
 	}
+	// round up the scaleupStepSize to avoid intermediate values
+	// for example: 7000 -> 8000 instead of 7000 -> 7600
+	//              700 -> 800 instead of 700 -> 760
+	// To keep compatibility, check if scaleupStepSize is not 0
 	if suStepSize != 0 && suStepSize < 1000 && sa.Status.CurrentProcessingUnits+suStepSize > 1000 {
 		suStepSize = 1000
 	} else if suStepSize != 0 && suStepSize < 100 && sa.Status.CurrentProcessingUnits+suStepSize <= 1000 {
 		suStepSize = 100
 	}
 
+	// in case of scaling down, check that we don't scale down beyond the ScaledownStepSize
 	if scaledDownPU := sa.Status.CurrentProcessingUnits - sdStepSize; desiredPU < scaledDownPU {
 		desiredPU = scaledDownPU
 	}
+	// in case of scaling up, check that we don't scale up beyond the ScaleupStepSize
 	if scaledUpPU := sa.Status.CurrentProcessingUnits + suStepSize; suStepSize != 0 && scaledUpPU < desiredPU {
 		desiredPU = scaledUpPU
 		if 1000 < desiredPU && desiredPU%1000 != 0 {
@@ -725,8 +747,10 @@ func calcDesiredPUFromCPU(currentCPU, targetCPU int, sa spannerv1beta1.SpannerAu
 		}
 	}
 
+	// keep the scaling between the specified min/max range
 	minPU := sa.Spec.ScaleConfig.ProcessingUnits.Min
 	maxPU := sa.Spec.ScaleConfig.ProcessingUnits.Max
+	// fetch min/max range from status, in case any schedules have updated the range
 	if sa.Status.DesiredMinPUs > 0 {
 		minPU = sa.Status.DesiredMinPUs
 	}
