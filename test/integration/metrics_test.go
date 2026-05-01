@@ -18,7 +18,7 @@ func TestMetricsClient_GetInstanceMetrics_Static(t *testing.T) {
 		wantCPU    = 45 // 0.45 * 100
 	)
 
-	body, _ := json.Marshal(map[string]float64{"cpu_utilization": 0.45})
+	body, _ := json.Marshal(map[string]float64{"high_priority": 0.45})
 	adminPUT(t, fmt.Sprintf("/metrics/%s/%s", projectID, instanceID), body)
 	t.Cleanup(func() { adminDELETE(t, fmt.Sprintf("/metrics/%s/%s", projectID, instanceID)) })
 

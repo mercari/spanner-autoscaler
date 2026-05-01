@@ -20,45 +20,20 @@ type ScenarioMetric struct {
 }
 
 // ScenarioStep is one step in a scenario sequence.
-//
-// Per-metric mode (recommended for dual CPU scaling): set HighPriority and/or Total.
-// Legacy mode (backward compat, applies same value to both metrics): set CPUUtilization or Workload.
-// Mixing per-metric and legacy fields in the same step is not allowed.
+// At least one of HighPriority or Total must be set.
 type ScenarioStep struct {
-	Duration Duration `json:"duration"`
-
-	// Per-metric CPU values for dual CPU scaling mode testing.
-	// If set, takes precedence over the legacy CPUUtilization/Workload fields.
+	Duration     Duration        `json:"duration"`
 	HighPriority *ScenarioMetric `json:"high_priority,omitempty"`
 	Total        *ScenarioMetric `json:"total,omitempty"`
-
-	// Legacy: applies to both metrics if high_priority/total are not set.
-	//   - CPUUtilization: returns a fixed CPU value regardless of current PU.
-	//   - Workload: computes CPU dynamically (cpu = workload / current_pu).
-	CPUUtilization *float64          `json:"cpu_utilization,omitempty"`
-	Workload       *WorkloadScenario `json:"workload,omitempty"`
 }
 
-// metricFor returns the ScenarioMetric for the given metric kind.
-// Per-metric fields (HighPriority/Total) take precedence over legacy fields.
-// If neither per-metric nor legacy fields are configured for the kind, returns nil.
+// metricFor returns the ScenarioMetric for the given metric kind, or nil if not configured.
 func (s *ScenarioStep) metricFor(kind MetricKind) *ScenarioMetric {
 	switch kind {
 	case MetricKindHighPriority:
-		if s.HighPriority != nil {
-			return s.HighPriority
-		}
+		return s.HighPriority
 	case MetricKindTotal:
-		if s.Total != nil {
-			return s.Total
-		}
-	}
-	// Fall back to legacy fields (same value for both metric kinds).
-	if s.CPUUtilization != nil || s.Workload != nil {
-		return &ScenarioMetric{
-			CPUUtilization: s.CPUUtilization,
-			Workload:       s.Workload,
-		}
+		return s.Total
 	}
 	return nil
 }
@@ -154,25 +129,9 @@ func (s *ScenarioStore) Set(project, instanceID string, steps []ScenarioStep) er
 }
 
 func validateScenarioStep(i int, step ScenarioStep) error {
-	hasPerMetric := step.HighPriority != nil || step.Total != nil
-	hasLegacy := step.CPUUtilization != nil || step.Workload != nil
-
-	if hasPerMetric && hasLegacy {
-		return fmt.Errorf("step %d: cannot mix per-metric (high_priority/total) and legacy (cpu_utilization/workload) fields", i)
+	if step.HighPriority == nil && step.Total == nil {
+		return fmt.Errorf("step %d: must set high_priority and/or total", i)
 	}
-	if !hasPerMetric && !hasLegacy {
-		return fmt.Errorf("step %d: must set cpu_utilization, workload, or per-metric high_priority/total fields", i)
-	}
-
-	if hasLegacy {
-		if step.CPUUtilization != nil && step.Workload != nil {
-			return fmt.Errorf("step %d: cpu_utilization and workload are mutually exclusive", i)
-		}
-		if step.CPUUtilization != nil && (*step.CPUUtilization < 0 || *step.CPUUtilization > 1) {
-			return fmt.Errorf("step %d: cpu_utilization must be between 0.0 and 1.0", i)
-		}
-	}
-
 	for _, named := range []struct {
 		name   string
 		metric *ScenarioMetric

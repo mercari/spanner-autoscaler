@@ -116,58 +116,38 @@ spanner-autoscaler calls only one RPC method from the [MetricService API](https:
 
 All other `MetricService` methods (`CreateTimeSeries`, `ListMetricDescriptors`, etc.) are **not implemented** and return `Unimplemented`.
 
-It supports three modes, checked in priority order. Each mode accepts either a **per-metric** format (separate `high_priority` and `total` fields) for dual CPU scaling testing, or a **legacy** format (`cpu_utilization`) that applies the same value to both metrics.
+It supports three modes, checked in priority order. Each mode accepts independent values per metric type via `high_priority` and `total` fields. At least one must be set per request.
 
 **1. Scenario mode** (priority 1 — default when `SCENARIO_FILE` is set)
 
 Steps through a time-based sequence of CPU values that loops indefinitely. This is the default for `make tilt-up`, which loads `scenarios/default.yaml`. It demonstrates a full scale-up → stable → scale-down cycle without any manual intervention.
 
-Scenario files are written in YAML. Each step uses either a fixed `cpu_utilization` / `high_priority` / `total`, or a `workload` (which computes CPU dynamically based on current PU — see workload mode below):
+Scenario files are written in YAML. Each step specifies `high_priority` and/or `total`, each of which uses either a fixed `cpu_utilization` or a `workload` (which computes CPU dynamically based on current PU — see workload mode below):
 
 ```yaml
-# scenarios/default.yaml — legacy format (applies same value to both metrics)
-instances:
-  - project: beta-project
-    instance: beta-instance
-    steps:
-      - duration: 60s
-        workload:
-          cpu_utilization: 0.80
-          reference_processing_units: 1000
-      - duration: 60s
-        cpu_utilization: 0.15
-```
-
-```yaml
-# Per-metric format (independent highPriority and total values)
+# scenarios/default.yaml
 instances:
   - project: beta-project
     instance: beta-instance
     steps:
       - duration: 60s
         high_priority:
-          cpu_utilization: 0.80
+          workload:
+            cpu_utilization: 0.80
+            reference_processing_units: 1000
+      - duration: 60s
+        high_priority:
+          cpu_utilization: 0.15
         total:
-          cpu_utilization: 0.50
-      - duration: 60s
-        high_priority:
           cpu_utilization: 0.10
-        total:
-          cpu_utilization: 0.08
 ```
 
 A scenario can also be set or replaced at runtime via the admin API:
 
 ```console
-# Legacy format: same value for both metrics
 $ curl -X PUT http://localhost:9091/scenario/beta-project/beta-instance \
     -H 'Content-Type: application/json' \
-    -d '{"steps": [{"duration": "30s", "cpu_utilization": 0.8}, {"duration": "30s", "cpu_utilization": 0.1}]}'
-
-# Per-metric format: independent highPriority and total values
-$ curl -X PUT http://localhost:9091/scenario/beta-project/beta-instance \
-    -H 'Content-Type: application/json' \
-    -d '{"steps": [{"duration": "30s", "high_priority": {"cpu_utilization": 0.8}, "total": {"cpu_utilization": 0.5}}, {"duration": "30s", "high_priority": {"cpu_utilization": 0.1}, "total": {"cpu_utilization": 0.08}}]}'
+    -d '{"steps": [{"duration": "30s", "high_priority": {"cpu_utilization": 0.8}, "total": {"cpu_utilization": 0.5}}, {"duration": "30s", "high_priority": {"cpu_utilization": 0.1}}]}'
 
 # Remove the scenario
 $ curl -X DELETE http://localhost:9091/scenario/beta-project/beta-instance
@@ -184,15 +164,15 @@ cpu = (reference_cpu × reference_pu) / current_pu
 Requires `SPANNER_EMULATOR_HOST` to be set (already configured in `docker-compose.yml`) so the emulator can query the current PU count from the Spanner emulator.
 
 ```console
-# Legacy format: 80% CPU at 1000 PU baseline (applies to both metrics)
-$ curl -X PUT http://localhost:9091/workload/beta-project/beta-instance \
-    -H 'Content-Type: application/json' \
-    -d '{"cpu_utilization": 0.80, "reference_processing_units": 1000}'
-
-# Per-metric format: independent highPriority and total workloads
+# Set workload for both metrics independently
 $ curl -X PUT http://localhost:9091/workload/beta-project/beta-instance \
     -H 'Content-Type: application/json' \
     -d '{"high_priority": {"cpu_utilization": 0.80, "reference_processing_units": 1000}, "total": {"cpu_utilization": 0.50, "reference_processing_units": 1000}}'
+
+# Set workload for highPriority only
+$ curl -X PUT http://localhost:9091/workload/beta-project/beta-instance \
+    -H 'Content-Type: application/json' \
+    -d '{"high_priority": {"cpu_utilization": 0.80, "reference_processing_units": 1000}}'
 
 # Remove
 $ curl -X DELETE http://localhost:9091/workload/beta-project/beta-instance
@@ -200,18 +180,18 @@ $ curl -X DELETE http://localhost:9091/workload/beta-project/beta-instance
 
 **3. Static mode** (priority 3)
 
-Returns a fixed CPU utilization value regardless of current processing units. Useful for targeted testing of a specific threshold.
+Returns fixed CPU utilization values regardless of current processing units. Useful for targeted testing of specific thresholds.
 
 ```console
-# Legacy format: set both metrics to 75%
-$ curl -X PUT http://localhost:9091/metrics/beta-project/beta-instance \
-    -H 'Content-Type: application/json' \
-    -d '{"cpu_utilization": 0.75}'
-
-# Per-metric format: independent highPriority and total values
+# Set independent values for highPriority and total
 $ curl -X PUT http://localhost:9091/metrics/beta-project/beta-instance \
     -H 'Content-Type: application/json' \
     -d '{"high_priority": 0.75, "total": 0.50}'
+
+# Set highPriority only
+$ curl -X PUT http://localhost:9091/metrics/beta-project/beta-instance \
+    -H 'Content-Type: application/json' \
+    -d '{"high_priority": 0.75}'
 
 # Check current value
 $ curl http://localhost:9091/metrics/beta-project/beta-instance

@@ -51,8 +51,10 @@ func TestController_E2E_ScaleUp(t *testing.T) {
 	// At 1000 PU with cpu=0.80: workload = 0.80 * 1000 = 800.
 	// After scale-up to e.g. 2000 PU: cpu = 800 / 2000 = 0.40 → at target.
 	body, _ := json.Marshal(map[string]interface{}{
-		"cpu_utilization":            referenceCPU,
-		"reference_processing_units": initPU,
+		"high_priority": map[string]interface{}{
+			"cpu_utilization":            referenceCPU,
+			"reference_processing_units": initPU,
+		},
 	})
 	adminPUT(t, fmt.Sprintf("/workload/%s/%s", projectID, instanceID), body)
 	t.Cleanup(func() { adminDELETE(t, fmt.Sprintf("/workload/%s/%s", projectID, instanceID)) })

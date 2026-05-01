@@ -11,33 +11,27 @@ import (
 // Static mode endpoints (fixed CPU utilization):
 //
 //	PUT    /metrics/{project_id}/{instance_id}
-//	  Body (per-metric, recommended for dual CPU scaling testing):
-//	    {"high_priority": 0.65, "total": 0.45}
-//	  Body (legacy, sets both metrics to the same value):
-//	    {"cpu_utilization": 0.45}
+//	  Body: {"high_priority": 0.65, "total": 0.45}
+//	  At least one of high_priority or total must be set.
 //	GET    /metrics/{project_id}/{instance_id}
 //	DELETE /metrics/{project_id}/{instance_id}
 //
 // Dynamic mode endpoints (workload-based CPU calculation):
 //
 //	PUT    /workload/{project_id}/{instance_id}
-//	  Body (per-metric, recommended for dual CPU scaling testing):
-//	    {"high_priority": {"cpu_utilization": 0.80, "reference_processing_units": 1000},
-//	     "total":         {"cpu_utilization": 0.50, "reference_processing_units": 1000}}
-//	  Body (legacy, sets both metrics to the same workload):
-//	    {"cpu_utilization": 0.80, "reference_processing_units": 1000}
+//	  Body: {"high_priority": {"cpu_utilization": 0.80, "reference_processing_units": 1000},
+//	         "total":         {"cpu_utilization": 0.50, "reference_processing_units": 1000}}
+//	  At least one of high_priority or total must be set.
 //	GET    /workload/{project_id}/{instance_id}
 //	DELETE /workload/{project_id}/{instance_id}
 //
 // Scenario mode endpoints (time-based step sequence, loops indefinitely):
 //
 //	PUT    /scenario/{project_id}/{instance_id}
-//	  Body (per-metric step):
-//	    {"steps": [{"duration": "30s",
-//	                "high_priority": {"cpu_utilization": 0.80},
-//	                "total":         {"cpu_utilization": 0.50}}, ...]}
-//	  Body (legacy step, applies same value to both metrics):
-//	    {"steps": [{"duration": "30s", "cpu_utilization": 0.80}, ...]}
+//	  Body: {"steps": [{"duration": "30s",
+//	                    "high_priority": {"cpu_utilization": 0.80},
+//	                    "total":         {"cpu_utilization": 0.50}}, ...]}
+//	  At least one of high_priority or total must be set per step.
 //	DELETE /scenario/{project_id}/{instance_id}
 func NewAdminHandler(staticStore *StaticStore, workloadStore *WorkloadStore, scenarioStore *ScenarioStore) http.Handler {
 	mux := http.NewServeMux()
@@ -58,13 +52,9 @@ func NewAdminHandler(staticStore *StaticStore, workloadStore *WorkloadStore, sce
 
 // ---- static mode ----
 
-// staticSetRequest accepts either per-metric fields or the legacy cpu_utilization field.
-// Per-metric fields (high_priority, total) take precedence over the legacy field.
-// At least one field must be set.
+// staticSetRequest sets independent fixed CPU values per metric type.
+// At least one of HighPriority or Total must be set.
 type staticSetRequest struct {
-	// Legacy: sets both highPriority and total to the same value.
-	CPUUtilization *float64 `json:"cpu_utilization,omitempty"`
-	// Per-metric values (recommended for dual CPU scaling testing).
 	HighPriority *float64 `json:"high_priority,omitempty"`
 	Total        *float64 `json:"total,omitempty"`
 }
@@ -87,33 +77,22 @@ func handleStaticSet(store *StaticStore) http.HandlerFunc {
 			return
 		}
 
-		if req.CPUUtilization == nil && req.HighPriority == nil && req.Total == nil {
-			http.Error(w, "must set cpu_utilization, high_priority, or total", http.StatusBadRequest)
+		if req.HighPriority == nil && req.Total == nil {
+			http.Error(w, "must set high_priority and/or total", http.StatusBadRequest)
 			return
 		}
 
 		entry := CPUEntry{}
-		if req.HighPriority != nil || req.Total != nil {
-			// Per-metric mode.
-			if err := validateCPUField("high_priority", req.HighPriority); err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-			if err := validateCPUField("total", req.Total); err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-			entry.HighPriority = req.HighPriority
-			entry.Total = req.Total
-		} else {
-			// Legacy mode: apply the same value to both metrics.
-			if err := validateCPUField("cpu_utilization", req.CPUUtilization); err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-			entry.HighPriority = req.CPUUtilization
-			entry.Total = req.CPUUtilization
+		if err := validateCPUField("high_priority", req.HighPriority); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
 		}
+		if err := validateCPUField("total", req.Total); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		entry.HighPriority = req.HighPriority
+		entry.Total = req.Total
 
 		store.Set(projectID, instanceID, entry)
 
@@ -163,13 +142,9 @@ type workloadMetricRequest struct {
 	ReferenceProcessingUnits int     `json:"reference_processing_units"`
 }
 
-// workloadSetRequest accepts either per-metric fields or the legacy flat fields.
-// Per-metric fields (high_priority, total) take precedence over the legacy fields.
+// workloadSetRequest sets independent workload parameters per metric type.
+// At least one of HighPriority or Total must be set.
 type workloadSetRequest struct {
-	// Legacy: sets both metrics to the same workload.
-	CPUUtilization           *float64 `json:"cpu_utilization,omitempty"`
-	ReferenceProcessingUnits int      `json:"reference_processing_units,omitempty"`
-	// Per-metric workloads (recommended for dual CPU scaling testing).
 	HighPriority *workloadMetricRequest `json:"high_priority,omitempty"`
 	Total        *workloadMetricRequest `json:"total,omitempty"`
 }
@@ -209,38 +184,26 @@ func handleWorkloadSet(store *WorkloadStore) http.HandlerFunc {
 			return
 		}
 
-		if req.CPUUtilization == nil && req.HighPriority == nil && req.Total == nil {
-			http.Error(w, "must set cpu_utilization or per-metric high_priority/total", http.StatusBadRequest)
+		if req.HighPriority == nil && req.Total == nil {
+			http.Error(w, "must set high_priority and/or total", http.StatusBadRequest)
 			return
 		}
 
 		entry := WorkloadEntry{}
-		if req.HighPriority != nil || req.Total != nil {
-			// Per-metric mode.
-			if req.HighPriority != nil {
-				if err := validateWorkloadMetric("high_priority", req.HighPriority.CPUUtilization, req.HighPriority.ReferenceProcessingUnits); err != nil {
-					http.Error(w, err.Error(), http.StatusBadRequest)
-					return
-				}
-				p := newWorkloadParams(req.HighPriority.CPUUtilization, req.HighPriority.ReferenceProcessingUnits)
-				entry.HighPriority = &p
-			}
-			if req.Total != nil {
-				if err := validateWorkloadMetric("total", req.Total.CPUUtilization, req.Total.ReferenceProcessingUnits); err != nil {
-					http.Error(w, err.Error(), http.StatusBadRequest)
-					return
-				}
-				p := newWorkloadParams(req.Total.CPUUtilization, req.Total.ReferenceProcessingUnits)
-				entry.Total = &p
-			}
-		} else {
-			// Legacy mode: apply the same workload to both metrics.
-			if err := validateWorkloadMetric("", *req.CPUUtilization, req.ReferenceProcessingUnits); err != nil {
+		if req.HighPriority != nil {
+			if err := validateWorkloadMetric("high_priority", req.HighPriority.CPUUtilization, req.HighPriority.ReferenceProcessingUnits); err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
-			p := newWorkloadParams(*req.CPUUtilization, req.ReferenceProcessingUnits)
+			p := newWorkloadParams(req.HighPriority.CPUUtilization, req.HighPriority.ReferenceProcessingUnits)
 			entry.HighPriority = &p
+		}
+		if req.Total != nil {
+			if err := validateWorkloadMetric("total", req.Total.CPUUtilization, req.Total.ReferenceProcessingUnits); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			p := newWorkloadParams(req.Total.CPUUtilization, req.Total.ReferenceProcessingUnits)
 			entry.Total = &p
 		}
 

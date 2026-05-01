@@ -29,7 +29,7 @@ func TestSyncer_SyncResource(t *testing.T) {
 	)
 
 	// Configure static CPU utilization in the monitoring emulator.
-	body, _ := json.Marshal(map[string]float64{"cpu_utilization": 0.60})
+	body, _ := json.Marshal(map[string]float64{"high_priority": 0.60})
 	adminPUT(t, fmt.Sprintf("/metrics/%s/%s", projectID, instanceID), body)
 	t.Cleanup(func() { adminDELETE(t, fmt.Sprintf("/metrics/%s/%s", projectID, instanceID)) })
 

@@ -8,22 +8,6 @@ func floatPtr(f float64) *float64 { return &f }
 
 // ---- StaticStore ----
 
-func TestStaticStore_LegacySetBothMetrics(t *testing.T) {
-	s := NewStaticStore()
-	// Legacy mode: same value for both metrics.
-	cpu := 0.45
-	s.Set("proj", "inst", CPUEntry{HighPriority: &cpu, Total: &cpu})
-
-	got, ok := s.Get("proj", "inst", MetricKindHighPriority)
-	if !ok || got != 0.45 {
-		t.Errorf("HighPriority: got (%v, %v), want (0.45, true)", got, ok)
-	}
-	got, ok = s.Get("proj", "inst", MetricKindTotal)
-	if !ok || got != 0.45 {
-		t.Errorf("Total: got (%v, %v), want (0.45, true)", got, ok)
-	}
-}
-
 func TestStaticStore_PerMetricValues(t *testing.T) {
 	s := NewStaticStore()
 	hp, tot := 0.65, 0.40
@@ -96,18 +80,6 @@ func TestWorkloadStore_NotFound(t *testing.T) {
 
 // ---- ScenarioStore / ScenarioStep ----
 
-func TestScenarioStep_MetricFor_Legacy(t *testing.T) {
-	cpu := 0.50
-	step := ScenarioStep{CPUUtilization: &cpu}
-
-	for _, kind := range []MetricKind{MetricKindHighPriority, MetricKindTotal} {
-		m := step.metricFor(kind)
-		if m == nil || m.CPUUtilization == nil || *m.CPUUtilization != 0.50 {
-			t.Errorf("kind=%v: expected legacy fallback with cpu=0.50, got %+v", kind, m)
-		}
-	}
-}
-
 func TestScenarioStep_MetricFor_PerMetric(t *testing.T) {
 	hp := 0.70
 	tot := 0.40
@@ -151,20 +123,14 @@ func TestScenarioStore_ValidationErrors(t *testing.T) {
 		{
 			name: "no duration",
 			steps: []ScenarioStep{
-				{CPUUtilization: floatPtr(0.5)},
+				{HighPriority: &ScenarioMetric{CPUUtilization: floatPtr(0.5)}},
 			},
 			wantErr: "duration must be positive",
 		},
 		{
-			name: "mix per-metric and legacy",
-			steps: []ScenarioStep{
-				{
-					Duration:       Duration{1e9},
-					CPUUtilization: floatPtr(0.5),
-					HighPriority:   &ScenarioMetric{CPUUtilization: floatPtr(0.7)},
-				},
-			},
-			wantErr: "cannot mix",
+			name:    "no high_priority or total",
+			steps:   []ScenarioStep{{Duration: Duration{1e9}}},
+			wantErr: "must set high_priority and/or total",
 		},
 		{
 			name: "per-metric missing both fields",
