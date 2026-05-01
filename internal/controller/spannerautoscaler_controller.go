@@ -457,6 +457,9 @@ func (r *SpannerAutoscalerReconciler) SetupWithManager(mgr ctrlmanager.Manager) 
 					return nil
 				}
 				return []ctrlreconcile.Request{{
+					// SpannerAutoscaleSchedule and SpannerAutoscaler are assumed to
+					// always reside in the same namespace; TargetResource is a plain
+					// name (not namespaced), so we inherit the schedule's namespace.
 					NamespacedName: types.NamespacedName{
 						Namespace: sas.Namespace,
 						Name:      sas.Spec.TargetResource,
@@ -491,6 +494,11 @@ func (r *SpannerAutoscalerReconciler) addCronJob(ctx context.Context, log logr.L
 		if _, err := cron.UpsertJob(sas.Spec.Schedule.Cron, job, cronpkg.WithName(nnsas.String())); err != nil {
 			log.Error(err, "failed to upsert cron job", "cron", sas.Spec.Schedule.Cron, "schedule", nnsas.String())
 			r.recorder.Event(&sas, corev1.EventTypeWarning, "InvalidCronExpression", err.Error())
+			// Intentionally using continue rather than returning the error: a bad cron
+			// expression on one schedule should not block the remaining schedules from
+			// being registered. The reconciler will retry when the user corrects the
+			// expression (the Watch on SpannerAutoscaleSchedule will trigger a new
+			// reconcile on the next update).
 			continue
 		}
 		log.V(1).Info("cron job upserted", "cron", sas.Spec.Schedule.Cron, "schedule", nnsas.String())
@@ -499,9 +507,15 @@ func (r *SpannerAutoscalerReconciler) addCronJob(ctx context.Context, log logr.L
 }
 
 func pruneCronJobs(log logr.Logger, sa spannerv1beta1.SpannerAutoscaler, cron *cronpkg.Cron) {
+	// nolint:gocritic (rangeValCopy) — cron.Entries() returns a snapshot, so
+	// calling RemoveByName on the live cron while iterating over the snapshot is safe.
 	for _, entry := range cron.Entries() { //nolint:gocritic
 		job := entry.Job.(schedulerpkg.Job)
 		if _, found := findInArray(sa.Status.Schedules, job.ScheduleName.String()); !found {
+			if entry.Name == "" {
+				log.Error(nil, "cron entry has no name, skipping removal", "job", job.ScheduleName)
+				continue
+			}
 			cron.RemoveByName(entry.Name)
 			log.V(1).Info("removed cron job", "cron", job.Cron, "schedule", entry.Name, "cronjob-count", len(cron.Entries()))
 		}
