@@ -402,7 +402,7 @@ spec:
                       highPriority:
                         description: |-
                           Desired CPU utilization for 'High Priority' CPU consumption category. Ref: [Spanner CPU utilization](https://cloud.google.com/spanner/docs/cpu-utilization#task-priority)
-                          Mutually exclusive with 'total'. Exactly one of 'highPriority' or 'total' must be specified.
+                          Required. When specified together with 'total', scale-out occurs when either threshold is exceeded (OR condition).
                         exclusiveMaximum: true
                         exclusiveMinimum: true
                         maximum: 100
@@ -411,12 +411,14 @@ spec:
                       total:
                         description: |-
                           Desired total CPU utilization (all priorities combined). Ref: [Spanner CPU utilization](https://cloud.google.com/spanner/docs/cpu-utilization)
-                          Mutually exclusive with 'highPriority'. Exactly one of 'highPriority' or 'total' must be specified.
+                          Optional. When specified together with 'highPriority', scale-out occurs when either threshold is exceeded (OR condition).
                         exclusiveMaximum: true
                         exclusiveMinimum: true
                         maximum: 100
                         minimum: 0
                         type: integer
+                    required:
+                    - highPriority
                     type: object
                 required:
                 - targetCPUUtilization
@@ -449,6 +451,7 @@ spec:
                 enum:
                 - HighPriority
                 - Total
+                - Both
                 type: string
               currentHighPriorityCPUUtilization:
                 description: Current average CPU utilization for high priority task,

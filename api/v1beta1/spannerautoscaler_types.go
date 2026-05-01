@@ -23,7 +23,7 @@ import (
 
 // CPUMetricType identifies which Cloud Monitoring CPU metric is being used
 // for autoscaling decisions.
-// +kubebuilder:validation:Enum=HighPriority;Total
+// +kubebuilder:validation:Enum=HighPriority;Total;Both
 type CPUMetricType string
 
 const (
@@ -32,6 +32,9 @@ const (
 	CPUMetricTypeHighPriority CPUMetricType = "HighPriority"
 	// CPUMetricTypeTotal uses spanner.googleapis.com/instance/cpu/utilization (all priorities).
 	CPUMetricTypeTotal CPUMetricType = "Total"
+	// CPUMetricTypeBoth indicates that both highPriority and total metrics are being synced
+	// simultaneously (dual CPU scaling mode).
+	CPUMetricTypeBoth CPUMetricType = "Both"
 )
 
 // Type for specifying authentication methods
@@ -158,16 +161,15 @@ type ScaleConfigPUs struct {
 
 type TargetCPUUtilization struct {
 	// Desired CPU utilization for 'High Priority' CPU consumption category. Ref: [Spanner CPU utilization](https://cloud.google.com/spanner/docs/cpu-utilization#task-priority)
-	// Mutually exclusive with 'total'. Exactly one of 'highPriority' or 'total' must be specified.
-	// +optional
+	// Required. When specified together with 'total', scale-out occurs when either threshold is exceeded (OR condition).
 	// +kubebuilder:validation:Minimum=0
 	// +kubebuilder:validation:Maximum=100
 	// +kubebuilder:validation:ExclusiveMinimum=true
 	// +kubebuilder:validation:ExclusiveMaximum=true
-	HighPriority *int `json:"highPriority,omitempty"`
+	HighPriority *int `json:"highPriority"`
 
 	// Desired total CPU utilization (all priorities combined). Ref: [Spanner CPU utilization](https://cloud.google.com/spanner/docs/cpu-utilization)
-	// Mutually exclusive with 'highPriority'. Exactly one of 'highPriority' or 'total' must be specified.
+	// Optional. When specified together with 'highPriority', scale-out occurs when either threshold is exceeded (OR condition).
 	// +optional
 	// +kubebuilder:validation:Minimum=0
 	// +kubebuilder:validation:Maximum=100
