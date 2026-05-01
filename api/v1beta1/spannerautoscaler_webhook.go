@@ -29,6 +29,8 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
+
+	"github.com/mercari/spanner-autoscaler/internal/cron"
 )
 
 // log is for logging in this package.
@@ -267,6 +269,16 @@ func validateScaleConfig(r *SpannerAutoscaler) *field.Error {
 			field.NewPath("spec").Child("scaleConfig").Child("scaleupStepSize"),
 			sc.ScaleupStepSize,
 			"must be an integer or percentage (e.g '5%')")
+	}
+
+	// Validate scaledownAllowedTimes cron expressions
+	for i, cronExpr := range sc.ScaledownAllowedTimes {
+		if _, err := cron.Parse(cronExpr); err != nil {
+			return field.Invalid(
+				field.NewPath("spec").Child("scaleConfig").Child("scaledownAllowedTimes").Index(i),
+				cronExpr,
+				fmt.Sprintf("invalid cron expression: %v", err))
+		}
 	}
 
 	return nil
