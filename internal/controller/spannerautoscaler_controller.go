@@ -507,7 +507,7 @@ func (r *SpannerAutoscalerReconciler) addCronJob(ctx context.Context, log logr.L
 }
 
 func pruneCronJobs(log logr.Logger, sa spannerv1beta1.SpannerAutoscaler, cron *cronpkg.Cron) {
-	// nolint:gocritic (rangeValCopy) — cron.Entries() returns a snapshot, so
+	// gocritic(rangeValCopy): cron.Entries() returns a snapshot, so
 	// calling RemoveByName on the live cron while iterating over the snapshot is safe.
 	for _, entry := range cron.Entries() { //nolint:gocritic
 		job := entry.Job.(schedulerpkg.Job)
