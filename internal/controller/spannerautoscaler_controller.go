@@ -356,7 +356,7 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 
 	if !cronExists && len(sa.Status.Schedules) > 0 {
 		c = cronpkg.New(
-			cronpkg.WithParser(cron.NewParser()),
+			cronpkg.WithParser(cronpkg.MustNewParser(cron.DefaultOptions)),
 			cronpkg.WithChain(
 				cronpkg.Recover(log),
 			),

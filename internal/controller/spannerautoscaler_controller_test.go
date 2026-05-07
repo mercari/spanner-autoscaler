@@ -687,7 +687,7 @@ var _ = Describe("Cron mutability", func() {
 		)
 
 		BeforeEach(func() {
-			cronInst = cronpkg.New(cronpkg.WithParser(cron.NewParser()))
+			cronInst = cronpkg.New(cronpkg.WithParser(cronpkg.MustNewParser(cron.DefaultOptions)))
 			cronInst.Start()
 			fakeRecorder = record.NewFakeRecorder(10)
 			reconciler = &SpannerAutoscalerReconciler{
@@ -781,7 +781,7 @@ var _ = Describe("Cron mutability", func() {
 
 	Describe("pruneCronJobs", func() {
 		It("removes entries no longer listed in sa.Status.Schedules", func() {
-			cronInst := cronpkg.New(cronpkg.WithParser(cron.NewParser()))
+			cronInst := cronpkg.New(cronpkg.WithParser(cronpkg.MustNewParser(cron.DefaultOptions)))
 			cronInst.Start()
 			DeferCleanup(cronInst.Stop)
 
