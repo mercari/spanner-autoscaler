@@ -23,7 +23,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
-	cronpkg "github.com/robfig/cron/v3"
+	cronpkg "github.com/netresearch/go-cron"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -34,6 +34,7 @@ import (
 	utilclock "k8s.io/utils/clock"
 	ctrlbuilder "sigs.k8s.io/controller-runtime/pkg/builder"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
+	ctrlhandler "sigs.k8s.io/controller-runtime/pkg/handler"
 	ctrlmanager "sigs.k8s.io/controller-runtime/pkg/manager"
 	ctrlreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -276,7 +277,7 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 
 	r.mu.RLock()
 	syncer, syncerExists := r.syncers[nnsa]
-	cronScheduler, cronExists := r.crons[nnsa]
+	c, cronExists := r.crons[nnsa]
 	scheduler, schedulerExists := r.schedulers[nnsa]
 	r.mu.RUnlock()
 
@@ -294,7 +295,7 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 			}
 
 			if cronExists {
-				cronScheduler.Stop()
+				c.Stop()
 				r.mu.Lock()
 				delete(r.crons, nnsa)
 				r.mu.Unlock()
@@ -354,29 +355,30 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 	}
 
 	if !cronExists && len(sa.Status.Schedules) > 0 {
-		cronScheduler = cronpkg.New(cronpkg.WithChain(
-			cronpkg.Recover(log),
-		))
-		cronScheduler.Start()
+		c = cronpkg.New(
+			cronpkg.WithParser(cronpkg.MustNewParser(cron.DefaultOptions)),
+			cronpkg.WithChain(
+				cronpkg.Recover(log),
+			),
+		)
+		c.Start()
 
 		scheduler = schedulerpkg.New(log, r.ctrlClient, r.crons, nnsa)
 		go scheduler.Start()
 
 		r.mu.Lock()
-		r.crons[nnsa] = cronScheduler
+		r.crons[nnsa] = c
 		cronExists = true
 		r.schedulers[nnsa] = scheduler
 		r.mu.Unlock()
 	}
 
-	if err := r.addCronJob(ctx, log, sa, cronScheduler); err != nil {
+	if err := r.addCronJob(ctx, log, sa, c); err != nil {
 		return ctrlreconcile.Result{}, err
 	}
 
-	// TODO: implement cronjob schedule update whenever SpannerAutoscaleSchedule cron is changed (or block changes to Schedule after creation)
-
 	if cronExists {
-		pruneCronJobs(log, sa, cronScheduler)
+		pruneCronJobs(log, sa, c)
 	}
 
 	if newActiveSchedules, updated := pruneActiveSchedules(log, sa); updated {
@@ -447,10 +449,32 @@ func (r *SpannerAutoscalerReconciler) StopAll() {
 func (r *SpannerAutoscalerReconciler) SetupWithManager(mgr ctrlmanager.Manager) error {
 	return ctrlbuilder.ControllerManagedBy(mgr).
 		For(&spannerv1beta1.SpannerAutoscaler{}).
+		// Watch SpannerAutoscaleSchedule so that edits to its spec (e.g. the
+		// cron expression) enqueue the parent SpannerAutoscaler for reconcile.
+		// Without this, a cron-only change wouldn't touch sa.Status.Schedules
+		// and the in-memory cron entry would never be re-bound.
+		Watches(
+			&spannerv1beta1.SpannerAutoscaleSchedule{},
+			ctrlhandler.EnqueueRequestsFromMapFunc(func(_ context.Context, obj ctrlclient.Object) []ctrlreconcile.Request {
+				sas, ok := obj.(*spannerv1beta1.SpannerAutoscaleSchedule)
+				if !ok || sas.Spec.TargetResource == "" {
+					return nil
+				}
+				return []ctrlreconcile.Request{{
+					// SpannerAutoscaleSchedule and SpannerAutoscaler are assumed to
+					// always reside in the same namespace; TargetResource is a plain
+					// name (not namespaced), so we inherit the schedule's namespace.
+					NamespacedName: types.NamespacedName{
+						Namespace: sas.Namespace,
+						Name:      sas.Spec.TargetResource,
+					},
+				}}
+			}),
+		).
 		Complete(r)
 }
 
-func (r *SpannerAutoscalerReconciler) addCronJob(ctx context.Context, log logr.Logger, sa spannerv1beta1.SpannerAutoscaler, cronScheduler *cronpkg.Cron) error {
+func (r *SpannerAutoscalerReconciler) addCronJob(ctx context.Context, log logr.Logger, sa spannerv1beta1.SpannerAutoscaler, c *cronpkg.Cron) error {
 	for _, v := range sa.Status.Schedules {
 		var sas spannerv1beta1.SpannerAutoscaleSchedule
 		nnsa := ctrlclient.ObjectKeyFromObject(&sa)
@@ -458,30 +482,46 @@ func (r *SpannerAutoscalerReconciler) addCronJob(ctx context.Context, log logr.L
 		if err := r.ctrlClient.Get(ctx, nnsas, &sas); err != nil {
 			log.Error(err, "failed to get spanner-autoscaler-schedule")
 			return err
-		} else {
-			job := schedulerpkg.Job{
-				ScheduleName:   nnsas,
-				AutoscalerName: nnsa,
-				Log:            log.WithName("job").WithValues("schedule", nnsas, "autoscaler", nnsa),
-				CtrlClient:     r.ctrlClient,
-			}
-			if !jobExists(cronScheduler, job) {
-				if _, err := cronScheduler.AddJob(sas.Spec.Schedule.Cron, job); err != nil {
-					log.Error(err, "failed to add cron job to the cron")
-				}
-				log.Info("new cron job has been registered", "cron", sas.Spec.Schedule.Cron, "schedule", nnsas.String())
-			}
 		}
+
+		job := schedulerpkg.Job{
+			ScheduleName:   nnsas,
+			AutoscalerName: nnsa,
+			Cron:           sas.Spec.Schedule.Cron,
+			Log:            log.WithName("job").WithValues("schedule", nnsas, "autoscaler", nnsa),
+			CtrlClient:     r.ctrlClient,
+		}
+		// UpsertJob (keyed by WithName) atomically replaces the schedule when
+		// sas.Spec.Schedule.Cron has changed; otherwise it creates a new entry.
+		// The new spec is parsed before the existing entry is touched, so an
+		// invalid expression leaves the previous schedule intact.
+		if _, err := c.UpsertJob(sas.Spec.Schedule.Cron, job, cronpkg.WithName(nnsas.String())); err != nil {
+			log.Error(err, "failed to upsert cron job", "cron", sas.Spec.Schedule.Cron, "schedule", nnsas.String())
+			r.recorder.Event(&sas, corev1.EventTypeWarning, "InvalidCronExpression", err.Error())
+			// Intentionally using continue rather than returning the error: a bad cron
+			// expression on one schedule should not block the remaining schedules from
+			// being registered. The reconciler will retry when the user corrects the
+			// expression (the Watch on SpannerAutoscaleSchedule will trigger a new
+			// reconcile on the next update).
+			continue
+		}
+		log.V(1).Info("cron job upserted", "cron", sas.Spec.Schedule.Cron, "schedule", nnsas.String())
 	}
 	return nil
 }
 
-func pruneCronJobs(log logr.Logger, sa spannerv1beta1.SpannerAutoscaler, cronScheduler *cronpkg.Cron) {
-	for _, entry := range cronScheduler.Entries() {
+func pruneCronJobs(log logr.Logger, sa spannerv1beta1.SpannerAutoscaler, c *cronpkg.Cron) {
+	// gocritic(rangeValCopy): c.Entries() returns a snapshot, so
+	// calling RemoveByName on the live cron while iterating over the snapshot is safe.
+	for _, entry := range c.Entries() { //nolint:gocritic
 		job := entry.Job.(schedulerpkg.Job)
 		if _, found := findInArray(sa.Status.Schedules, job.ScheduleName.String()); !found {
-			cronScheduler.Remove(entry.ID)
-			log.V(1).Info("removed cron job", "job", job, "cronjob-count", len(cronScheduler.Entries()))
+			if entry.Name == "" {
+				log.Error(nil, "cron entry has no name, skipping removal", "job", job.ScheduleName)
+				continue
+			}
+			c.RemoveByName(entry.Name)
+			log.V(1).Info("removed cron job", "cron", job.Cron, "schedule", entry.Name, "cronjob-count", len(c.Entries()))
 		}
 	}
 }
@@ -498,16 +538,6 @@ func pruneActiveSchedules(log logr.Logger, sa spannerv1beta1.SpannerAutoscaler) 
 		result = append(result, as)
 	}
 	return result, changed
-}
-
-func jobExists(cronScheduler *cronpkg.Cron, job schedulerpkg.Job) bool {
-	for _, e := range cronScheduler.Entries() {
-		entryJob := e.Job.(schedulerpkg.Job)
-		if entryJob.ScheduleName == job.ScheduleName {
-			return true
-		}
-	}
-	return false
 }
 
 // TODO: move this (and other similar functions) to 'internal/util' package
@@ -629,45 +659,72 @@ func (r *SpannerAutoscalerReconciler) needUpdateProcessingUnits(log logr.Logger,
 
 // calcDesiredProcessingUnits calculates the values needed to keep CPU utilization below TargetCPU.
 func calcDesiredProcessingUnits(sa spannerv1beta1.SpannerAutoscaler) int {
-	var currentCPU, targetCPU int
-	var expectedMetricType spannerv1beta1.CPUMetricType
-	switch {
-	case sa.Spec.ScaleConfig.TargetCPUUtilization.Total != nil:
-		currentCPU = sa.Status.CurrentTotalCPUUtilization
-		targetCPU = *sa.Spec.ScaleConfig.TargetCPUUtilization.Total
-		expectedMetricType = spannerv1beta1.CPUMetricTypeTotal
-	case sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority != nil:
-		currentCPU = sa.Status.CurrentHighPriorityCPUUtilization
-		targetCPU = *sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority
-		expectedMetricType = spannerv1beta1.CPUMetricTypeHighPriority
-	default:
+	// Dual CPU scaling mode: both highPriority and total are specified.
+	// Calculate desired PU for each metric independently and take the maximum
+	// so that scale-out occurs when either threshold is exceeded.
+	if sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority != nil &&
+		sa.Spec.ScaleConfig.TargetCPUUtilization.Total != nil {
+		// Guard: wait until syncer has populated both metrics in status.
+		if sa.Status.CurrentCPUMetricType != spannerv1beta1.CPUMetricTypeBoth {
+			return sa.Status.CurrentProcessingUnits
+		}
+		desiredByHigh := calcDesiredPUFromCPU(
+			sa.Status.CurrentHighPriorityCPUUtilization,
+			*sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority,
+			sa,
+		)
+		desiredByTotal := calcDesiredPUFromCPU(
+			sa.Status.CurrentTotalCPUUtilization,
+			*sa.Spec.ScaleConfig.TargetCPUUtilization.Total,
+			sa,
+		)
+		if desiredByHigh > desiredByTotal {
+			return desiredByHigh
+		}
+		return desiredByTotal
+	}
+
+	// Single mode: highPriority only (total-only is no longer supported).
+	if sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority == nil {
 		// Defensively handle invalid specs when admission validation is bypassed
 		// or malformed objects already exist in-cluster.
 		return sa.Status.CurrentProcessingUnits
 	}
 
 	// If the status was last synced for a different metric type, the CPU value
-	// in status belongs to the old metric and cannot be used for scaling decisions
-	// (highPriority and total measure different Cloud Monitoring metrics and are
-	// not interchangeable). Skip this reconcile; the syncer will update
-	// CurrentCPUMetricType within one sync cycle (≤1 minute).
-	if sa.Status.CurrentCPUMetricType != expectedMetricType {
+	// in status belongs to the old metric and cannot be used for scaling decisions.
+	// Skip this reconcile; the syncer will update CurrentCPUMetricType within one
+	// sync cycle (≤1 minute).
+	if sa.Status.CurrentCPUMetricType != spannerv1beta1.CPUMetricTypeHighPriority {
+		return sa.Status.CurrentProcessingUnits
+	}
+
+	return calcDesiredPUFromCPU(
+		sa.Status.CurrentHighPriorityCPUUtilization,
+		*sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority,
+		sa,
+	)
+}
+
+// calcDesiredPUFromCPU calculates the desired PU from a single CPU metric,
+// applying step size limits and min/max clamping. Used in dual CPU scaling mode
+// to compute desired PU for each metric independently.
+func calcDesiredPUFromCPU(currentCPU, targetCPU int, sa spannerv1beta1.SpannerAutoscaler) int {
+	if targetCPU == 0 {
 		return sa.Status.CurrentProcessingUnits
 	}
 
 	totalCPU := currentCPU * sa.Status.CurrentProcessingUnits
-
 	requiredPU := totalCPU / targetCPU
-
-	var desiredPU int
 
 	// https://cloud.google.com/spanner/docs/compute-capacity?hl=en
 	// Valid values for processing units are:
 	// If processingUnits < 1000, processing units must be multiples of 100.
 	// If processingUnits >= 1000, processing units must be multiples of 1000.
 	//
-	// Round up the requiredPU value to make it valid
-	// If it is already a valid PU, increment to next unit to keep CPU usage below desired threshold
+	// Round up the requiredPU value to make it valid.
+	// If it is already a valid PU, increment to next unit to keep CPU usage below desired threshold.
+	var desiredPU int
 	if requiredPU < 1000 {
 		desiredPU = ((requiredPU / 100) + 1) * 100
 	} else {
@@ -692,7 +749,6 @@ func calcDesiredProcessingUnits(sa spannerv1beta1.SpannerAutoscaler) int {
 	} else {
 		sdStepSize = (sdStepSize / 1000) * 1000
 	}
-
 	// in case of percentages, round down to the scaleupStepSize to the nearest hundred or thousand
 	// to keep the scaleupStepSize within the percentage
 	if suStepSize < 1000 {
@@ -709,7 +765,6 @@ func calcDesiredProcessingUnits(sa spannerv1beta1.SpannerAutoscaler) int {
 	} else if sdStepSize < 100 && sa.Status.CurrentProcessingUnits <= 1000 {
 		sdStepSize = 100
 	}
-
 	// round up the scaleupStepSize to avoid intermediate values
 	// for example: 7000 -> 8000 instead of 7000 -> 7600
 	//              700 -> 800 instead of 700 -> 760
@@ -721,14 +776,12 @@ func calcDesiredProcessingUnits(sa spannerv1beta1.SpannerAutoscaler) int {
 	}
 
 	// in case of scaling down, check that we don't scale down beyond the ScaledownStepSize
-	if scaledDownPU := (sa.Status.CurrentProcessingUnits - sdStepSize); desiredPU < scaledDownPU {
+	if scaledDownPU := sa.Status.CurrentProcessingUnits - sdStepSize; desiredPU < scaledDownPU {
 		desiredPU = scaledDownPU
 	}
-
 	// in case of scaling up, check that we don't scale up beyond the ScaleupStepSize
-	if scaledUpPU := (sa.Status.CurrentProcessingUnits + suStepSize); suStepSize != 0 && scaledUpPU < desiredPU {
+	if scaledUpPU := sa.Status.CurrentProcessingUnits + suStepSize; suStepSize != 0 && scaledUpPU < desiredPU {
 		desiredPU = scaledUpPU
-
 		if 1000 < desiredPU && desiredPU%1000 != 0 {
 			desiredPU = ((desiredPU / 1000) + 1) * 1000
 		}
@@ -737,7 +790,6 @@ func calcDesiredProcessingUnits(sa spannerv1beta1.SpannerAutoscaler) int {
 	// keep the scaling between the specified min/max range
 	minPU := sa.Spec.ScaleConfig.ProcessingUnits.Min
 	maxPU := sa.Spec.ScaleConfig.ProcessingUnits.Max
-
 	// fetch min/max range from status, in case any schedules have updated the range
 	if sa.Status.DesiredMinPUs > 0 {
 		minPU = sa.Status.DesiredMinPUs
@@ -745,11 +797,9 @@ func calcDesiredProcessingUnits(sa spannerv1beta1.SpannerAutoscaler) int {
 	if sa.Status.DesiredMaxPUs > 0 {
 		maxPU = sa.Status.DesiredMaxPUs
 	}
-
 	if desiredPU < minPU {
 		desiredPU = minPU
 	}
-
 	if desiredPU > maxPU {
 		desiredPU = maxPU
 	}
@@ -856,7 +906,7 @@ func isScaledownAllowed(allowedTimes []string, currentTime time.Time) bool {
 
 	// Check each cron schedule to see if current time matches
 	for _, cronExpr := range allowedTimes {
-		schedule, err := cron.Parse(cronExpr)
+		schedule, err := cronpkg.MustNewParser(cron.DefaultOptions).Parse(cronExpr)
 		if err != nil {
 			// If cron expression is invalid, continue checking other expressions
 			continue

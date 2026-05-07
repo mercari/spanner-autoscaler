@@ -70,6 +70,11 @@ spec:
         - /manager
         args:
         - --leader-elect
+        # The flags below are commented out because cmd/main.go already bakes
+        # these as defaults. Uncomment any of them to override per-deployment.
+        # - --leader-elect-id=54b82eb3.mercari.com
+        # - --metrics-bind-address=127.0.0.1:8080
+        # - --health-probe-bind-address=:8081
         image: controller:latest
         name: manager
         securityContext:

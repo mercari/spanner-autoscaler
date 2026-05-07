@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"time"
 
+	cronpkg "github.com/netresearch/go-cron"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -82,15 +83,6 @@ func (*spannerAutoscaleScheduleWebhook) ValidateUpdate(_ context.Context, oldObj
 		allErrs = append(allErrs, err)
 	}
 
-	// Disable schedule updates until reconciler is modified to propagate this change to the actual cronjobs
-	if oldObj.Spec.Schedule != newObj.Spec.Schedule {
-		err := field.Invalid(
-			field.NewPath("spec").Child("schedule"),
-			newObj.Spec.Schedule,
-			"'schedule' can not be changed after resource has been created")
-		allErrs = append(allErrs, err)
-	}
-
 	allErrs = append(allErrs, validateSchedule(newObj)...)
 
 	if len(allErrs) == 0 {
@@ -112,7 +104,7 @@ func (*spannerAutoscaleScheduleWebhook) ValidateDelete(_ context.Context, obj *S
 func validateSchedule(r *SpannerAutoscaleSchedule) field.ErrorList {
 	var allErrs field.ErrorList
 
-	if _, err := cron.Parse(r.Spec.Schedule.Cron); err != nil {
+	if _, err := cronpkg.MustNewParser(cron.DefaultOptions).Parse(r.Spec.Schedule.Cron); err != nil {
 		fldErr := field.Invalid(
 			field.NewPath("spec").Child("schedule").Child("cron"),
 			r.Spec.Schedule.Cron,

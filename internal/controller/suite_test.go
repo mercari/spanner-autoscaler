@@ -121,7 +121,7 @@ var _ = BeforeSuite(func() {
 		k8sManager.GetClient(),
 		k8sManager.GetAPIReader(),
 		k8sManager.GetScheme(),
-		k8sManager.GetEventRecorderFor("spannerautoscaler-controller"),
+		k8sManager.GetEventRecorderFor("spannerautoscaler-controller"), //nolint:staticcheck // Migrating to the new events.EventRecorder API requires a wholesale refactor of event call sites; tracked separately.
 		ctrl.Log.WithName("controllers").WithName("SpannerAutoscaler"),
 		WithSyncers(map[types.NamespacedName]syncer.Syncer{
 			namespacedName: &fakesyncer.Syncer{},

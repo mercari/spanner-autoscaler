@@ -1,6 +1,6 @@
 module github.com/mercari/spanner-autoscaler/tools
 
-go 1.26.2
+go 1.26
 
 require (
 	github.com/elastic/crd-ref-docs v0.3.0

@@ -9,16 +9,33 @@ import (
 	sigsyaml "sigs.k8s.io/yaml"
 )
 
-// ScenarioStep is one step in a scenario sequence.
+// ScenarioMetric holds the CPU value for one metric type within a scenario step.
 // Exactly one of CPUUtilization or Workload must be set.
-//
-//   - CPUUtilization: returns a fixed CPU value regardless of current PU.
-//   - Workload: computes CPU dynamically (cpu = workload / current_pu),
-//     modeling real Cloud Spanner behavior where scaling up reduces CPU.
+type ScenarioMetric struct {
+	// CPUUtilization returns a fixed CPU value regardless of current PU.
+	CPUUtilization *float64 `json:"cpu_utilization,omitempty"`
+	// Workload computes CPU dynamically (cpu = workload / current_pu),
+	// modeling real Cloud Spanner behavior where scaling up reduces CPU.
+	Workload *WorkloadScenario `json:"workload,omitempty"`
+}
+
+// ScenarioStep is one step in a scenario sequence.
+// At least one of HighPriority or Total must be set.
 type ScenarioStep struct {
-	Duration       Duration          `json:"duration"`
-	CPUUtilization *float64          `json:"cpu_utilization,omitempty"`
-	Workload       *WorkloadScenario `json:"workload,omitempty"`
+	Duration     Duration        `json:"duration"`
+	HighPriority *ScenarioMetric `json:"high_priority,omitempty"`
+	Total        *ScenarioMetric `json:"total,omitempty"`
+}
+
+// metricFor returns the ScenarioMetric for the given metric kind, or nil if not configured.
+func (s *ScenarioStep) metricFor(kind MetricKind) *ScenarioMetric {
+	switch kind {
+	case MetricKindHighPriority:
+		return s.HighPriority
+	case MetricKindTotal:
+		return s.Total
+	}
+	return nil
 }
 
 // WorkloadScenario holds the parameters for a workload-based step.
@@ -96,14 +113,8 @@ func (s *ScenarioStore) Set(project, instanceID string, steps []ScenarioStep) er
 		if step.Duration.Duration <= 0 {
 			return fmt.Errorf("step %d: duration must be positive", i)
 		}
-		if step.CPUUtilization == nil && step.Workload == nil {
-			return fmt.Errorf("step %d: must set cpu_utilization or workload", i)
-		}
-		if step.CPUUtilization != nil && step.Workload != nil {
-			return fmt.Errorf("step %d: cpu_utilization and workload are mutually exclusive", i)
-		}
-		if step.CPUUtilization != nil && (*step.CPUUtilization < 0 || *step.CPUUtilization > 1) {
-			return fmt.Errorf("step %d: cpu_utilization must be between 0.0 and 1.0", i)
+		if err := validateScenarioStep(i, step); err != nil {
+			return err
 		}
 		total += step.Duration.Duration
 	}
@@ -113,6 +124,34 @@ func (s *ScenarioStore) Set(project, instanceID string, steps []ScenarioStep) er
 		steps:     steps,
 		total:     total,
 		startTime: time.Now(),
+	}
+	return nil
+}
+
+func validateScenarioStep(i int, step ScenarioStep) error {
+	if step.HighPriority == nil && step.Total == nil {
+		return fmt.Errorf("step %d: must set high_priority and/or total", i)
+	}
+	for _, named := range []struct {
+		name   string
+		metric *ScenarioMetric
+	}{
+		{"high_priority", step.HighPriority},
+		{"total", step.Total},
+	} {
+		if named.metric == nil {
+			continue
+		}
+		m := named.metric
+		if m.CPUUtilization == nil && m.Workload == nil {
+			return fmt.Errorf("step %d: %s must set cpu_utilization or workload", i, named.name)
+		}
+		if m.CPUUtilization != nil && m.Workload != nil {
+			return fmt.Errorf("step %d: %s cpu_utilization and workload are mutually exclusive", i, named.name)
+		}
+		if m.CPUUtilization != nil && (*m.CPUUtilization < 0 || *m.CPUUtilization > 1) {
+			return fmt.Errorf("step %d: %s cpu_utilization must be between 0.0 and 1.0", i, named.name)
+		}
 	}
 	return nil
 }

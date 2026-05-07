@@ -3,17 +3,25 @@ package controller
 import (
 	"time"
 
+	cronpkg "github.com/netresearch/go-cron"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/record"
 	testingclock "k8s.io/utils/clock/testing"
+	fakeclient "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/go-logr/logr"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/google/uuid"
 	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
+	"github.com/mercari/spanner-autoscaler/internal/cron"
+	schedulerpkg "github.com/mercari/spanner-autoscaler/internal/scheduler"
 	"github.com/mercari/spanner-autoscaler/internal/syncer"
+	fakesyncer "github.com/mercari/spanner-autoscaler/internal/syncer/fake"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -277,35 +285,6 @@ var _ = DescribeTable("Calculate Desired Processing Units",
 	Entry("should scale up with ScaleupStepSize when currentPU is more than 1000 6", 100, 2000, 10, 100, 10000, intstr.FromInt(2000), intstr.FromString("200%"), 6000),
 )
 
-var _ = DescribeTable("Calculate Desired Processing Units (total CPU mode)",
-	func(currentCPU, currentProcessingUnits, targetCPU, minProcessingUnits, maxProcessingUnits int, scaledownStepSize, scaleupStepSize intstr.IntOrString, want int) {
-		baseObj := spannerv1beta1.SpannerAutoscaler{}
-		baseObj.Status.CurrentProcessingUnits = currentProcessingUnits
-		baseObj.Status.CurrentTotalCPUUtilization = currentCPU
-		baseObj.Status.CurrentCPUMetricType = spannerv1beta1.CPUMetricTypeTotal
-		baseObj.Spec.ScaleConfig = spannerv1beta1.ScaleConfig{
-			ComputeType: spannerv1beta1.ComputeTypePU,
-			ProcessingUnits: spannerv1beta1.ScaleConfigPUs{
-				Min: minProcessingUnits,
-				Max: maxProcessingUnits,
-			},
-			ScaledownStepSize: scaledownStepSize,
-			ScaleupStepSize:   scaleupStepSize,
-			TargetCPUUtilization: spannerv1beta1.TargetCPUUtilization{
-				Total: intPtr(targetCPU),
-			},
-		}
-		got := calcDesiredProcessingUnits(baseObj)
-		Expect(got).To(Equal(want))
-	},
-	Entry("should not scale", 25, 200, 30, 100, 1000, intstr.FromInt(2000), intstr.FromInt(0), 200),
-	Entry("should scale up", 50, 300, 30, 100, 1000, intstr.FromInt(2000), intstr.FromInt(0), 600),
-	Entry("should scale down", 30, 500, 50, 100, 10000, intstr.FromInt(2000), intstr.FromInt(0), 400),
-	Entry("should scale up to max PUs", 50, 300, 30, 100, 400, intstr.FromInt(2000), intstr.FromInt(0), 400),
-	Entry("should scale down to min PUs", 5, 500, 50, 100, 1000, intstr.FromInt(2000), intstr.FromInt(0), 100),
-	Entry("should scale down to min PUs", 0, 3000, 40, 100, 10000, intstr.FromInt(2000), intstr.FromInt(0), 1000),
-)
-
 var _ = Describe("Calculate Desired Processing Units (metric type switching guard)", func() {
 	baseScaleConfig := func() spannerv1beta1.ScaleConfig {
 		return spannerv1beta1.ScaleConfig{
@@ -319,15 +298,16 @@ var _ = Describe("Calculate Desired Processing Units (metric type switching guar
 		}
 	}
 
-	It("keeps current PU when switching highPriority→total before first sync (CurrentCPUMetricType still HighPriority)", func() {
+	It("keeps current PU when switching highPriority→dual before first sync (CurrentCPUMetricType still HighPriority)", func() {
 		sa := spannerv1beta1.SpannerAutoscaler{}
 		sa.Status.CurrentProcessingUnits = 3000
-		sa.Status.CurrentCPUMetricType = spannerv1beta1.CPUMetricTypeHighPriority // syncer hasn't run yet
+		sa.Status.CurrentCPUMetricType = spannerv1beta1.CPUMetricTypeHighPriority // syncer hasn't run yet for dual mode
 		sa.Status.CurrentHighPriorityCPUUtilization = 80
 		sa.Status.CurrentTotalCPUUtilization = 0
 		sa.Spec.ScaleConfig = baseScaleConfig()
 		sa.Spec.ScaleConfig.TargetCPUUtilization = spannerv1beta1.TargetCPUUtilization{
-			Total: intPtr(40), // spec switched to total
+			HighPriority: intPtr(60), // spec switched to dual mode
+			Total:        intPtr(40),
 		}
 		Expect(calcDesiredProcessingUnits(sa)).To(Equal(3000))
 	})
@@ -343,20 +323,6 @@ var _ = Describe("Calculate Desired Processing Units (metric type switching guar
 			HighPriority: intPtr(40), // spec switched to highPriority
 		}
 		Expect(calcDesiredProcessingUnits(sa)).To(Equal(3000))
-	})
-
-	It("scales normally after first sync following highPriority→total switch", func() {
-		sa := spannerv1beta1.SpannerAutoscaler{}
-		sa.Status.CurrentProcessingUnits = 3000
-		sa.Status.CurrentCPUMetricType = spannerv1beta1.CPUMetricTypeTotal // syncer ran and updated
-		sa.Status.CurrentHighPriorityCPUUtilization = 0
-		sa.Status.CurrentTotalCPUUtilization = 60
-		sa.Spec.ScaleConfig = baseScaleConfig()
-		sa.Spec.ScaleConfig.TargetCPUUtilization = spannerv1beta1.TargetCPUUtilization{
-			Total: intPtr(40),
-		}
-		// 60/40 * 3000 = 4500 → rounds up to 5000
-		Expect(calcDesiredProcessingUnits(sa)).To(Equal(5000))
 	})
 
 	It("scales normally after first sync following total→highPriority switch", func() {
@@ -391,6 +357,82 @@ var _ = Describe("Calculate Desired Processing Units (metric type switching guar
 		sa.Spec.ScaleConfig = baseScaleConfig()
 		// Both HighPriority and Total are nil — invalid spec that bypassed webhook validation
 		sa.Spec.ScaleConfig.TargetCPUUtilization = spannerv1beta1.TargetCPUUtilization{}
+		Expect(calcDesiredProcessingUnits(sa)).To(Equal(3000))
+	})
+
+	// Dual CPU scaling mode tests
+	It("dual mode: keeps current PU until syncer populates Both status (guard)", func() {
+		sa := spannerv1beta1.SpannerAutoscaler{}
+		sa.Status.CurrentProcessingUnits = 3000
+		sa.Status.CurrentCPUMetricType = spannerv1beta1.CPUMetricTypeHighPriority // syncer hasn't run dual yet
+		sa.Status.CurrentHighPriorityCPUUtilization = 80
+		sa.Status.CurrentTotalCPUUtilization = 0
+		sa.Spec.ScaleConfig = baseScaleConfig()
+		sa.Spec.ScaleConfig.TargetCPUUtilization = spannerv1beta1.TargetCPUUtilization{
+			HighPriority: intPtr(60),
+			Total:        intPtr(40),
+		}
+		Expect(calcDesiredProcessingUnits(sa)).To(Equal(3000))
+	})
+
+	It("dual mode: scales up when highPriority exceeds threshold", func() {
+		sa := spannerv1beta1.SpannerAutoscaler{}
+		sa.Status.CurrentProcessingUnits = 3000
+		sa.Status.CurrentCPUMetricType = spannerv1beta1.CPUMetricTypeBoth
+		sa.Status.CurrentHighPriorityCPUUtilization = 90 // exceeds target 60
+		sa.Status.CurrentTotalCPUUtilization = 20        // below target 40
+		sa.Spec.ScaleConfig = baseScaleConfig()
+		sa.Spec.ScaleConfig.TargetCPUUtilization = spannerv1beta1.TargetCPUUtilization{
+			HighPriority: intPtr(60),
+			Total:        intPtr(40),
+		}
+		// highPriority: 90/60 * 3000 = 4500 → 5000; total: 20/40 * 3000 = 1500 → 2000 → max = 5000
+		Expect(calcDesiredProcessingUnits(sa)).To(Equal(5000))
+	})
+
+	It("dual mode: scales up when total exceeds threshold", func() {
+		sa := spannerv1beta1.SpannerAutoscaler{}
+		sa.Status.CurrentProcessingUnits = 3000
+		sa.Status.CurrentCPUMetricType = spannerv1beta1.CPUMetricTypeBoth
+		sa.Status.CurrentHighPriorityCPUUtilization = 30 // below target 60
+		sa.Status.CurrentTotalCPUUtilization = 60        // exceeds target 40
+		sa.Spec.ScaleConfig = baseScaleConfig()
+		sa.Spec.ScaleConfig.TargetCPUUtilization = spannerv1beta1.TargetCPUUtilization{
+			HighPriority: intPtr(60),
+			Total:        intPtr(40),
+		}
+		// highPriority: 30/60 * 3000 = 1500 → 2000; total: 60/40 * 3000 = 4500 → 5000 → max = 5000
+		Expect(calcDesiredProcessingUnits(sa)).To(Equal(5000))
+	})
+
+	It("dual mode: uses max of both when both exceed thresholds", func() {
+		sa := spannerv1beta1.SpannerAutoscaler{}
+		sa.Status.CurrentProcessingUnits = 3000
+		sa.Status.CurrentCPUMetricType = spannerv1beta1.CPUMetricTypeBoth
+		sa.Status.CurrentHighPriorityCPUUtilization = 80 // exceeds target 60
+		sa.Status.CurrentTotalCPUUtilization = 70        // exceeds target 40
+		sa.Spec.ScaleConfig = baseScaleConfig()
+		sa.Spec.ScaleConfig.TargetCPUUtilization = spannerv1beta1.TargetCPUUtilization{
+			HighPriority: intPtr(60),
+			Total:        intPtr(40),
+		}
+		// highPriority: 80/60 * 3000 = 4000 → 5000; total: 70/40 * 3000 = 5250 → 6000 → max = 6000
+		Expect(calcDesiredProcessingUnits(sa)).To(Equal(6000))
+	})
+
+	It("dual mode: scales down when neither metric exceeds threshold", func() {
+		sa := spannerv1beta1.SpannerAutoscaler{}
+		sa.Status.CurrentProcessingUnits = 5000
+		sa.Status.CurrentCPUMetricType = spannerv1beta1.CPUMetricTypeBoth
+		sa.Status.CurrentHighPriorityCPUUtilization = 20 // below target 60
+		sa.Status.CurrentTotalCPUUtilization = 15        // below target 40
+		sa.Spec.ScaleConfig = baseScaleConfig()
+		sa.Spec.ScaleConfig.TargetCPUUtilization = spannerv1beta1.TargetCPUUtilization{
+			HighPriority: intPtr(60),
+			Total:        intPtr(40),
+		}
+		// highPriority: 20/60 * 5000 = 1666 → 1700; total: 15/40 * 5000 = 1875 → 1900 → max = 1900
+		// scale down by at most scaledownStepSize=2000: max(1900, 5000-2000=3000) = 3000
 		Expect(calcDesiredProcessingUnits(sa)).To(Equal(3000))
 	})
 })
@@ -645,22 +687,22 @@ var _ = Describe("Scale down time restriction", func() {
 		})
 
 		It("should allow scale down when current time matches a cron schedule", func() {
-			currentTime := time.Date(2026, 4, 24, 3, 30, 0, 0, time.UTC) // 3:30 AM
-			cronExprs := []string{"* 2-4 * * *"}                         // 2:00 AM - 4:59 AM
+			currentTime := time.Date(2026, 4, 24, 3, 0, 0, 0, time.UTC) // 3:00 AM
+			cronExprs := []string{"0 2-4 * * *"}                        // 2:00 AM - 4:59 AM
 			allowed := isScaledownAllowed(cronExprs, currentTime)
 			Expect(allowed).To(BeTrue())
 		})
 
 		It("should deny scale down when current time does not match any cron schedule", func() {
 			currentTime := time.Date(2026, 4, 24, 10, 30, 0, 0, time.UTC) // 10:30 AM
-			cronExprs := []string{"* 2-4 * * *"}                          // 2:00 AM - 4:59 AM
+			cronExprs := []string{"0 2-4 * * *"}                          // 2:00 AM - 4:59 AM
 			allowed := isScaledownAllowed(cronExprs, currentTime)
 			Expect(allowed).To(BeFalse())
 		})
 
 		It("should allow scale down when current time matches any of multiple cron schedules", func() {
-			currentTime := time.Date(2026, 4, 24, 23, 45, 0, 0, time.UTC) // 11:45 PM
-			cronExprs := []string{"* 2-4 * * *", "* 23 * * *"}            // 2:00-4:59 AM or 11:00-11:59 PM
+			currentTime := time.Date(2026, 4, 24, 23, 30, 0, 0, time.UTC) // 11:30 PM
+			cronExprs := []string{"0 2-4 * * *", "0 23-23 * * *"}         // 2:00-4:59 AM or 11:00-11:59 PM
 			allowed := isScaledownAllowed(cronExprs, currentTime)
 			Expect(allowed).To(BeTrue())
 		})
@@ -668,7 +710,7 @@ var _ = Describe("Scale down time restriction", func() {
 		It("should handle crossing midnight with multiple cron expressions", func() {
 			// Test 11:30 PM (should be allowed)
 			currentTime := time.Date(2026, 4, 24, 23, 30, 0, 0, time.UTC)
-			cronExprs := []string{"* 23 * * *", "* 0-5 * * *"} // 11:00-11:59 PM or 12:00-5:59 AM
+			cronExprs := []string{"0 23-23 * * *", "0 0-5 * * *"} // 11:00-11:59 PM or 12:00-5:59 AM
 			allowed := isScaledownAllowed(cronExprs, currentTime)
 			Expect(allowed).To(BeTrue())
 
@@ -684,8 +726,8 @@ var _ = Describe("Scale down time restriction", func() {
 		})
 
 		It("should continue checking other schedules when one has invalid cron expression", func() {
-			currentTime := time.Date(2026, 4, 24, 3, 30, 0, 0, time.UTC) // 3:30 AM
-			cronExprs := []string{"invalid cron", "* 2-4 * * *"}         // Invalid + valid cron
+			currentTime := time.Date(2026, 4, 24, 3, 0, 0, 0, time.UTC) // 3:00 AM
+			cronExprs := []string{"invalid cron", "0 2-4 * * *"}        // Invalid + valid cron
 			allowed := isScaledownAllowed(cronExprs, currentTime)
 			Expect(allowed).To(BeTrue())
 		})
@@ -694,12 +736,12 @@ var _ = Describe("Scale down time restriction", func() {
 			// Test with Tokyo timezone (UTC+9)
 			// When it's 3:00 AM UTC, it's 12:00 PM JST - should be denied
 			currentTime := time.Date(2026, 4, 24, 3, 0, 0, 0, time.UTC)
-			cronExprs := []string{"CRON_TZ=Asia/Tokyo * 2-4 * * *"} // 2:00-4:59 AM JST
+			cronExprs := []string{"CRON_TZ=Asia/Tokyo 0 2-4 * * *"} // 2:00-4:59 AM JST
 			allowed := isScaledownAllowed(cronExprs, currentTime)
 			Expect(allowed).To(BeFalse())
 
-			// When it's 18:30 UTC, it's 3:30 AM JST - should be allowed
-			currentTime = time.Date(2026, 4, 24, 18, 30, 0, 0, time.UTC)
+			// When it's 18:00 UTC, it's 3:00 AM JST - should be allowed
+			currentTime = time.Date(2026, 4, 24, 18, 0, 0, 0, time.UTC)
 			allowed = isScaledownAllowed(cronExprs, currentTime)
 			Expect(allowed).To(BeTrue())
 		})
@@ -709,6 +751,232 @@ var _ = Describe("Scale down time restriction", func() {
 			cronExprs := []string{"invalid cron", "also invalid"}
 			allowed := isScaledownAllowed(cronExprs, currentTime)
 			Expect(allowed).To(BeFalse())
+		})
+	})
+})
+
+var _ = Describe("Cron mutability", func() {
+	Describe("addCronJob", func() {
+		var (
+			cronInst     *cronpkg.Cron
+			fakeRecorder *record.FakeRecorder
+			reconciler   *SpannerAutoscalerReconciler
+		)
+
+		BeforeEach(func() {
+			cronInst = cronpkg.New(cronpkg.WithParser(cronpkg.MustNewParser(cron.DefaultOptions)))
+			cronInst.Start()
+			fakeRecorder = record.NewFakeRecorder(10)
+			reconciler = &SpannerAutoscalerReconciler{
+				recorder: fakeRecorder,
+				log:      logr.Discard(),
+			}
+		})
+
+		AfterEach(func() {
+			cronInst.Stop()
+		})
+
+		makeSchedule := func(nn types.NamespacedName, expr string) *spannerv1beta1.SpannerAutoscaleSchedule {
+			return &spannerv1beta1.SpannerAutoscaleSchedule{
+				ObjectMeta: metav1.ObjectMeta{Name: nn.Name, Namespace: nn.Namespace},
+				Spec: spannerv1beta1.SpannerAutoscaleScheduleSpec{
+					TargetResource:            "test-sa",
+					AdditionalProcessingUnits: 1000,
+					Schedule: spannerv1beta1.Schedule{
+						Cron:     expr,
+						Duration: "1h",
+					},
+				},
+			}
+		}
+
+		saFor := func(saNN, schedNN types.NamespacedName) spannerv1beta1.SpannerAutoscaler {
+			return spannerv1beta1.SpannerAutoscaler{
+				ObjectMeta: metav1.ObjectMeta{Name: saNN.Name, Namespace: saNN.Namespace},
+				Status: spannerv1beta1.SpannerAutoscalerStatus{
+					Schedules: []string{schedNN.String()},
+				},
+			}
+		}
+
+		It("registers a new cron entry for a new schedule", func() {
+			schedNN := types.NamespacedName{Namespace: "default", Name: "sched-new"}
+			saNN := types.NamespacedName{Namespace: "default", Name: "sa-new"}
+
+			fc := fakeclient.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(makeSchedule(schedNN, "0 * * * *")).Build()
+			reconciler.ctrlClient = fc
+
+			Expect(reconciler.addCronJob(ctx, logr.Discard(), saFor(saNN, schedNN), cronInst)).To(Succeed())
+			Expect(cronInst.Entries()).To(HaveLen(1))
+			Expect(cronInst.Entries()[0].Job.(schedulerpkg.Job).Cron).To(Equal("0 * * * *"))
+		})
+
+		It("replaces the cron entry when the expression changes", func() {
+			schedNN := types.NamespacedName{Namespace: "default", Name: "sched-update"}
+			saNN := types.NamespacedName{Namespace: "default", Name: "sa-update"}
+
+			sas := makeSchedule(schedNN, "0 * * * *")
+			fc := fakeclient.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(sas).Build()
+			reconciler.ctrlClient = fc
+			sa := saFor(saNN, schedNN)
+
+			Expect(reconciler.addCronJob(ctx, logr.Discard(), sa, cronInst)).To(Succeed())
+			Expect(cronInst.Entries()).To(HaveLen(1))
+
+			updated := sas.DeepCopy()
+			updated.Spec.Schedule.Cron = "30 * * * *"
+			Expect(fc.Update(ctx, updated)).To(Succeed())
+
+			Expect(reconciler.addCronJob(ctx, logr.Discard(), sa, cronInst)).To(Succeed())
+			Expect(cronInst.Entries()).To(HaveLen(1), "upsert must not create a duplicate entry")
+			Expect(cronInst.Entries()[0].Job.(schedulerpkg.Job).Cron).To(Equal("30 * * * *"))
+		})
+
+		It("keeps the existing entry and emits a Warning on an invalid cron expression", func() {
+			schedNN := types.NamespacedName{Namespace: "default", Name: "sched-invalid"}
+			saNN := types.NamespacedName{Namespace: "default", Name: "sa-invalid"}
+
+			sas := makeSchedule(schedNN, "0 * * * *")
+			fc := fakeclient.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(sas).Build()
+			reconciler.ctrlClient = fc
+			sa := saFor(saNN, schedNN)
+
+			Expect(reconciler.addCronJob(ctx, logr.Discard(), sa, cronInst)).To(Succeed())
+			Expect(cronInst.Entries()).To(HaveLen(1))
+
+			updated := sas.DeepCopy()
+			updated.Spec.Schedule.Cron = "not-a-cron"
+			Expect(fc.Update(ctx, updated)).To(Succeed())
+
+			Expect(reconciler.addCronJob(ctx, logr.Discard(), sa, cronInst)).To(Succeed())
+			Expect(cronInst.Entries()).To(HaveLen(1), "invalid expression must leave existing entry intact")
+			Expect(cronInst.Entries()[0].Job.(schedulerpkg.Job).Cron).To(Equal("0 * * * *"))
+			Expect(fakeRecorder.Events).To(Receive(ContainSubstring("InvalidCronExpression")))
+		})
+	})
+
+	Describe("pruneCronJobs", func() {
+		It("removes entries no longer listed in sa.Status.Schedules", func() {
+			cronInst := cronpkg.New(cronpkg.WithParser(cronpkg.MustNewParser(cron.DefaultOptions)))
+			cronInst.Start()
+			DeferCleanup(cronInst.Stop)
+
+			keepNN := types.NamespacedName{Namespace: "default", Name: "sched-keep"}
+			removeNN := types.NamespacedName{Namespace: "default", Name: "sched-remove"}
+
+			for _, pair := range []struct {
+				nn   types.NamespacedName
+				expr string
+			}{
+				{keepNN, "0 * * * *"},
+				{removeNN, "30 * * * *"},
+			} {
+				job := schedulerpkg.Job{ScheduleName: pair.nn, Cron: pair.expr}
+				_, err := cronInst.UpsertJob(pair.expr, job, cronpkg.WithName(pair.nn.String()))
+				Expect(err).NotTo(HaveOccurred())
+			}
+			Expect(cronInst.Entries()).To(HaveLen(2))
+
+			sa := spannerv1beta1.SpannerAutoscaler{
+				Status: spannerv1beta1.SpannerAutoscalerStatus{
+					Schedules: []string{keepNN.String()},
+				},
+			}
+			pruneCronJobs(logr.Discard(), sa, cronInst)
+
+			Expect(cronInst.Entries()).To(HaveLen(1))
+			Expect(cronInst.Entries()[0].Job.(schedulerpkg.Job).ScheduleName).To(Equal(keepNN))
+		})
+	})
+
+	Context("envtest: SpannerAutoscaleSchedule cron update triggers reconcile", func() {
+		It("replaces the in-memory cron entry when spec.schedule.cron is updated", func() {
+			saName := "test-cron-mut-" + uuid.NewString()[:8]
+			schedName := "sched-" + uuid.NewString()[:8]
+			saNN := types.NamespacedName{Namespace: namespace, Name: saName}
+			schedNN := types.NamespacedName{Namespace: namespace, Name: schedName}
+
+			By("pre-seeding a fake syncer so reconcile bypasses syncer creation")
+			spReconciler.mu.Lock()
+			spReconciler.syncers[saNN] = &fakesyncer.Syncer{}
+			spReconciler.mu.Unlock()
+
+			By("creating the SpannerAutoscaleSchedule with initial cron '0 * * * *'")
+			sched := &spannerv1beta1.SpannerAutoscaleSchedule{
+				ObjectMeta: metav1.ObjectMeta{Name: schedName, Namespace: namespace},
+				Spec: spannerv1beta1.SpannerAutoscaleScheduleSpec{
+					TargetResource:            saName,
+					AdditionalProcessingUnits: 1000,
+					Schedule: spannerv1beta1.Schedule{
+						Cron:     "0 * * * *",
+						Duration: "1h",
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, sched)).To(Succeed())
+
+			By("creating the SpannerAutoscaler")
+			sa := &spannerv1beta1.SpannerAutoscaler{
+				ObjectMeta: metav1.ObjectMeta{Name: saName, Namespace: namespace},
+				Spec: spannerv1beta1.SpannerAutoscalerSpec{
+					TargetInstance: spannerv1beta1.TargetInstance{
+						ProjectID:  "test-proj",
+						InstanceID: "test-inst",
+					},
+					Authentication: spannerv1beta1.Authentication{
+						Type: spannerv1beta1.AuthTypeADC,
+					},
+					ScaleConfig: spannerv1beta1.ScaleConfig{
+						ComputeType: spannerv1beta1.ComputeTypePU,
+						ProcessingUnits: spannerv1beta1.ScaleConfigPUs{
+							Min: 100,
+							Max: 1000,
+						},
+						ScaledownStepSize: intstr.FromInt(100),
+						TargetCPUUtilization: spannerv1beta1.TargetCPUUtilization{
+							HighPriority: intPtr(40),
+						},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, sa)).To(Succeed())
+
+			By("setting Status.Schedules to include the schedule")
+			sa.Status.Schedules = []string{schedNN.String()}
+			Expect(k8sClient.Status().Update(ctx, sa)).To(Succeed())
+
+			By("waiting for the initial cron entry to be registered")
+			Eventually(func() string {
+				spReconciler.mu.RLock()
+				c, ok := spReconciler.crons[saNN]
+				spReconciler.mu.RUnlock()
+				if !ok || len(c.Entries()) == 0 {
+					return ""
+				}
+				return c.Entries()[0].Job.(schedulerpkg.Job).Cron
+			}, 5*time.Second, 200*time.Millisecond).Should(Equal("0 * * * *"))
+
+			By("updating spec.schedule.cron to '30 * * * *'")
+			Expect(k8sClient.Get(ctx, schedNN, sched)).To(Succeed())
+			sched.Spec.Schedule.Cron = "30 * * * *"
+			Expect(k8sClient.Update(ctx, sched)).To(Succeed())
+
+			By("waiting for the in-memory cron entry to reflect the new expression")
+			Eventually(func() string {
+				spReconciler.mu.RLock()
+				c, ok := spReconciler.crons[saNN]
+				spReconciler.mu.RUnlock()
+				if !ok || len(c.Entries()) == 0 {
+					return ""
+				}
+				return c.Entries()[0].Job.(schedulerpkg.Job).Cron
+			}, 5*time.Second, 200*time.Millisecond).Should(Equal("30 * * * *"))
+
+			spReconciler.mu.RLock()
+			entryCount := len(spReconciler.crons[saNN].Entries())
+			spReconciler.mu.RUnlock()
+			Expect(entryCount).To(Equal(1), "upsert must not duplicate the entry")
 		})
 	})
 })

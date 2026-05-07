@@ -1,10 +1,10 @@
-name: Test
+name: Check Docs
 
 on:
   pull_request:
 
 jobs:
-  test:
+  check-docs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -13,4 +13,8 @@ jobs:
         with:
           go-version: stable
 
-      - run: make test
+      - run: make crd-ref-docs
+
+      - run: make docs
+
+      - run: git diff --exit-code docs/crd-reference.md

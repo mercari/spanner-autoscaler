@@ -93,11 +93,10 @@ var _ = Describe("SpannerAutoscaleSchedule validation", func() {
 		})
 
 		Context("when schedule is changed", func() {
-			It("should return a validation error", func() {
+			It("should not return a validation error", func() {
 				created.Spec.Schedule.Cron = "0 10 * * 1-5"
 				err := k8sClient.Update(ctx, created)
-				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("schedule"))
+				Expect(err).ToNot(HaveOccurred())
 			})
 		})
 

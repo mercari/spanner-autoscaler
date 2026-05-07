@@ -91,7 +91,7 @@ if ENABLE_WEBHOOKS:
     )
 
 # ── Controller ─────────────────────────────────────────────────────────────────
-EMULATOR_FLAGS = '--spanner-endpoint=localhost:9010 --metrics-endpoint=localhost:9090'
+EMULATOR_FLAGS = '--spanner-endpoint=localhost:9010 --metrics-endpoint=localhost:9090 --leader-elect=false'
 
 # ── Emulator instance setup ────────────────────────────────────────────────────
 # Create the beta-instance in the Spanner emulator and apply the local sample
