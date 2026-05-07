@@ -22,7 +22,9 @@ import (
 
 // The recurring frequency and the length of time for which a schedule will remain active
 type Schedule struct {
-	// The recurring frequency of the schedule in [standard cron](https://en.wikipedia.org/wiki/Cron) format. Examples and verification utility: https://crontab.guru
+	// The recurring frequency of the schedule in [standard cron](https://en.wikipedia.org/wiki/Cron) format.
+	// Extended syntax (`L`, `L-n`, `nW`, `LW`, `DAY#n`, `DAY#L`) is also supported — see [go-cron Extended Syntax](https://pkg.go.dev/github.com/netresearch/go-cron#hdr-Extended_Syntax__Optional_).
+	// Examples and verification utility: https://crontab.guru
 	Cron string `json:"cron"`
 
 	// The length of time for which this schedule will remain active each time the cron is triggered.

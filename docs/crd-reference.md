@@ -77,7 +77,7 @@ CPUMetricType identifies which Cloud Monitoring CPU metric is being used
 for autoscaling decisions.
 
 _Validation:_
-- Enum: [HighPriority Total]
+- Enum: [HighPriority Total Both]
 
 _Appears in:_
 - [SpannerAutoscalerStatus](#spannerautoscalerstatus)
@@ -86,6 +86,7 @@ _Appears in:_
 | --- | --- |
 | `HighPriority` | CPUMetricTypeHighPriority uses spanner.googleapis.com/instance/cpu/utilization_by_priority<br />with priority=high filter.<br /> |
 | `Total` | CPUMetricTypeTotal uses spanner.googleapis.com/instance/cpu/utilization (all priorities).<br /> |
+| `Both` | CPUMetricTypeBoth indicates that both highPriority and total metrics are being synced<br />simultaneously (dual CPU scaling mode).<br /> |
 
 
 #### ComputeType
@@ -229,7 +230,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `cron` _string_ | The recurring frequency of the schedule in [standard cron](https://en.wikipedia.org/wiki/Cron) format. Examples and verification utility: https://crontab.guru |  |  |
+| `cron` _string_ | The recurring frequency of the schedule in [standard cron](https://en.wikipedia.org/wiki/Cron) format.<br />Extended syntax (`L`, `L-n`, `nW`, `LW`, `DAY#n`, `DAY#L`) is also supported — see [go-cron Extended Syntax](https://pkg.go.dev/github.com/netresearch/go-cron#hdr-Extended_Syntax__Optional_).<br />Examples and verification utility: https://crontab.guru |  |  |
 | `duration` _string_ | The length of time for which this schedule will remain active each time the cron is triggered. |  |  |
 
 
@@ -266,8 +267,8 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `targetResource` _string_ | The `SpannerAutoscaler` resource name with which this schedule will be registered.<br />Immutable after creation. |  |  |
-| `additionalProcessingUnits` _integer_ | The extra compute capacity which will be added when this schedule is active.<br />This is the only field that can be updated after creation. |  |  |
-| `schedule` _[Schedule](#schedule)_ | The details of when and for how long this schedule will be active.<br />Immutable after creation. |  |  |
+| `additionalProcessingUnits` _integer_ | The extra compute capacity which will be added when this schedule is active. |  |  |
+| `schedule` _[Schedule](#schedule)_ | The details of when and for how long this schedule will be active. |  |  |
 
 
 #### SpannerAutoscaleScheduleStatus
@@ -344,7 +345,7 @@ _Appears in:_
 | `instanceState` _[InstanceState](#instancestate)_ | State of the Cloud Spanner instance |  |  |
 | `currentHighPriorityCPUUtilization` _integer_ | Current average CPU utilization for high priority task, represented as a percentage |  |  |
 | `currentTotalCPUUtilization` _integer_ | Current total CPU utilization (all priorities), represented as a percentage.<br />This field is populated only when spec.scaleConfig.targetCPUUtilization.total is specified. |  |  |
-| `currentCPUMetricType` _[CPUMetricType](#cpumetrictype)_ | CurrentCPUMetricType is the CPU metric type that was used in the last sync cycle.<br />The controller uses this to detect metric-type switches and skip scaling until<br />the status reflects the newly configured metric type. |  | Enum: [HighPriority Total] <br /> |
+| `currentCPUMetricType` _[CPUMetricType](#cpumetrictype)_ | CurrentCPUMetricType is the CPU metric type that was used in the last sync cycle.<br />The controller uses this to detect metric-type switches and skip scaling until<br />the status reflects the newly configured metric type. |  | Enum: [HighPriority Total Both] <br /> |
 
 
 #### TargetCPUUtilization
@@ -360,8 +361,8 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `highPriority` _integer_ | Desired CPU utilization for 'High Priority' CPU consumption category. Ref: [Spanner CPU utilization](https://cloud.google.com/spanner/docs/cpu-utilization#task-priority)<br />Mutually exclusive with 'total'. Exactly one of 'highPriority' or 'total' must be specified. |  | ExclusiveMaximum: true <br />ExclusiveMinimum: true <br />Maximum: 100 <br />Minimum: 0 <br />Optional: \{\} <br /> |
-| `total` _integer_ | Desired total CPU utilization (all priorities combined). Ref: [Spanner CPU utilization](https://cloud.google.com/spanner/docs/cpu-utilization)<br />Mutually exclusive with 'highPriority'. Exactly one of 'highPriority' or 'total' must be specified. |  | ExclusiveMaximum: true <br />ExclusiveMinimum: true <br />Maximum: 100 <br />Minimum: 0 <br />Optional: \{\} <br /> |
+| `highPriority` _integer_ | Desired CPU utilization for 'High Priority' CPU consumption category. Ref: [Spanner CPU utilization](https://cloud.google.com/spanner/docs/cpu-utilization#task-priority)<br />Required. When specified together with 'total', scale-out occurs when either threshold is exceeded (OR condition). |  | ExclusiveMaximum: true <br />ExclusiveMinimum: true <br />Maximum: 100 <br />Minimum: 0 <br /> |
+| `total` _integer_ | Desired total CPU utilization (all priorities combined). Ref: [Spanner CPU utilization](https://cloud.google.com/spanner/docs/cpu-utilization)<br />Optional. When specified together with 'highPriority', scale-out occurs when either threshold is exceeded (OR condition). |  | ExclusiveMaximum: true <br />ExclusiveMinimum: true <br />Maximum: 100 <br />Minimum: 0 <br />Optional: \{\} <br /> |
 
 
 #### TargetInstance

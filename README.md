@@ -43,6 +43,8 @@ spec:
     duration: 3h
 ```
 
+The `cron` field supports extended syntax (`L`, `L-n`, `nW`, `LW`, `DAY#n`, `DAY#L`) in addition to the standard 5-field format, powered by [go-cron](https://github.com/netresearch/go-cron). See the [Extended Syntax documentation](https://pkg.go.dev/github.com/netresearch/go-cron#hdr-Extended_Syntax__Optional_) for details and examples.
+
 > **Note:** `spec.targetResource` and `spec.schedule` (cron and duration) are **immutable** after creation. To change the target or schedule, delete the `SpannerAutoscaleSchedule` and create a new one. Only `spec.additionalProcessingUnits` can be updated in place.
 
 > **Note:** When multiple schedules are active simultaneously (i.e. their windows overlap), the `additionalProcessingUnits` from all active schedules are **summed** and added to both `desiredMinPUs` and `desiredMaxPUs`. For example, if schedule A adds +1,000 PU and schedule B adds +5,000 PU and both are active at the same time, `desiredMinPUs = spec.processingUnits.min + 6,000`.
