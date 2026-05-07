@@ -3,8 +3,8 @@ package controller
 import (
 	"time"
 
-	cronpkg "github.com/netresearch/go-cron"
 	"github.com/mercari/spanner-autoscaler/internal/cron"
+	cronpkg "github.com/netresearch/go-cron"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
