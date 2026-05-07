@@ -254,7 +254,7 @@ func (s *syncer) syncResource(ctx context.Context) error {
 	if err := s.ctrlClient.Get(ctx, s.namespacedName, &sa); err != nil {
 		err = ctrlclient.IgnoreNotFound(err)
 		if err != nil {
-			s.recorder.Eventf(&sa, corev1.EventTypeWarning, "FailedGetClient", err.Error())
+			s.recorder.Eventf(&sa, corev1.EventTypeWarning, "FailedGetClient", "%s", err.Error())
 			log.Error(err, "unable to get spanner-autoscaler")
 			return err
 		}
@@ -274,7 +274,7 @@ func (s *syncer) syncResource(ctx context.Context) error {
 
 	instance, instanceMetrics, err := s.getInstanceInfo(ctx, metricType)
 	if err != nil {
-		s.recorder.Eventf(&sa, corev1.EventTypeWarning, "FailedSpannerAPICall", err.Error())
+		s.recorder.Eventf(&sa, corev1.EventTypeWarning, "FailedSpannerAPICall", "%s", err.Error())
 		log.Error(err, "unable to get instance info")
 		return err
 	}
