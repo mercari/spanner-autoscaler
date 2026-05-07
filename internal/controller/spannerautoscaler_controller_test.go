@@ -3,6 +3,7 @@ package controller
 import (
 	"time"
 
+	"github.com/mercari/spanner-autoscaler/internal/cron"
 	cronpkg "github.com/netresearch/go-cron"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -686,7 +687,7 @@ var _ = Describe("Cron mutability", func() {
 		)
 
 		BeforeEach(func() {
-			cronInst = cronpkg.New()
+			cronInst = cronpkg.New(cronpkg.WithParser(cronpkg.MustNewParser(cron.DefaultOptions)))
 			cronInst.Start()
 			fakeRecorder = record.NewFakeRecorder(10)
 			reconciler = &SpannerAutoscalerReconciler{
@@ -780,7 +781,7 @@ var _ = Describe("Cron mutability", func() {
 
 	Describe("pruneCronJobs", func() {
 		It("removes entries no longer listed in sa.Status.Schedules", func() {
-			cronInst := cronpkg.New()
+			cronInst := cronpkg.New(cronpkg.WithParser(cronpkg.MustNewParser(cron.DefaultOptions)))
 			cronInst.Start()
 			DeferCleanup(cronInst.Stop)
 

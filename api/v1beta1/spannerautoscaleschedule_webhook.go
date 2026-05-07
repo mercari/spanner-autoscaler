@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/mercari/spanner-autoscaler/internal/cron"
 	cronpkg "github.com/netresearch/go-cron"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -102,7 +103,7 @@ func (*spannerAutoscaleScheduleWebhook) ValidateDelete(_ context.Context, obj *S
 func validateSchedule(r *SpannerAutoscaleSchedule) field.ErrorList {
 	var allErrs field.ErrorList
 
-	if _, err := cronpkg.ParseStandard(r.Spec.Schedule.Cron); err != nil {
+	if _, err := cronpkg.MustNewParser(cron.DefaultOptions).Parse(r.Spec.Schedule.Cron); err != nil {
 		fldErr := field.Invalid(
 			field.NewPath("spec").Child("schedule").Child("cron"),
 			r.Spec.Schedule.Cron,

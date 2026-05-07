@@ -1,0 +1,20 @@
+name: Check Docs
+
+on:
+  pull_request:
+
+jobs:
+  check-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+
+      - run: make crd-ref-docs
+
+      - run: make docs
+
+      - run: git diff --exit-code docs/crd-reference.md
