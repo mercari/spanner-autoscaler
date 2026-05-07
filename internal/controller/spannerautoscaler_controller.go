@@ -24,6 +24,7 @@ import (
 
 	"github.com/go-logr/logr"
 	cronpkg "github.com/netresearch/go-cron"
+	"github.com/mercari/spanner-autoscaler/internal/cron"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -276,7 +277,7 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 
 	r.mu.RLock()
 	syncer, syncerExists := r.syncers[nnsa]
-	cron, cronExists := r.crons[nnsa]
+	c, cronExists := r.crons[nnsa]
 	scheduler, schedulerExists := r.schedulers[nnsa]
 	r.mu.RUnlock()
 
@@ -294,7 +295,7 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 			}
 
 			if cronExists {
-				cron.Stop()
+				c.Stop()
 				r.mu.Lock()
 				delete(r.crons, nnsa)
 				r.mu.Unlock()
@@ -354,27 +355,30 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 	}
 
 	if !cronExists && len(sa.Status.Schedules) > 0 {
-		cron = cronpkg.New(cronpkg.WithChain(
-			cronpkg.Recover(log),
-		))
-		cron.Start()
+		c = cronpkg.New(
+			cronpkg.WithParser(cron.NewParser()),
+			cronpkg.WithChain(
+				cronpkg.Recover(log),
+			),
+		)
+		c.Start()
 
 		scheduler = schedulerpkg.New(log, r.ctrlClient, r.crons, nnsa)
 		go scheduler.Start()
 
 		r.mu.Lock()
-		r.crons[nnsa] = cron
+		r.crons[nnsa] = c
 		cronExists = true
 		r.schedulers[nnsa] = scheduler
 		r.mu.Unlock()
 	}
 
-	if err := r.addCronJob(ctx, log, sa, cron); err != nil {
+	if err := r.addCronJob(ctx, log, sa, c); err != nil {
 		return ctrlreconcile.Result{}, err
 	}
 
 	if cronExists {
-		pruneCronJobs(log, sa, cron)
+		pruneCronJobs(log, sa, c)
 	}
 
 	if newActiveSchedules, updated := pruneActiveSchedules(log, sa); updated {
@@ -470,7 +474,7 @@ func (r *SpannerAutoscalerReconciler) SetupWithManager(mgr ctrlmanager.Manager) 
 		Complete(r)
 }
 
-func (r *SpannerAutoscalerReconciler) addCronJob(ctx context.Context, log logr.Logger, sa spannerv1beta1.SpannerAutoscaler, cron *cronpkg.Cron) error {
+func (r *SpannerAutoscalerReconciler) addCronJob(ctx context.Context, log logr.Logger, sa spannerv1beta1.SpannerAutoscaler, c *cronpkg.Cron) error {
 	for _, v := range sa.Status.Schedules {
 		var sas spannerv1beta1.SpannerAutoscaleSchedule
 		nnsa := ctrlclient.ObjectKeyFromObject(&sa)
@@ -491,7 +495,7 @@ func (r *SpannerAutoscalerReconciler) addCronJob(ctx context.Context, log logr.L
 		// sas.Spec.Schedule.Cron has changed; otherwise it creates a new entry.
 		// The new spec is parsed before the existing entry is touched, so an
 		// invalid expression leaves the previous schedule intact.
-		if _, err := cron.UpsertJob(sas.Spec.Schedule.Cron, job, cronpkg.WithName(nnsas.String())); err != nil {
+		if _, err := c.UpsertJob(sas.Spec.Schedule.Cron, job, cronpkg.WithName(nnsas.String())); err != nil {
 			log.Error(err, "failed to upsert cron job", "cron", sas.Spec.Schedule.Cron, "schedule", nnsas.String())
 			r.recorder.Event(&sas, corev1.EventTypeWarning, "InvalidCronExpression", err.Error())
 			// Intentionally using continue rather than returning the error: a bad cron
@@ -506,18 +510,18 @@ func (r *SpannerAutoscalerReconciler) addCronJob(ctx context.Context, log logr.L
 	return nil
 }
 
-func pruneCronJobs(log logr.Logger, sa spannerv1beta1.SpannerAutoscaler, cron *cronpkg.Cron) {
-	// gocritic(rangeValCopy): cron.Entries() returns a snapshot, so
+func pruneCronJobs(log logr.Logger, sa spannerv1beta1.SpannerAutoscaler, c *cronpkg.Cron) {
+	// gocritic(rangeValCopy): c.Entries() returns a snapshot, so
 	// calling RemoveByName on the live cron while iterating over the snapshot is safe.
-	for _, entry := range cron.Entries() { //nolint:gocritic
+	for _, entry := range c.Entries() { //nolint:gocritic
 		job := entry.Job.(schedulerpkg.Job)
 		if _, found := findInArray(sa.Status.Schedules, job.ScheduleName.String()); !found {
 			if entry.Name == "" {
 				log.Error(nil, "cron entry has no name, skipping removal", "job", job.ScheduleName)
 				continue
 			}
-			cron.RemoveByName(entry.Name)
-			log.V(1).Info("removed cron job", "cron", job.Cron, "schedule", entry.Name, "cronjob-count", len(cron.Entries()))
+			c.RemoveByName(entry.Name)
+			log.V(1).Info("removed cron job", "cron", job.Cron, "schedule", entry.Name, "cronjob-count", len(c.Entries()))
 		}
 	}
 }
