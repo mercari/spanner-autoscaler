@@ -646,45 +646,72 @@ func (r *SpannerAutoscalerReconciler) needUpdateProcessingUnits(log logr.Logger,
 
 // calcDesiredProcessingUnits calculates the values needed to keep CPU utilization below TargetCPU.
 func calcDesiredProcessingUnits(sa spannerv1beta1.SpannerAutoscaler) int {
-	var currentCPU, targetCPU int
-	var expectedMetricType spannerv1beta1.CPUMetricType
-	switch {
-	case sa.Spec.ScaleConfig.TargetCPUUtilization.Total != nil:
-		currentCPU = sa.Status.CurrentTotalCPUUtilization
-		targetCPU = *sa.Spec.ScaleConfig.TargetCPUUtilization.Total
-		expectedMetricType = spannerv1beta1.CPUMetricTypeTotal
-	case sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority != nil:
-		currentCPU = sa.Status.CurrentHighPriorityCPUUtilization
-		targetCPU = *sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority
-		expectedMetricType = spannerv1beta1.CPUMetricTypeHighPriority
-	default:
+	// Dual CPU scaling mode: both highPriority and total are specified.
+	// Calculate desired PU for each metric independently and take the maximum
+	// so that scale-out occurs when either threshold is exceeded.
+	if sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority != nil &&
+		sa.Spec.ScaleConfig.TargetCPUUtilization.Total != nil {
+		// Guard: wait until syncer has populated both metrics in status.
+		if sa.Status.CurrentCPUMetricType != spannerv1beta1.CPUMetricTypeBoth {
+			return sa.Status.CurrentProcessingUnits
+		}
+		desiredByHigh := calcDesiredPUFromCPU(
+			sa.Status.CurrentHighPriorityCPUUtilization,
+			*sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority,
+			sa,
+		)
+		desiredByTotal := calcDesiredPUFromCPU(
+			sa.Status.CurrentTotalCPUUtilization,
+			*sa.Spec.ScaleConfig.TargetCPUUtilization.Total,
+			sa,
+		)
+		if desiredByHigh > desiredByTotal {
+			return desiredByHigh
+		}
+		return desiredByTotal
+	}
+
+	// Single mode: highPriority only (total-only is no longer supported).
+	if sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority == nil {
 		// Defensively handle invalid specs when admission validation is bypassed
 		// or malformed objects already exist in-cluster.
 		return sa.Status.CurrentProcessingUnits
 	}
 
 	// If the status was last synced for a different metric type, the CPU value
-	// in status belongs to the old metric and cannot be used for scaling decisions
-	// (highPriority and total measure different Cloud Monitoring metrics and are
-	// not interchangeable). Skip this reconcile; the syncer will update
-	// CurrentCPUMetricType within one sync cycle (≤1 minute).
-	if sa.Status.CurrentCPUMetricType != expectedMetricType {
+	// in status belongs to the old metric and cannot be used for scaling decisions.
+	// Skip this reconcile; the syncer will update CurrentCPUMetricType within one
+	// sync cycle (≤1 minute).
+	if sa.Status.CurrentCPUMetricType != spannerv1beta1.CPUMetricTypeHighPriority {
+		return sa.Status.CurrentProcessingUnits
+	}
+
+	return calcDesiredPUFromCPU(
+		sa.Status.CurrentHighPriorityCPUUtilization,
+		*sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority,
+		sa,
+	)
+}
+
+// calcDesiredPUFromCPU calculates the desired PU from a single CPU metric,
+// applying step size limits and min/max clamping. Used in dual CPU scaling mode
+// to compute desired PU for each metric independently.
+func calcDesiredPUFromCPU(currentCPU, targetCPU int, sa spannerv1beta1.SpannerAutoscaler) int {
+	if targetCPU == 0 {
 		return sa.Status.CurrentProcessingUnits
 	}
 
 	totalCPU := currentCPU * sa.Status.CurrentProcessingUnits
-
 	requiredPU := totalCPU / targetCPU
-
-	var desiredPU int
 
 	// https://cloud.google.com/spanner/docs/compute-capacity?hl=en
 	// Valid values for processing units are:
 	// If processingUnits < 1000, processing units must be multiples of 100.
 	// If processingUnits >= 1000, processing units must be multiples of 1000.
 	//
-	// Round up the requiredPU value to make it valid
-	// If it is already a valid PU, increment to next unit to keep CPU usage below desired threshold
+	// Round up the requiredPU value to make it valid.
+	// If it is already a valid PU, increment to next unit to keep CPU usage below desired threshold.
+	var desiredPU int
 	if requiredPU < 1000 {
 		desiredPU = ((requiredPU / 100) + 1) * 100
 	} else {
@@ -709,7 +736,6 @@ func calcDesiredProcessingUnits(sa spannerv1beta1.SpannerAutoscaler) int {
 	} else {
 		sdStepSize = (sdStepSize / 1000) * 1000
 	}
-
 	// in case of percentages, round down to the scaleupStepSize to the nearest hundred or thousand
 	// to keep the scaleupStepSize within the percentage
 	if suStepSize < 1000 {
@@ -726,7 +752,6 @@ func calcDesiredProcessingUnits(sa spannerv1beta1.SpannerAutoscaler) int {
 	} else if sdStepSize < 100 && sa.Status.CurrentProcessingUnits <= 1000 {
 		sdStepSize = 100
 	}
-
 	// round up the scaleupStepSize to avoid intermediate values
 	// for example: 7000 -> 8000 instead of 7000 -> 7600
 	//              700 -> 800 instead of 700 -> 760
@@ -738,14 +763,12 @@ func calcDesiredProcessingUnits(sa spannerv1beta1.SpannerAutoscaler) int {
 	}
 
 	// in case of scaling down, check that we don't scale down beyond the ScaledownStepSize
-	if scaledDownPU := (sa.Status.CurrentProcessingUnits - sdStepSize); desiredPU < scaledDownPU {
+	if scaledDownPU := sa.Status.CurrentProcessingUnits - sdStepSize; desiredPU < scaledDownPU {
 		desiredPU = scaledDownPU
 	}
-
 	// in case of scaling up, check that we don't scale up beyond the ScaleupStepSize
-	if scaledUpPU := (sa.Status.CurrentProcessingUnits + suStepSize); suStepSize != 0 && scaledUpPU < desiredPU {
+	if scaledUpPU := sa.Status.CurrentProcessingUnits + suStepSize; suStepSize != 0 && scaledUpPU < desiredPU {
 		desiredPU = scaledUpPU
-
 		if 1000 < desiredPU && desiredPU%1000 != 0 {
 			desiredPU = ((desiredPU / 1000) + 1) * 1000
 		}
@@ -754,7 +777,6 @@ func calcDesiredProcessingUnits(sa spannerv1beta1.SpannerAutoscaler) int {
 	// keep the scaling between the specified min/max range
 	minPU := sa.Spec.ScaleConfig.ProcessingUnits.Min
 	maxPU := sa.Spec.ScaleConfig.ProcessingUnits.Max
-
 	// fetch min/max range from status, in case any schedules have updated the range
 	if sa.Status.DesiredMinPUs > 0 {
 		minPU = sa.Status.DesiredMinPUs
@@ -762,11 +784,9 @@ func calcDesiredProcessingUnits(sa spannerv1beta1.SpannerAutoscaler) int {
 	if sa.Status.DesiredMaxPUs > 0 {
 		maxPU = sa.Status.DesiredMaxPUs
 	}
-
 	if desiredPU < minPU {
 		desiredPU = minPU
 	}
-
 	if desiredPU > maxPU {
 		desiredPU = maxPU
 	}

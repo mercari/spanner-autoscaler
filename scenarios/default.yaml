@@ -16,21 +16,25 @@ instances:
     steps:
       # High load: CPU 90% at 1000 PU → controller should scale up.
       - duration: 60s
-        workload:
-          cpu_utilization: 0.90
-          reference_processing_units: 1000
+        high_priority:
+          workload:
+            cpu_utilization: 0.90
+            reference_processing_units: 1000
 
       # After scale-up the workload model naturally brings CPU down.
       # This step gives the controller time to observe the new steady state.
       - duration: 90s
-        workload:
-          cpu_utilization: 0.70
-          reference_processing_units: 10000
+        high_priority:
+          workload:
+            cpu_utilization: 0.70
+            reference_processing_units: 10000
 
       # Low load: CPU drops to 15% → controller should scale down.
       - duration: 60s
-        cpu_utilization: 0.15
+        high_priority:
+          cpu_utilization: 0.15
 
       # Recovery: back to moderate load before the next cycle.
       - duration: 30s
-        cpu_utilization: 0.40
+        high_priority:
+          cpu_utilization: 0.40
