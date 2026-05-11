@@ -233,12 +233,9 @@ var _ = Describe("SpannerAutoscaler validation", func() {
 					}
 				})
 
-				// highPriority is required. When nil, the CRD schema validation rejects null
-				// before the webhook runs, producing an "invalid type" error.
-				It("should return validation error", func() {
+				It("should succeed (total-only mode)", func() {
 					_, err := createResource(testResource)
-					Expect(err).To(HaveOccurred())
-					Expect(err.Error()).To(ContainSubstring("targetCPUUtilization.highPriority"))
+					Expect(err).ToNot(HaveOccurred())
 				})
 			})
 
@@ -261,12 +258,10 @@ var _ = Describe("SpannerAutoscaler validation", func() {
 					testResource.Spec.ScaleConfig.TargetCPUUtilization = TargetCPUUtilization{}
 				})
 
-				// highPriority is required. When nil, the CRD schema validation rejects null
-				// before the webhook runs, producing an "invalid type" error.
 				It("should return validation error", func() {
 					_, err := createResource(testResource)
 					Expect(err).To(HaveOccurred())
-					Expect(err.Error()).To(ContainSubstring("targetCPUUtilization.highPriority"))
+					Expect(err.Error()).To(ContainSubstring("at least one of 'highPriority' or 'total' must be specified"))
 				})
 			})
 		})

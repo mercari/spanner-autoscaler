@@ -266,19 +266,27 @@ func (s *syncer) syncResource(ctx context.Context) error {
 		"spannerautoscaler", sa,
 	)
 
-	// Dual mode: both highPriority and total are specified.
-	isDual := sa.Spec.ScaleConfig.TargetCPUUtilization.Total != nil
+	metricFlags := sa.Spec.ScaleConfig.TargetCPUUtilization.ActiveMetricFlags()
 
 	var instance *spanner.Instance
 	var highPriorityMetrics, totalMetrics *metrics.InstanceMetrics
 	var err error
 
-	if isDual {
+	switch metricFlags {
+	case spannerv1beta1.CPUMetricFlagHighPriority | spannerv1beta1.CPUMetricFlagTotal:
 		instance, highPriorityMetrics, totalMetrics, err = s.getInstanceInfoDual(ctx)
-	} else {
+	case spannerv1beta1.CPUMetricFlagTotal:
+		var m *metrics.InstanceMetrics
+		instance, m, err = s.getInstanceInfo(ctx, metrics.MetricTypeTotal)
+		totalMetrics = m
+	case spannerv1beta1.CPUMetricFlagHighPriority:
 		var m *metrics.InstanceMetrics
 		instance, m, err = s.getInstanceInfo(ctx, metrics.MetricTypeHighPriority)
 		highPriorityMetrics = m
+	default:
+		// No metric configured — invalid spec that bypassed webhook validation. Skip sync.
+		log.Info("skipping sync: no CPU metric threshold configured")
+		return nil
 	}
 	if err != nil {
 		s.recorder.Eventf(&sa, corev1.EventTypeWarning, "FailedSpannerAPICall", "%s", err.Error())
@@ -289,7 +297,12 @@ func (s *syncer) syncResource(ctx context.Context) error {
 	log.V(1).Info("spanner instance status",
 		"current processing units", instance.ProcessingUnits,
 		"instance state", instance.InstanceState,
-		"high priority cpu utilization", highPriorityMetrics.CurrentHighPriorityCPUUtilization,
+		"high priority cpu utilization", func() int {
+			if highPriorityMetrics != nil {
+				return highPriorityMetrics.CurrentHighPriorityCPUUtilization
+			}
+			return 0
+		}(),
 		"total cpu utilization", func() int {
 			if totalMetrics != nil {
 				return totalMetrics.CurrentTotalCPUUtilization
@@ -307,11 +320,15 @@ func (s *syncer) syncResource(ctx context.Context) error {
 		// Zero both CPU fields first, then populate based on mode.
 		sa.Status.CurrentHighPriorityCPUUtilization = 0
 		sa.Status.CurrentTotalCPUUtilization = 0
-		if isDual {
+		switch metricFlags {
+		case spannerv1beta1.CPUMetricFlagHighPriority | spannerv1beta1.CPUMetricFlagTotal:
 			sa.Status.CurrentHighPriorityCPUUtilization = highPriorityMetrics.CurrentHighPriorityCPUUtilization
 			sa.Status.CurrentTotalCPUUtilization = totalMetrics.CurrentTotalCPUUtilization
 			sa.Status.CurrentCPUMetricType = spannerv1beta1.CPUMetricTypeBoth
-		} else {
+		case spannerv1beta1.CPUMetricFlagTotal:
+			sa.Status.CurrentTotalCPUUtilization = totalMetrics.CurrentTotalCPUUtilization
+			sa.Status.CurrentCPUMetricType = spannerv1beta1.CPUMetricTypeTotal
+		case spannerv1beta1.CPUMetricFlagHighPriority:
 			sa.Status.CurrentHighPriorityCPUUtilization = highPriorityMetrics.CurrentHighPriorityCPUUtilization
 			sa.Status.CurrentCPUMetricType = spannerv1beta1.CPUMetricTypeHighPriority
 		}

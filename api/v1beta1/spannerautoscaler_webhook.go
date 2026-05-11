@@ -167,12 +167,10 @@ func validateAuthentication(r *SpannerAutoscaler) *field.Error {
 }
 
 func validateTargetCPUUtilization(cpu TargetCPUUtilization) *field.Error {
-	// highPriority is required. total is optional and can be combined with highPriority
-	// for dual CPU scaling (scale-out when either threshold is exceeded).
-	if cpu.HighPriority == nil {
+	if cpu.HighPriority == nil && cpu.Total == nil {
 		return field.Required(
-			field.NewPath("spec", "scaleConfig", "targetCPUUtilization", "highPriority"),
-			"'highPriority' is required; 'total' may be specified additionally for dual CPU scaling",
+			field.NewPath("spec", "scaleConfig", "targetCPUUtilization"),
+			"at least one of 'highPriority' or 'total' must be specified",
 		)
 	}
 	return nil
