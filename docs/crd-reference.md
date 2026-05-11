@@ -69,6 +69,8 @@ _Appears in:_
 | `iamKeySecret` _[IAMKeySecret](#iamkeysecret)_ | Details of the k8s secret which contains the GCP service account authentication key (in JSON).<br />[[Ref](https://cloud.google.com/kubernetes-engine/docs/tutorials/authenticating-to-cloud-platform)].<br />This is a pointer because structs with string slices can not be compared for zero values |  |  |
 
 
+
+
 #### CPUMetricType
 
 _Underlying type:_ _string_
@@ -361,8 +363,8 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `highPriority` _integer_ | Desired CPU utilization for 'High Priority' CPU consumption category. Ref: [Spanner CPU utilization](https://cloud.google.com/spanner/docs/cpu-utilization#task-priority)<br />Required. When specified together with 'total', scale-out occurs when either threshold is exceeded (OR condition). |  | ExclusiveMaximum: true <br />ExclusiveMinimum: true <br />Maximum: 100 <br />Minimum: 0 <br /> |
-| `total` _integer_ | Desired total CPU utilization (all priorities combined). Ref: [Spanner CPU utilization](https://cloud.google.com/spanner/docs/cpu-utilization)<br />Optional. When specified together with 'highPriority', scale-out occurs when either threshold is exceeded (OR condition). |  | ExclusiveMaximum: true <br />ExclusiveMinimum: true <br />Maximum: 100 <br />Minimum: 0 <br />Optional: \{\} <br /> |
+| `highPriority` _integer_ | Desired CPU utilization for 'High Priority' CPU consumption category. Ref: [Spanner CPU utilization](https://cloud.google.com/spanner/docs/cpu-utilization#task-priority)<br />Optional. When specified together with 'total', scale-out occurs when either threshold is exceeded (OR condition).<br />At least one of 'highPriority' or 'total' must be specified. |  | ExclusiveMaximum: true <br />ExclusiveMinimum: true <br />Maximum: 100 <br />Minimum: 0 <br />Optional: \{\} <br /> |
+| `total` _integer_ | Desired total CPU utilization (all priorities combined). Ref: [Spanner CPU utilization](https://cloud.google.com/spanner/docs/cpu-utilization)<br />Optional. When specified together with 'highPriority', scale-out occurs when either threshold is exceeded (OR condition).<br />At least one of 'highPriority' or 'total' must be specified. |  | ExclusiveMaximum: true <br />ExclusiveMinimum: true <br />Maximum: 100 <br />Minimum: 0 <br />Optional: \{\} <br /> |
 
 
 #### TargetInstance
