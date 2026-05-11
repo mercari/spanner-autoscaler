@@ -37,29 +37,6 @@ const (
 	CPUMetricTypeBoth CPUMetricType = "Both"
 )
 
-// CPUMetricFlags is a bitmask of which CPU metric thresholds are active.
-// Each bit corresponds to one metric in TargetCPUUtilization.
-// New metrics can be added by defining additional bit constants below.
-type CPUMetricFlags uint8
-
-const (
-	CPUMetricFlagHighPriority CPUMetricFlags = 1 << iota
-	CPUMetricFlagTotal
-)
-
-// ActiveMetricFlags returns a bitmask representing which CPU metric thresholds
-// are configured (non-nil) in this TargetCPUUtilization.
-func (c TargetCPUUtilization) ActiveMetricFlags() CPUMetricFlags {
-	var f CPUMetricFlags
-	if c.HighPriority != nil {
-		f |= CPUMetricFlagHighPriority
-	}
-	if c.Total != nil {
-		f |= CPUMetricFlagTotal
-	}
-	return f
-}
-
 // Type for specifying authentication methods
 // +kubebuilder:validation:Enum=gcp-sa-key;impersonation;adc
 type AuthType string
@@ -202,6 +179,29 @@ type TargetCPUUtilization struct {
 	// +kubebuilder:validation:ExclusiveMinimum=true
 	// +kubebuilder:validation:ExclusiveMaximum=true
 	Total *int `json:"total,omitempty"`
+}
+
+// CPUMetricFlags is a bitmask of which CPU metric thresholds are active.
+// Each bit corresponds to one metric in TargetCPUUtilization.
+// New metrics can be added by defining additional bit constants below.
+type CPUMetricFlags uint8
+
+const (
+	CPUMetricFlagHighPriority CPUMetricFlags = 1 << iota
+	CPUMetricFlagTotal
+)
+
+// ActiveMetricFlags returns a bitmask representing which CPU metric thresholds
+// are configured (non-nil) in this TargetCPUUtilization.
+func (c TargetCPUUtilization) ActiveMetricFlags() CPUMetricFlags {
+	var f CPUMetricFlags
+	if c.HighPriority != nil {
+		f |= CPUMetricFlagHighPriority
+	}
+	if c.Total != nil {
+		f |= CPUMetricFlagTotal
+	}
+	return f
 }
 
 // SpannerAutoscalerSpec defines the desired state of SpannerAutoscaler
