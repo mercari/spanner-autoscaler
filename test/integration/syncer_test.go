@@ -120,3 +120,210 @@ func TestSyncer_SyncResource(t *testing.T) {
 		updated.Status.CurrentHighPriorityCPUUtilization, wantCPU,
 	)
 }
+
+func TestSyncer_SyncResource_TotalOnly(t *testing.T) {
+	const (
+		projectID  = "syncer-total-project"
+		instanceID = "syncer-total-instance"
+		initPU     = 1000
+		wantCPU    = 60 // 0.60 * 100
+	)
+
+	// Configure static total CPU utilization in the monitoring emulator (no high_priority).
+	body, _ := json.Marshal(map[string]float64{"total": 0.60})
+	adminPUT(t, fmt.Sprintf("/metrics/%s/%s", projectID, instanceID), body)
+	t.Cleanup(func() { adminDELETE(t, fmt.Sprintf("/metrics/%s/%s", projectID, instanceID)) })
+
+	createSpannerInstance(t, projectID, instanceID, initPU)
+
+	k8sClient := startEnvtest(t)
+
+	ctx := context.Background()
+	nn := types.NamespacedName{Namespace: "default", Name: "syncer-total-sa"}
+
+	totalCPUVal := 40
+	sa := &spannerv1beta1.SpannerAutoscaler{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      nn.Name,
+			Namespace: nn.Namespace,
+		},
+		Spec: spannerv1beta1.SpannerAutoscalerSpec{
+			TargetInstance: spannerv1beta1.TargetInstance{
+				ProjectID:  projectID,
+				InstanceID: instanceID,
+			},
+			Authentication: spannerv1beta1.Authentication{
+				Type: spannerv1beta1.AuthTypeADC,
+			},
+			ScaleConfig: spannerv1beta1.ScaleConfig{
+				ComputeType: spannerv1beta1.ComputeTypePU,
+				ProcessingUnits: spannerv1beta1.ScaleConfigPUs{
+					Min: 100,
+					Max: 10000,
+				},
+				ScaledownStepSize: intstr.FromInt(2000),
+				TargetCPUUtilization: spannerv1beta1.TargetCPUUtilization{
+					Total: &totalCPUVal,
+				},
+			},
+		},
+	}
+	if err := k8sClient.Create(ctx, sa); err != nil {
+		t.Fatalf("failed to create SpannerAutoscaler: %v", err)
+	}
+
+	spannerClient, err := spanner.NewClient(ctx, projectID, instanceID,
+		spanner.WithEndpoint(spannerEmulatorAddr()),
+	)
+	if err != nil {
+		t.Fatalf("failed to create spanner client: %v", err)
+	}
+
+	metricsClient, err := metrics.NewClient(ctx, projectID, instanceID,
+		metrics.WithEndpoint(monitoringGRPCAddr()),
+	)
+	if err != nil {
+		t.Fatalf("failed to create metrics client: %v", err)
+	}
+
+	creds := syncer.NewADCCredentials()
+	recorder := record.NewFakeRecorder(100)
+	s, err := syncer.New(ctx, k8sClient, nn, creds, recorder, spannerClient, metricsClient,
+		syncer.WithInterval(2*time.Second),
+	)
+	if err != nil {
+		t.Fatalf("failed to create syncer: %v", err)
+	}
+
+	go s.Start()
+	t.Cleanup(s.Stop)
+
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		var updated spannerv1beta1.SpannerAutoscaler
+		if err := k8sClient.Get(ctx, nn, &updated); err != nil {
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+		if updated.Status.CurrentProcessingUnits == initPU &&
+			updated.Status.CurrentTotalCPUUtilization == wantCPU &&
+			updated.Status.CurrentCPUMetricType == spannerv1beta1.CPUMetricTypeTotal {
+			return // success
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	var updated spannerv1beta1.SpannerAutoscaler
+	k8sClient.Get(ctx, nn, &updated) //nolint:errcheck
+	t.Errorf("syncer did not update status within timeout: PU=%d (want %d), total CPU=%d (want %d), metric type=%s (want %s)",
+		updated.Status.CurrentProcessingUnits, initPU,
+		updated.Status.CurrentTotalCPUUtilization, wantCPU,
+		updated.Status.CurrentCPUMetricType, spannerv1beta1.CPUMetricTypeTotal,
+	)
+}
+
+func TestSyncer_SyncResource_Dual(t *testing.T) {
+	const (
+		projectID        = "syncer-dual-project"
+		instanceID       = "syncer-dual-instance"
+		initPU           = 1000
+		wantHighPriority = 60 // 0.60 * 100
+		wantTotal        = 45 // 0.45 * 100
+	)
+
+	// Configure both high_priority and total static metrics.
+	body, _ := json.Marshal(map[string]float64{"high_priority": 0.60, "total": 0.45})
+	adminPUT(t, fmt.Sprintf("/metrics/%s/%s", projectID, instanceID), body)
+	t.Cleanup(func() { adminDELETE(t, fmt.Sprintf("/metrics/%s/%s", projectID, instanceID)) })
+
+	createSpannerInstance(t, projectID, instanceID, initPU)
+
+	k8sClient := startEnvtest(t)
+
+	ctx := context.Background()
+	nn := types.NamespacedName{Namespace: "default", Name: "syncer-dual-sa"}
+
+	highPriorityCPUVal := 40
+	totalCPUVal := 30
+	sa := &spannerv1beta1.SpannerAutoscaler{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      nn.Name,
+			Namespace: nn.Namespace,
+		},
+		Spec: spannerv1beta1.SpannerAutoscalerSpec{
+			TargetInstance: spannerv1beta1.TargetInstance{
+				ProjectID:  projectID,
+				InstanceID: instanceID,
+			},
+			Authentication: spannerv1beta1.Authentication{
+				Type: spannerv1beta1.AuthTypeADC,
+			},
+			ScaleConfig: spannerv1beta1.ScaleConfig{
+				ComputeType: spannerv1beta1.ComputeTypePU,
+				ProcessingUnits: spannerv1beta1.ScaleConfigPUs{
+					Min: 100,
+					Max: 10000,
+				},
+				ScaledownStepSize: intstr.FromInt(2000),
+				TargetCPUUtilization: spannerv1beta1.TargetCPUUtilization{
+					HighPriority: &highPriorityCPUVal,
+					Total:        &totalCPUVal,
+				},
+			},
+		},
+	}
+	if err := k8sClient.Create(ctx, sa); err != nil {
+		t.Fatalf("failed to create SpannerAutoscaler: %v", err)
+	}
+
+	spannerClient, err := spanner.NewClient(ctx, projectID, instanceID,
+		spanner.WithEndpoint(spannerEmulatorAddr()),
+	)
+	if err != nil {
+		t.Fatalf("failed to create spanner client: %v", err)
+	}
+
+	metricsClient, err := metrics.NewClient(ctx, projectID, instanceID,
+		metrics.WithEndpoint(monitoringGRPCAddr()),
+	)
+	if err != nil {
+		t.Fatalf("failed to create metrics client: %v", err)
+	}
+
+	creds := syncer.NewADCCredentials()
+	recorder := record.NewFakeRecorder(100)
+	s, err := syncer.New(ctx, k8sClient, nn, creds, recorder, spannerClient, metricsClient,
+		syncer.WithInterval(2*time.Second),
+	)
+	if err != nil {
+		t.Fatalf("failed to create syncer: %v", err)
+	}
+
+	go s.Start()
+	t.Cleanup(s.Stop)
+
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		var updated spannerv1beta1.SpannerAutoscaler
+		if err := k8sClient.Get(ctx, nn, &updated); err != nil {
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+		if updated.Status.CurrentProcessingUnits == initPU &&
+			updated.Status.CurrentHighPriorityCPUUtilization == wantHighPriority &&
+			updated.Status.CurrentTotalCPUUtilization == wantTotal &&
+			updated.Status.CurrentCPUMetricType == spannerv1beta1.CPUMetricTypeBoth {
+			return // success
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	var updated spannerv1beta1.SpannerAutoscaler
+	k8sClient.Get(ctx, nn, &updated) //nolint:errcheck
+	t.Errorf("syncer did not update status within timeout: PU=%d (want %d), highPriority CPU=%d (want %d), total CPU=%d (want %d), metric type=%s (want %s)",
+		updated.Status.CurrentProcessingUnits, initPU,
+		updated.Status.CurrentHighPriorityCPUUtilization, wantHighPriority,
+		updated.Status.CurrentTotalCPUUtilization, wantTotal,
+		updated.Status.CurrentCPUMetricType, spannerv1beta1.CPUMetricTypeBoth,
+	)
+}

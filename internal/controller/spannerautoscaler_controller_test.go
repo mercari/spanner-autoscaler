@@ -435,6 +435,46 @@ var _ = Describe("Calculate Desired Processing Units (metric type switching guar
 		// scale down by at most scaledownStepSize=2000: max(1900, 5000-2000=3000) = 3000
 		Expect(calcDesiredProcessingUnits(sa)).To(Equal(3000))
 	})
+
+	// Total-only CPU scaling mode tests
+	It("total-only mode: keeps current PU until syncer populates Total status (guard)", func() {
+		sa := spannerv1beta1.SpannerAutoscaler{}
+		sa.Status.CurrentProcessingUnits = 3000
+		sa.Status.CurrentCPUMetricType = spannerv1beta1.CPUMetricTypeHighPriority // syncer hasn't run total-only yet
+		sa.Status.CurrentTotalCPUUtilization = 0
+		sa.Spec.ScaleConfig = baseScaleConfig()
+		sa.Spec.ScaleConfig.TargetCPUUtilization = spannerv1beta1.TargetCPUUtilization{
+			Total: intPtr(40),
+		}
+		Expect(calcDesiredProcessingUnits(sa)).To(Equal(3000))
+	})
+
+	It("total-only mode: scales up when total exceeds threshold", func() {
+		sa := spannerv1beta1.SpannerAutoscaler{}
+		sa.Status.CurrentProcessingUnits = 3000
+		sa.Status.CurrentCPUMetricType = spannerv1beta1.CPUMetricTypeTotal
+		sa.Status.CurrentTotalCPUUtilization = 60 // exceeds target 40
+		sa.Spec.ScaleConfig = baseScaleConfig()
+		sa.Spec.ScaleConfig.TargetCPUUtilization = spannerv1beta1.TargetCPUUtilization{
+			Total: intPtr(40),
+		}
+		// total: 60/40 * 3000 = 4500 → 5000
+		Expect(calcDesiredProcessingUnits(sa)).To(Equal(5000))
+	})
+
+	It("total-only mode: scales down when total is below threshold", func() {
+		sa := spannerv1beta1.SpannerAutoscaler{}
+		sa.Status.CurrentProcessingUnits = 5000
+		sa.Status.CurrentCPUMetricType = spannerv1beta1.CPUMetricTypeTotal
+		sa.Status.CurrentTotalCPUUtilization = 15 // below target 40
+		sa.Spec.ScaleConfig = baseScaleConfig()
+		sa.Spec.ScaleConfig.TargetCPUUtilization = spannerv1beta1.TargetCPUUtilization{
+			Total: intPtr(40),
+		}
+		// total: 15/40 * 5000 = 1875 → 1900
+		// scale down by at most scaledownStepSize=2000: max(1900, 5000-2000=3000) = 3000
+		Expect(calcDesiredProcessingUnits(sa)).To(Equal(3000))
+	})
 })
 
 var _ = Describe("Fetch Credentials", func() {
