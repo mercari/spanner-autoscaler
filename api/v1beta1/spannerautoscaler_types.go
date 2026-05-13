@@ -170,21 +170,47 @@ type ScaleConfigPUs struct {
 
 type TargetCPUUtilization struct {
 	// Desired CPU utilization for 'High Priority' CPU consumption category. Ref: [Spanner CPU utilization](https://cloud.google.com/spanner/docs/cpu-utilization#task-priority)
-	// Required. When specified together with 'total', scale-out occurs when either threshold is exceeded (OR condition).
+	// Optional. When specified together with 'total', scale-out occurs when either threshold is exceeded (OR condition).
+	// At least one of 'highPriority' or 'total' must be specified.
+	// +optional
 	// +kubebuilder:validation:Minimum=0
 	// +kubebuilder:validation:Maximum=100
 	// +kubebuilder:validation:ExclusiveMinimum=true
 	// +kubebuilder:validation:ExclusiveMaximum=true
-	HighPriority *int `json:"highPriority"`
+	HighPriority *int `json:"highPriority,omitempty"`
 
 	// Desired total CPU utilization (all priorities combined). Ref: [Spanner CPU utilization](https://cloud.google.com/spanner/docs/cpu-utilization)
 	// Optional. When specified together with 'highPriority', scale-out occurs when either threshold is exceeded (OR condition).
+	// At least one of 'highPriority' or 'total' must be specified.
 	// +optional
 	// +kubebuilder:validation:Minimum=0
 	// +kubebuilder:validation:Maximum=100
 	// +kubebuilder:validation:ExclusiveMinimum=true
 	// +kubebuilder:validation:ExclusiveMaximum=true
 	Total *int `json:"total,omitempty"`
+}
+
+// CPUMetricFlags is a bitmask of which CPU metric thresholds are active.
+// Each bit corresponds to one metric in TargetCPUUtilization.
+// New metrics can be added by defining additional bit constants below.
+type CPUMetricFlags uint8
+
+const (
+	CPUMetricFlagHighPriority CPUMetricFlags = 1 << iota
+	CPUMetricFlagTotal
+)
+
+// ActiveMetricFlags returns a bitmask representing which CPU metric thresholds
+// are configured (non-nil) in this TargetCPUUtilization.
+func (c TargetCPUUtilization) ActiveMetricFlags() CPUMetricFlags {
+	var f CPUMetricFlags
+	if c.HighPriority != nil {
+		f |= CPUMetricFlagHighPriority
+	}
+	if c.Total != nil {
+		f |= CPUMetricFlagTotal
+	}
+	return f
 }
 
 // SpannerAutoscalerSpec defines the desired state of SpannerAutoscaler
