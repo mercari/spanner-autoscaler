@@ -61,3 +61,24 @@ spec:
       - "CRON_TZ=Asia/Tokyo * 2-4 * * *"
     targetCPUUtilization:
       highPriority: 60
+---
+apiVersion: spanner.mercari.com/v1beta1
+kind: SpannerAutoscaler
+metadata:
+  name: spannerautoscaler-sample-not-allowed-times
+  namespace: default
+spec:
+  targetInstance:
+    projectId: my-gcp-project-id
+    instanceId: my-spanner-instance-id-4
+  authentication:
+    type: adc
+  scaleConfig:
+    processingUnits:
+      min: 1000
+      max: 6000
+    # Scale down is NOT allowed during business hours (prevents scale down during peak usage)
+    scaledownNotAllowedTimes:
+      - "* 9-17 * * 1-5"     # Business hours on weekdays (9:00 AM to 5:59 PM)
+    targetCPUUtilization:
+      total: 75

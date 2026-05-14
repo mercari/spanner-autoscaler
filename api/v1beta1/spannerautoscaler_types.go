@@ -144,6 +144,16 @@ type ScaleConfig struct {
 	// +optional
 	ScaledownAllowedTimes []string `json:"scaledownAllowedTimes,omitempty"`
 
+	// Scale down is NOT allowed during the time periods specified in standard cron format.
+	// Multiple cron expressions can be specified to handle complex time ranges including periods that cross midnight.
+	// If not specified, scale down is allowed at any time (unless scaledownAllowedTimes is specified).
+	// Cannot be used together with scaledownAllowedTimes - only one of the two fields can be specified.
+	// Examples:
+	//   - ["* 9-17 * * 1-5"] prevents scale down during business hours (9:00 AM to 5:59 PM on weekdays)
+	//   - ["* 12-13 * * 1-5", "* 18-19 * * 1-5"] prevents scale down during lunch and evening peak hours
+	// +optional
+	ScaledownNotAllowedTimes []string `json:"scaledownNotAllowedTimes,omitempty"`
+
 	// The CPU utilization which the autoscaling will try to achieve. Ref: [Spanner CPU utilization](https://cloud.google.com/spanner/docs/cpu-utilization#task-priority)
 	TargetCPUUtilization TargetCPUUtilization `json:"targetCPUUtilization"`
 }

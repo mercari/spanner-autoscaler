@@ -643,12 +643,13 @@ func (r *SpannerAutoscalerReconciler) needUpdateProcessingUnits(log logr.Logger,
 		)
 		return false
 
-	case desiredProcessingUnits < currentProcessingUnits && !isScaledownAllowed(sa.Spec.ScaleConfig.ScaledownAllowedTimes, now):
+	case desiredProcessingUnits < currentProcessingUnits && !isScaledownAllowed(sa.Spec.ScaleConfig.ScaledownAllowedTimes, sa.Spec.ScaleConfig.ScaledownNotAllowedTimes, now):
 		log.Info("scale down is not allowed at current time",
 			"now", now.String(),
 			"currentPU", currentProcessingUnits,
 			"desiredPU", desiredProcessingUnits,
 			"scaledownAllowedTimes", sa.Spec.ScaleConfig.ScaledownAllowedTimes,
+			"scaledownNotAllowedTimes", sa.Spec.ScaleConfig.ScaledownNotAllowedTimes,
 		)
 		return false
 
@@ -903,16 +904,27 @@ func getOrConvertTimeDuration(customDuration *metav1.Duration, defaultDuration t
 	return defaultDuration
 }
 
-// isScaledownAllowed checks if the current time matches any of the allowed cron schedules for scale down.
-// Returns true if scale down is allowed at the current time, or if no schedules are specified (allowing scale down anytime).
-func isScaledownAllowed(allowedTimes []string, currentTime time.Time) bool {
-	// If no schedules are specified, allow scale down anytime
-	if len(allowedTimes) == 0 {
-		return true
+// isScaledownAllowed checks if scale down is allowed at the current time based on configured time restrictions.
+// Returns true if scale down is allowed, false otherwise.
+// Supports both scaledownAllowedTimes (whitelist) and scaledownNotAllowedTimes (blacklist) patterns.
+func isScaledownAllowed(allowedTimes []string, notAllowedTimes []string, currentTime time.Time) bool {
+	// If scaledownAllowedTimes is specified, check if current time matches any allowed period
+	if len(allowedTimes) > 0 {
+		return isTimeInCronSchedules(allowedTimes, currentTime)
 	}
 
-	// Check each cron schedule to see if current time matches
-	for _, cronExpr := range allowedTimes {
+	// If scaledownNotAllowedTimes is specified, check if current time matches any forbidden period
+	if len(notAllowedTimes) > 0 {
+		return !isTimeInCronSchedules(notAllowedTimes, currentTime)
+	}
+
+	// If no time restrictions are specified, allow scale down anytime
+	return true
+}
+
+// isTimeInCronSchedules checks if the current time matches any of the provided cron schedules.
+func isTimeInCronSchedules(cronSchedules []string, currentTime time.Time) bool {
+	for _, cronExpr := range cronSchedules {
 		schedule, err := cron.Parse(cronExpr)
 		if err != nil {
 			// If cron expression is invalid, continue checking other expressions
@@ -922,7 +934,7 @@ func isScaledownAllowed(allowedTimes []string, currentTime time.Time) bool {
 		// Get the next scheduled time from the current time
 		nextTime := schedule.Next(currentTime.Add(-time.Minute))
 
-		// If the next scheduled time is within the current minute, then we're in an allowed period
+		// If the next scheduled time is within the current minute, then we're in a matching period
 		if nextTime.Truncate(time.Minute).Equal(currentTime.Truncate(time.Minute)) {
 			return true
 		}

@@ -72,7 +72,32 @@ scaledownAllowedTimes:
   - "* 0-5 * * *"    # 12:00 AM to 5:59 AM
 ```
 
-> **Note:** When `scaledownAllowedTimes` is not specified, scale down operations are allowed at any time (default behavior). Scale up operations are never restricted and will always be executed immediately when needed, regardless of time restrictions.
+### Scale down forbidden times (blacklist approach)
+
+Alternatively, you can prevent scale down operations during specific time periods using `scaledownNotAllowedTimes`. This is useful when you want to prevent scale downs during peak hours or critical business periods:
+
+```yaml
+apiVersion: spanner.mercari.com/v1beta1
+kind: SpannerAutoscaler
+metadata:
+  name: spannerautoscaler-sample
+spec:
+  scaleConfig:
+    # Prevent scale down during business hours (9:00 AM to 5:59 PM on weekdays)
+    scaledownNotAllowedTimes:
+      - "* 9-17 * * 1-5"
+    # Other configuration...
+```
+
+For multiple forbidden periods, you can specify multiple cron expressions:
+
+```yaml
+scaledownNotAllowedTimes:
+  - "* 12-13 * * 1-5"   # Lunch time on weekdays
+  - "* 18-19 * * 1-5"   # Evening peak on weekdays
+```
+
+> **Note:** You can specify either `scaledownAllowedTimes` OR `scaledownNotAllowedTimes`, but not both. When neither is specified, scale down operations are allowed at any time (default behavior). Scale up operations are never restricted and will always be executed immediately when needed, regardless of time restrictions.
 
 #### Cron Expression Format and Limitations
 
