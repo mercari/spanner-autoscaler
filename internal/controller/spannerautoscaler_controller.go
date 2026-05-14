@@ -913,7 +913,7 @@ func isScaledownAllowed(allowedTimes []string, currentTime time.Time) bool {
 
 	// Check each cron schedule to see if current time matches
 	for _, cronExpr := range allowedTimes {
-		schedule, err := cronpkg.MustNewParser(cron.DefaultOptions).Parse(cronExpr)
+		schedule, err := cron.Parse(cronExpr)
 		if err != nil {
 			// If cron expression is invalid, continue checking other expressions
 			continue
