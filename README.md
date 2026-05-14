@@ -72,7 +72,7 @@ scaledownAllowedTimes:
   - "* 0-5 * * *"    # 12:00 AM to 5:59 AM
 ```
 
-### Scale down forbidden times (blacklist approach)
+### Scale down forbidden times (blocklist approach)
 
 Alternatively, you can prevent scale down operations during specific time periods using `scaledownNotAllowedTimes`. This is useful when you want to prevent scale downs during peak hours or critical business periods:
 

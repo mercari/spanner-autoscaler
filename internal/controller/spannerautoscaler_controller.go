@@ -914,7 +914,7 @@ func getOrConvertTimeDuration(customDuration *metav1.Duration, defaultDuration t
 
 // isScaledownAllowed checks if scale down is allowed at the current time based on configured time restrictions.
 // Returns true if scale down is allowed, false otherwise, and an error for invalid configurations.
-// Supports both scaledownAllowedTimes (whitelist) and scaledownNotAllowedTimes (blacklist) patterns.
+// Supports both scaledownAllowedTimes (allowlist) and scaledownNotAllowedTimes (blocklist) patterns.
 func isScaledownAllowed(allowedTimes []string, notAllowedTimes []string, currentTime time.Time) (bool, error) {
 	// Both allowedTimes and notAllowedTimes cannot be specified together
 	if len(allowedTimes) > 0 && len(notAllowedTimes) > 0 {
