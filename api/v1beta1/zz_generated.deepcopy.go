@@ -118,6 +118,11 @@ func (in *ScaleConfig) DeepCopyInto(out *ScaleConfig) {
 		*out = new(v1.Duration)
 		**out = **in
 	}
+	if in.ScaledownAllowedTimes != nil {
+		in, out := &in.ScaledownAllowedTimes, &out.ScaledownAllowedTimes
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	in.TargetCPUUtilization.DeepCopyInto(&out.TargetCPUUtilization)
 }
 

@@ -18,12 +18,12 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/go-logr/logr"
-	"github.com/mercari/spanner-autoscaler/internal/cron"
 	cronpkg "github.com/netresearch/go-cron"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -40,6 +40,7 @@ import (
 	ctrlreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
+	"github.com/mercari/spanner-autoscaler/internal/cron"
 	"github.com/mercari/spanner-autoscaler/internal/metrics"
 	schedulerpkg "github.com/mercari/spanner-autoscaler/internal/scheduler"
 	"github.com/mercari/spanner-autoscaler/internal/spanner"
@@ -643,9 +644,26 @@ func (r *SpannerAutoscalerReconciler) needUpdateProcessingUnits(log logr.Logger,
 		)
 		return false
 
-	default:
-		return true
+	case desiredProcessingUnits < currentProcessingUnits:
+		// Check time restrictions for scale down
+		scaledownAllowed, err := isScaledownAllowed(sa.Spec.ScaleConfig.ScaledownAllowedTimes, sa.Spec.ScaleConfig.ScaledownNotAllowedTimes, now)
+		if err != nil {
+			log.Error(err, "invalid scale down time restriction configuration")
+			return false
+		}
+		if !scaledownAllowed {
+			log.Info("scale down is not allowed at current time",
+				"now", now.String(),
+				"currentPU", currentProcessingUnits,
+				"desiredPU", desiredProcessingUnits,
+				"scaledownAllowedTimes", sa.Spec.ScaleConfig.ScaledownAllowedTimes,
+				"scaledownNotAllowedTimes", sa.Spec.ScaleConfig.ScaledownNotAllowedTimes,
+			)
+			return false
+		}
 	}
+
+	return true
 }
 
 // calcDesiredProcessingUnits calculates the values needed to keep CPU utilization below TargetCPU.
@@ -892,4 +910,48 @@ func getOrConvertTimeDuration(customDuration *metav1.Duration, defaultDuration t
 	}
 
 	return defaultDuration
+}
+
+// isScaledownAllowed checks if scale down is allowed at the current time based on configured time restrictions.
+// Returns true if scale down is allowed, false otherwise, and an error for invalid configurations.
+// Supports both scaledownAllowedTimes (allowlist) and scaledownNotAllowedTimes (blocklist) patterns.
+func isScaledownAllowed(allowedTimes []string, notAllowedTimes []string, currentTime time.Time) (bool, error) {
+	// Both allowedTimes and notAllowedTimes cannot be specified together
+	if len(allowedTimes) > 0 && len(notAllowedTimes) > 0 {
+		return false, fmt.Errorf("scaledownAllowedTimes and scaledownNotAllowedTimes cannot be specified together")
+	}
+
+	// If scaledownAllowedTimes is specified, check if current time matches any allowed period
+	if len(allowedTimes) > 0 {
+		return isTimeInCronSchedules(allowedTimes, currentTime), nil
+	}
+
+	// If scaledownNotAllowedTimes is specified, check if current time matches any forbidden period
+	if len(notAllowedTimes) > 0 {
+		return !isTimeInCronSchedules(notAllowedTimes, currentTime), nil
+	}
+
+	// If no time restrictions are specified, allow scale down anytime
+	return true, nil
+}
+
+// isTimeInCronSchedules checks if the current time matches any of the provided cron schedules.
+func isTimeInCronSchedules(cronSchedules []string, currentTime time.Time) bool {
+	for _, cronExpr := range cronSchedules {
+		schedule, err := cron.Parse(cronExpr)
+		if err != nil {
+			// If cron expression is invalid, continue checking other expressions
+			continue
+		}
+
+		// Get the next scheduled time from the current time
+		nextTime := schedule.Next(currentTime.Add(-time.Minute))
+
+		// If the next scheduled time is within the current minute, then we're in a matching period
+		if nextTime.Truncate(time.Minute).Equal(currentTime.Truncate(time.Minute)) {
+			return true
+		}
+	}
+
+	return false
 }

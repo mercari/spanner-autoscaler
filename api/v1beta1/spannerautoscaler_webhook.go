@@ -29,6 +29,8 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
+
+	"github.com/mercari/spanner-autoscaler/internal/cron"
 )
 
 // log is for logging in this package.
@@ -265,6 +267,33 @@ func validateScaleConfig(r *SpannerAutoscaler) *field.Error {
 			field.NewPath("spec").Child("scaleConfig").Child("scaleupStepSize"),
 			sc.ScaleupStepSize,
 			"must be an integer or percentage (e.g '5%')")
+	}
+
+	// Validate mutual exclusion of scaledownAllowedTimes and scaledownNotAllowedTimes
+	if len(sc.ScaledownAllowedTimes) > 0 && len(sc.ScaledownNotAllowedTimes) > 0 {
+		return field.Forbidden(
+			field.NewPath("spec").Child("scaleConfig"),
+			"scaledownAllowedTimes and scaledownNotAllowedTimes cannot be specified together")
+	}
+
+	// Validate scaledownAllowedTimes cron expressions
+	for i, cronExpr := range sc.ScaledownAllowedTimes {
+		if _, err := cron.Parse(cronExpr); err != nil {
+			return field.Invalid(
+				field.NewPath("spec").Child("scaleConfig").Child("scaledownAllowedTimes").Index(i),
+				cronExpr,
+				fmt.Sprintf("invalid cron expression: %v", err))
+		}
+	}
+
+	// Validate scaledownNotAllowedTimes cron expressions
+	for i, cronExpr := range sc.ScaledownNotAllowedTimes {
+		if _, err := cron.Parse(cronExpr); err != nil {
+			return field.Invalid(
+				field.NewPath("spec").Child("scaleConfig").Child("scaledownNotAllowedTimes").Index(i),
+				cronExpr,
+				fmt.Sprintf("invalid cron expression: %v", err))
+		}
 	}
 
 	return nil

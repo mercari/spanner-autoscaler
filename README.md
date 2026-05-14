@@ -47,6 +47,71 @@ The `cron` field supports extended syntax (`L`, `L-n`, `nW`, `LW`, `DAY#n`, `DAY
 
 > **Note:** When multiple schedules are active simultaneously (i.e. their windows overlap), the `additionalProcessingUnits` from all active schedules are **summed** and added to both `desiredMinPUs` and `desiredMaxPUs`. For example, if schedule A adds +1,000 PU and schedule B adds +5,000 PU and both are active at the same time, `desiredMinPUs = spec.processingUnits.min + 6,000`.
 
+### Scale down time restrictions
+
+To prevent unexpected scale down operations during business hours or critical periods, you can restrict scale down operations to specific time windows using cron expressions. This feature allows you to limit scale downs to maintenance windows or low-traffic periods (such as late night hours).
+
+```yaml
+apiVersion: spanner.mercari.com/v1beta1
+kind: SpannerAutoscaler
+metadata:
+  name: spannerautoscaler-sample
+spec:
+  scaleConfig:
+    # Scale down only during late night hours (2:00 AM to 4:59 AM daily)
+    scaledownAllowedTimes:
+      - "* 2-4 * * *"
+    # Other configuration...
+```
+
+For time windows that cross midnight (e.g., 11:00 PM to 5:59 AM), you can specify multiple cron expressions:
+
+```yaml
+scaledownAllowedTimes:
+  - "* 23 * * *"     # 11:00 PM to 11:59 PM
+  - "* 0-5 * * *"    # 12:00 AM to 5:59 AM
+```
+
+### Scale down forbidden times (blocklist approach)
+
+Alternatively, you can prevent scale down operations during specific time periods using `scaledownNotAllowedTimes`. This is useful when you want to prevent scale downs during peak hours or critical business periods:
+
+```yaml
+apiVersion: spanner.mercari.com/v1beta1
+kind: SpannerAutoscaler
+metadata:
+  name: spannerautoscaler-sample
+spec:
+  scaleConfig:
+    # Prevent scale down during business hours (9:00 AM to 5:59 PM on weekdays)
+    scaledownNotAllowedTimes:
+      - "* 9-17 * * 1-5"
+    # Other configuration...
+```
+
+For multiple forbidden periods, you can specify multiple cron expressions:
+
+```yaml
+scaledownNotAllowedTimes:
+  - "* 12-13 * * 1-5"   # Lunch time on weekdays
+  - "* 18-19 * * 1-5"   # Evening peak on weekdays
+```
+
+> **Note:** You can specify either `scaledownAllowedTimes` OR `scaledownNotAllowedTimes`, but not both. When neither is specified, scale down operations are allowed at any time (default behavior). Scale up operations are never restricted and will always be executed immediately when needed, regardless of time restrictions.
+
+#### Cron Expression Format and Limitations
+
+The cron expressions use the standard 5-field format: `minute hour day-of-month month day-of-week`. For example:
+- `"* 2-4 * * *"` - Every minute from 2:00 AM to 4:59 AM daily
+- `"0 9-17 * * 1-5"` - At minute 0 (top of the hour) from 9:00 AM to 5:00 PM on weekdays
+
+**Important limitations:**
+- **Hour-level precision only**: Time ranges are limited to full-hour boundaries. You cannot specify minute-level ranges like "3:15 AM to 8:40 AM".
+- **Minute field applies to entire range**: If you specify a minute value (e.g., `"30 9-17 * * *"`), it applies to every hour in the range (9:30, 10:30, 11:30, etc.).
+- **Use wildcard (*) for continuous coverage**: To allow scale-downs throughout an hour range, use `*` in the minute field.
+
+For complex time requirements involving specific minutes, consider using multiple separate cron expressions or adjusting your maintenance windows to align with hour boundaries.
+
 ## Installation
 
 Spanner Autoscaler can be installed using [KPT](https://kpt.dev/installation/) by following 2 steps:
@@ -136,6 +201,80 @@ spec:
 ```
 
 > **Note:** `highPriority` is **required**. `total` is optional — when omitted, scaling uses only the High Priority CPU metric. When both are specified, they use independent Cloud Monitoring metrics (`spanner.googleapis.com/instance/cpu/utilization_by_priority` for High Priority and `spanner.googleapis.com/instance/cpu/utilization` for total). The desired processing units for each metric are calculated independently (respecting `scaleupStepSize` / `scaledownStepSize`), and the **maximum** is applied. Scale-out fires when either metric exceeds its target; scale-in fires only when both are below their targets.
+
+#### Restricting scale down to specific time windows:
+
+```yaml
+apiVersion: spanner.mercari.com/v1beta1
+kind: SpannerAutoscaler
+metadata:
+  name: spannerautoscaler-sample
+  namespace: your-namespace
+spec:
+  targetInstance:
+    projectId: your-gcp-project-id
+    instanceId: your-spanner-instance-id
+  scaleConfig:
+    processingUnits:
+      min: 1000
+      max: 10000
+    # Allow scale down only during late night hours (2:00 AM to 4:59 AM daily)
+    scaledownAllowedTimes:
+      - "* 2-4 * * *"
+    targetCPUUtilization:
+      highPriority: 65
+```
+
+For time windows crossing midnight:
+
+```yaml
+apiVersion: spanner.mercari.com/v1beta1
+kind: SpannerAutoscaler
+metadata:
+  name: spannerautoscaler-sample
+  namespace: your-namespace
+spec:
+  targetInstance:
+    projectId: your-gcp-project-id
+    instanceId: your-spanner-instance-id
+  scaleConfig:
+    processingUnits:
+      min: 1000
+      max: 5000
+    # Allow scale down from 11:00 PM to 5:59 AM daily (crossing midnight)
+    scaledownAllowedTimes:
+      - "* 23 * * *"     # 11:00 PM to 11:59 PM
+      - "* 0-5 * * *"    # 12:00 AM to 5:59 AM
+    targetCPUUtilization:
+      total: 70
+```
+
+#### Timezone Support
+
+Scale down time restrictions support timezone specification using the CRON_TZ format:
+
+```yaml
+apiVersion: spanner.mercari.com/v1beta1
+kind: SpannerAutoscaler
+metadata:
+  name: spannerautoscaler-sample
+  namespace: your-namespace
+spec:
+  targetInstance:
+    projectId: your-gcp-project-id
+    instanceId: your-spanner-instance-id
+  scaleConfig:
+    processingUnits:
+      min: 1000
+      max: 10000
+    # Allow scale down only during late night hours in Tokyo timezone
+    scaledownAllowedTimes:
+      - "CRON_TZ=Asia/Tokyo * 2-4 * * *"
+    targetCPUUtilization:
+      highPriority: 65
+```
+
+When using CRON_TZ format, times are evaluated in the specified timezone rather than the controller's local timezone. This is useful for deployments where the controller runs in a different timezone than your business hours.
 
 #### Single Service Account using Workload Identity:
 

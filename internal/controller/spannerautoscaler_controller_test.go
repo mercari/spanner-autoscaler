@@ -3,7 +3,6 @@ package controller
 import (
 	"time"
 
-	"github.com/mercari/spanner-autoscaler/internal/cron"
 	cronpkg "github.com/netresearch/go-cron"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -19,6 +18,7 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/google/uuid"
 	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
+	"github.com/mercari/spanner-autoscaler/internal/cron"
 	schedulerpkg "github.com/mercari/spanner-autoscaler/internal/scheduler"
 	"github.com/mercari/spanner-autoscaler/internal/syncer"
 	fakesyncer "github.com/mercari/spanner-autoscaler/internal/syncer/fake"
@@ -717,6 +717,141 @@ var _ = Describe("Calculate Desired PU Range", func() {
 })
 
 func intPtr(i int) *int { return &i }
+
+var _ = Describe("Scale down time restriction", func() {
+	Describe("isScaledownAllowed", func() {
+		It("should allow scale down when no schedules are specified", func() {
+			currentTime := time.Date(2026, 4, 24, 10, 30, 0, 0, time.UTC) // 10:30 AM
+			allowed, err := isScaledownAllowed([]string{}, []string{}, currentTime)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(allowed).To(BeTrue())
+		})
+
+		It("should allow scale down when current time matches a cron schedule", func() {
+			currentTime := time.Date(2026, 4, 24, 3, 0, 0, 0, time.UTC) // 3:00 AM
+			cronExprs := []string{"0 2-4 * * *"}                        // 2:00 AM - 4:59 AM
+			allowed, err := isScaledownAllowed(cronExprs, []string{}, currentTime)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(allowed).To(BeTrue())
+		})
+
+		It("should deny scale down when current time does not match any cron schedule", func() {
+			currentTime := time.Date(2026, 4, 24, 10, 30, 0, 0, time.UTC) // 10:30 AM
+			cronExprs := []string{"0 2-4 * * *"}                          // 2:00 AM - 4:59 AM
+			allowed, err := isScaledownAllowed(cronExprs, []string{}, currentTime)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(allowed).To(BeFalse())
+		})
+
+		It("should allow scale down when current time matches any of multiple cron schedules", func() {
+			currentTime := time.Date(2026, 4, 24, 23, 30, 0, 0, time.UTC) // 11:30 PM
+			cronExprs := []string{"0 2-4 * * *", "* 23 * * *"}            // 2:00-4:59 AM or 11:00-11:59 PM
+			allowed, err := isScaledownAllowed(cronExprs, []string{}, currentTime)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(allowed).To(BeTrue())
+		})
+
+		It("should handle crossing midnight with multiple cron expressions", func() {
+			// Test 11:30 PM (should be allowed)
+			currentTime := time.Date(2026, 4, 24, 23, 30, 0, 0, time.UTC)
+			cronExprs := []string{"* 23 * * *", "* 0-5 * * *"} // 11:00-11:59 PM or 12:00-5:59 AM
+			allowed, err := isScaledownAllowed(cronExprs, []string{}, currentTime)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(allowed).To(BeTrue())
+
+			// Test 2:30 AM (should be allowed)
+			currentTime = time.Date(2026, 4, 24, 2, 30, 0, 0, time.UTC)
+			allowed, err = isScaledownAllowed(cronExprs, []string{}, currentTime)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(allowed).To(BeTrue())
+
+			// Test 10:30 AM (should be denied)
+			currentTime = time.Date(2026, 4, 24, 10, 30, 0, 0, time.UTC)
+			allowed, err = isScaledownAllowed(cronExprs, []string{}, currentTime)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(allowed).To(BeFalse())
+		})
+
+		It("should continue checking other schedules when one has invalid cron expression", func() {
+			currentTime := time.Date(2026, 4, 24, 3, 0, 0, 0, time.UTC) // 3:00 AM
+			cronExprs := []string{"invalid cron", "0 2-4 * * *"}        // Invalid + valid cron
+			allowed, err := isScaledownAllowed(cronExprs, []string{}, currentTime)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(allowed).To(BeTrue())
+		})
+
+		It("should support CRON_TZ timezone specification", func() {
+			// Test with Tokyo timezone (UTC+9)
+			// When it's 3:00 AM UTC, it's 12:00 PM JST - should be denied
+			currentTime := time.Date(2026, 4, 24, 3, 0, 0, 0, time.UTC)
+			cronExprs := []string{"CRON_TZ=Asia/Tokyo 0 2-4 * * *"} // 2:00-4:59 AM JST
+			allowed, err := isScaledownAllowed(cronExprs, []string{}, currentTime)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(allowed).To(BeFalse())
+
+			// When it's 18:00 UTC, it's 3:00 AM JST - should be allowed
+			currentTime = time.Date(2026, 4, 24, 18, 0, 0, 0, time.UTC)
+			allowed, err = isScaledownAllowed(cronExprs, []string{}, currentTime)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(allowed).To(BeTrue())
+		})
+
+		It("should deny scale down when all cron expressions are invalid", func() {
+			currentTime := time.Date(2026, 4, 24, 3, 0, 0, 0, time.UTC) // 3:00 AM
+			cronExprs := []string{"invalid cron", "also invalid"}
+			allowed, err := isScaledownAllowed(cronExprs, []string{}, currentTime)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(allowed).To(BeFalse())
+		})
+
+		It("should allow scale down when current time does not match scaledownNotAllowedTimes", func() {
+			currentTime := time.Date(2026, 4, 24, 3, 0, 0, 0, time.UTC) // 3:00 AM
+			notAllowedExprs := []string{"* 9-17 * * 1-5"}               // Business hours on weekdays
+			allowed, err := isScaledownAllowed([]string{}, notAllowedExprs, currentTime)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(allowed).To(BeTrue())
+		})
+
+		It("should deny scale down when current time matches scaledownNotAllowedTimes", func() {
+			currentTime := time.Date(2026, 4, 24, 10, 30, 0, 0, time.UTC) // 10:30 AM on Thursday (weekday)
+			notAllowedExprs := []string{"* 9-17 * * 1-5"}                 // Business hours on weekdays
+			allowed, err := isScaledownAllowed([]string{}, notAllowedExprs, currentTime)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(allowed).To(BeFalse())
+		})
+
+		It("should handle multiple scaledownNotAllowedTimes expressions", func() {
+			currentTime := time.Date(2026, 4, 24, 12, 30, 0, 0, time.UTC)     // 12:30 PM (lunch time)
+			notAllowedExprs := []string{"* 12-13 * * 1-5", "* 18-19 * * 1-5"} // Lunch and evening peak
+			allowed, err := isScaledownAllowed([]string{}, notAllowedExprs, currentTime)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(allowed).To(BeFalse())
+
+			// Test outside both forbidden periods
+			currentTime = time.Date(2026, 4, 24, 15, 0, 0, 0, time.UTC) // 3:00 PM
+			allowed, err = isScaledownAllowed([]string{}, notAllowedExprs, currentTime)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(allowed).To(BeTrue())
+		})
+
+		It("should allow scale down when no time restrictions are specified", func() {
+			currentTime := time.Date(2026, 4, 24, 10, 30, 0, 0, time.UTC) // 10:30 AM
+			allowed, err := isScaledownAllowed([]string{}, []string{}, currentTime)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(allowed).To(BeTrue())
+		})
+
+		It("should return error when both scaledownAllowedTimes and scaledownNotAllowedTimes are specified", func() {
+			currentTime := time.Date(2026, 4, 24, 10, 30, 0, 0, time.UTC) // 10:30 AM
+			allowedExprs := []string{"* 2-4 * * *"}                       // 2:00-4:59 AM
+			notAllowedExprs := []string{"* 9-17 * * 1-5"}                 // Business hours on weekdays
+			allowed, err := isScaledownAllowed(allowedExprs, notAllowedExprs, currentTime)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("scaledownAllowedTimes and scaledownNotAllowedTimes cannot be specified together"))
+			Expect(allowed).To(BeFalse())
+		})
+	})
+})
 
 var _ = Describe("Cron mutability", func() {
 	Describe("addCronJob", func() {
