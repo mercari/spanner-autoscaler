@@ -74,6 +74,19 @@ scaledownAllowedTimes:
 
 > **Note:** When `scaledownAllowedTimes` is not specified, scale down operations are allowed at any time (default behavior). Scale up operations are never restricted and will always be executed immediately when needed, regardless of time restrictions.
 
+#### Cron Expression Format and Limitations
+
+The cron expressions use the standard 5-field format: `minute hour day-of-month month day-of-week`. For example:
+- `"* 2-4 * * *"` - Every minute from 2:00 AM to 4:59 AM daily
+- `"0 9-17 * * 1-5"` - At minute 0 (top of the hour) from 9:00 AM to 5:00 PM on weekdays
+
+**Important limitations:**
+- **Hour-level precision only**: Time ranges are limited to full-hour boundaries. You cannot specify minute-level ranges like "3:15 AM to 8:40 AM".
+- **Minute field applies to entire range**: If you specify a minute value (e.g., `"30 9-17 * * *"`), it applies to every hour in the range (9:30, 10:30, 11:30, etc.).
+- **Use wildcard (*) for continuous coverage**: To allow scale-downs throughout an hour range, use `*` in the minute field.
+
+For complex time requirements involving specific minutes, consider using multiple separate cron expressions or adjusting your maintenance windows to align with hour boundaries.
+
 ## Installation
 
 Spanner Autoscaler can be installed using [KPT](https://kpt.dev/installation/) by following 2 steps:

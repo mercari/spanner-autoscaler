@@ -1,7 +1,7 @@
 package cron
 
 import (
-	cronpkg "github.com/robfig/cron/v3"
+	cronpkg "github.com/netresearch/go-cron"
 )
 
 // Parse parses a cron expression with support for both CRON_TZ format and standard cron format.
