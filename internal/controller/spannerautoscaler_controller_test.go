@@ -742,7 +742,7 @@ var _ = Describe("Scale down time restriction", func() {
 
 		It("should allow scale down when current time matches any of multiple cron schedules", func() {
 			currentTime := time.Date(2026, 4, 24, 23, 30, 0, 0, time.UTC) // 11:30 PM
-			cronExprs := []string{"0 2-4 * * *", "0 23-23 * * *"}         // 2:00-4:59 AM or 11:00-11:59 PM
+			cronExprs := []string{"0 2-4 * * *", "* 23 * * *"}            // 2:00-4:59 AM or 11:00-11:59 PM
 			allowed := isScaledownAllowed(cronExprs, currentTime)
 			Expect(allowed).To(BeTrue())
 		})
@@ -750,7 +750,7 @@ var _ = Describe("Scale down time restriction", func() {
 		It("should handle crossing midnight with multiple cron expressions", func() {
 			// Test 11:30 PM (should be allowed)
 			currentTime := time.Date(2026, 4, 24, 23, 30, 0, 0, time.UTC)
-			cronExprs := []string{"0 23-23 * * *", "0 0-5 * * *"} // 11:00-11:59 PM or 12:00-5:59 AM
+			cronExprs := []string{"* 23 * * *", "0 0-5 * * *"} // 11:00-11:59 PM or 12:00-5:59 AM
 			allowed := isScaledownAllowed(cronExprs, currentTime)
 			Expect(allowed).To(BeTrue())
 
