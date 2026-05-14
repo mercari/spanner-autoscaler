@@ -847,7 +847,7 @@ var _ = Describe("Scale down time restriction", func() {
 			notAllowedExprs := []string{"* 9-17 * * 1-5"}                 // Business hours on weekdays
 			allowed, err := isScaledownAllowed(allowedExprs, notAllowedExprs, currentTime)
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("scaledownAllowedTimes and scaledownNotAllowedTimes cannot both be specified"))
+			Expect(err.Error()).To(ContainSubstring("scaledownAllowedTimes and scaledownNotAllowedTimes cannot be specified together"))
 			Expect(allowed).To(BeFalse())
 		})
 	})
