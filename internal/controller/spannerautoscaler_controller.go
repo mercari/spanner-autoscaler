@@ -918,7 +918,7 @@ func getOrConvertTimeDuration(customDuration *metav1.Duration, defaultDuration t
 func isScaledownAllowed(allowedTimes []string, notAllowedTimes []string, currentTime time.Time) (bool, error) {
 	// Both allowedTimes and notAllowedTimes cannot be specified together
 	if len(allowedTimes) > 0 && len(notAllowedTimes) > 0 {
-		return false, fmt.Errorf("scaledownAllowedTimes and scaledownNotAllowedTimes cannot both be specified")
+		return false, fmt.Errorf("scaledownAllowedTimes and scaledownNotAllowedTimes cannot be specified together")
 	}
 
 	// If scaledownAllowedTimes is specified, check if current time matches any allowed period
