@@ -223,6 +223,21 @@ func (c TargetCPUUtilization) ActiveMetricFlags() CPUMetricFlags {
 	return f
 }
 
+// ToCPUMetricType maps the flag bitmask to the corresponding CPUMetricType.
+// Returns an empty CPUMetricType when no flag is set.
+func (f CPUMetricFlags) ToCPUMetricType() CPUMetricType {
+	switch f {
+	case CPUMetricFlagHighPriority | CPUMetricFlagTotal:
+		return CPUMetricTypeBoth
+	case CPUMetricFlagTotal:
+		return CPUMetricTypeTotal
+	case CPUMetricFlagHighPriority:
+		return CPUMetricTypeHighPriority
+	default:
+		return ""
+	}
+}
+
 // SpannerAutoscalerSpec defines the desired state of SpannerAutoscaler
 type SpannerAutoscalerSpec struct {
 	// The Spanner instance which will be managed for autoscaling

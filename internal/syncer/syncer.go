@@ -295,15 +295,16 @@ func (s *syncer) syncResource(ctx context.Context) error {
 	}
 
 	log.V(1).Info("spanner instance status",
-		"current processing units", instance.ProcessingUnits,
-		"instance state", instance.InstanceState,
-		"high priority cpu utilization", func() int {
+		"currentProcessingUnits", instance.ProcessingUnits,
+		"instanceState", instance.InstanceState,
+		"currentCPUMetricType", metricFlags.ToCPUMetricType(),
+		"currentHighPriorityCPUUtilization", func() int {
 			if highPriorityMetrics != nil {
 				return highPriorityMetrics.CurrentHighPriorityCPUUtilization
 			}
 			return 0
 		}(),
-		"total cpu utilization", func() int {
+		"currentTotalCPUUtilization", func() int {
 			if totalMetrics != nil {
 				return totalMetrics.CurrentTotalCPUUtilization
 			}
@@ -349,6 +350,18 @@ func (s *syncer) syncResource(ctx context.Context) error {
 	return nil
 }
 
+// metricsTypeToCPUMetricType maps a metrics package MetricType to the
+// corresponding v1beta1 CPUMetricType. Keeping this mapping in syncer avoids
+// a cross-package import between metrics and v1beta1.
+func metricsTypeToCPUMetricType(t metrics.MetricType) spannerv1beta1.CPUMetricType {
+	switch t {
+	case metrics.MetricTypeTotal:
+		return spannerv1beta1.CPUMetricTypeTotal
+	default: // metrics.MetricTypeHighPriority
+		return spannerv1beta1.CPUMetricTypeHighPriority
+	}
+}
+
 func (s *syncer) getInstanceInfo(ctx context.Context, metricType metrics.MetricType) (*spanner.Instance, *metrics.InstanceMetrics, error) {
 	log := s.log
 	eg, ctx := errgroup.WithContext(ctx)
@@ -366,8 +379,8 @@ func (s *syncer) getInstanceInfo(ctx context.Context, metricType metrics.MetricT
 			return err
 		}
 		log.V(1).Info("successfully got spanner instance with spanner client",
-			"current processing units", instance.ProcessingUnits,
-			"instance state", instance.InstanceState,
+			"currentProcessingUnits", instance.ProcessingUnits,
+			"instanceState", instance.InstanceState,
 		)
 		return nil
 	})
@@ -380,8 +393,9 @@ func (s *syncer) getInstanceInfo(ctx context.Context, metricType metrics.MetricT
 			return err
 		}
 		log.V(1).Info("successfully got spanner instance metrics with metrics client",
-			"high priority cpu utilization", instanceMetrics.CurrentHighPriorityCPUUtilization,
-			"total cpu utilization", instanceMetrics.CurrentTotalCPUUtilization,
+			"currentCPUMetricType", metricsTypeToCPUMetricType(metricType),
+			"currentHighPriorityCPUUtilization", instanceMetrics.CurrentHighPriorityCPUUtilization,
+			"currentTotalCPUUtilization", instanceMetrics.CurrentTotalCPUUtilization,
 		)
 		return nil
 	})
@@ -414,8 +428,8 @@ func (s *syncer) getInstanceInfoDual(ctx context.Context) (*spanner.Instance, *m
 			return err
 		}
 		log.V(1).Info("successfully got spanner instance with spanner client",
-			"current processing units", instance.ProcessingUnits,
-			"instance state", instance.InstanceState,
+			"currentProcessingUnits", instance.ProcessingUnits,
+			"instanceState", instance.InstanceState,
 		)
 		return nil
 	})
@@ -428,7 +442,7 @@ func (s *syncer) getInstanceInfoDual(ctx context.Context) (*spanner.Instance, *m
 			return err
 		}
 		log.V(1).Info("successfully got high priority cpu metrics",
-			"high priority cpu utilization", highPriorityMetrics.CurrentHighPriorityCPUUtilization,
+			"currentHighPriorityCPUUtilization", highPriorityMetrics.CurrentHighPriorityCPUUtilization,
 		)
 		return nil
 	})
@@ -441,7 +455,7 @@ func (s *syncer) getInstanceInfoDual(ctx context.Context) (*spanner.Instance, *m
 			return err
 		}
 		log.V(1).Info("successfully got total cpu metrics",
-			"total cpu utilization", totalMetrics.CurrentTotalCPUUtilization,
+			"currentTotalCPUUtilization", totalMetrics.CurrentTotalCPUUtilization,
 		)
 		return nil
 	})

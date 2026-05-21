@@ -621,7 +621,12 @@ func (r *SpannerAutoscalerReconciler) needUpdateProcessingUnits(log logr.Logger,
 
 	switch {
 	case desiredProcessingUnits == currentProcessingUnits:
-		log.Info("no need to scale", "currentPU", currentProcessingUnits, "currentCPU", sa.Status.CurrentHighPriorityCPUUtilization)
+		log.Info("no need to scale",
+			"currentPU", currentProcessingUnits,
+			"currentCPUMetricType", sa.Status.CurrentCPUMetricType,
+			"currentHighPriorityCPUUtilization", sa.Status.CurrentHighPriorityCPUUtilization,
+			"currentTotalCPUUtilization", sa.Status.CurrentTotalCPUUtilization,
+		)
 		return false
 
 	case currentProcessingUnits < desiredProcessingUnits && r.clock.Now().Before(sa.Status.LastScaleTime.Time.Add(getOrConvertTimeDuration(sa.Spec.ScaleConfig.ScaleupInterval, r.scaleUpInterval))):
