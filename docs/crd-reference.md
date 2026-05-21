@@ -347,8 +347,8 @@ _Appears in:_
 | `desiredMinPUs` _integer_ | Minimum number of processing units based on the currently active schedules |  |  |
 | `desiredMaxPUs` _integer_ | Maximum number of processing units based on the currently active schedules |  |  |
 | `instanceState` _[InstanceState](#instancestate)_ | State of the Cloud Spanner instance |  |  |
-| `currentHighPriorityCPUUtilization` _integer_ | Current average CPU utilization for high priority task, represented as a percentage |  |  |
-| `currentTotalCPUUtilization` _integer_ | Current total CPU utilization (all priorities), represented as a percentage.<br />This field is populated only when spec.scaleConfig.targetCPUUtilization.total is specified. |  |  |
+| `currentHighPriorityCPUUtilization` _integer_ | Current average CPU utilization for high priority task, represented as a percentage.<br />In dual CPU scaling mode (both highPriority and total configured), this value is<br />fetched concurrently with currentTotalCPUUtilization. Because Cloud Monitoring<br />ingests the underlying metrics (utilization_by_priority and utilization) independently,<br />the two fields may briefly reflect different alignment windows and the relation<br />currentTotalCPUUtilization >= currentHighPriorityCPUUtilization is not guaranteed<br />on every sync. The autoscaling decision uses both values independently and takes<br />the larger required processing units, so the transient inconsistency does not cause<br />over-scaling down. |  |  |
+| `currentTotalCPUUtilization` _integer_ | Current total CPU utilization (all priorities), represented as a percentage.<br />This field is populated only when spec.scaleConfig.targetCPUUtilization.total is specified.<br />See the note on currentHighPriorityCPUUtilization for the consistency caveat in dual mode. |  |  |
 | `currentCPUMetricType` _[CPUMetricType](#cpumetrictype)_ | CurrentCPUMetricType is the CPU metric type that was used in the last sync cycle.<br />The controller uses this to detect metric-type switches and skip scaling until<br />the status reflects the newly configured metric type. |  | Enum: [HighPriority Total Both] <br /> |
 
 

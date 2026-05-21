@@ -366,6 +366,10 @@ func (s *syncer) getInstanceInfo(ctx context.Context, metricType metrics.MetricT
 	log := s.log
 	eg, ctx := errgroup.WithContext(ctx)
 
+	// Capture the base time once so the metrics query window is deterministic
+	// even if the goroutine starts a few milliseconds later.
+	now := s.clock.Now()
+
 	var (
 		instance        *spanner.Instance
 		instanceMetrics *metrics.InstanceMetrics
@@ -387,7 +391,7 @@ func (s *syncer) getInstanceInfo(ctx context.Context, metricType metrics.MetricT
 
 	eg.Go(func() error {
 		var err error
-		instanceMetrics, err = s.metricsClient.GetInstanceMetrics(ctx, metricType)
+		instanceMetrics, err = s.metricsClient.GetInstanceMetrics(ctx, metricType, now)
 		if err != nil {
 			log.Error(err, "unable to get spanner instance metrics with client")
 			return err
@@ -414,6 +418,12 @@ func (s *syncer) getInstanceInfoDual(ctx context.Context) (*spanner.Instance, *m
 	log := s.log
 	eg, ctx := errgroup.WithContext(ctx)
 
+	// Share a single base time between the two metric queries so they always
+	// target the same 60s alignment window. Without this, two independent
+	// clock reads can land on different sides of a minute boundary and cause
+	// the two CPU values to come from different aligned points.
+	now := s.clock.Now()
+
 	var (
 		instance            *spanner.Instance
 		highPriorityMetrics *metrics.InstanceMetrics
@@ -436,7 +446,7 @@ func (s *syncer) getInstanceInfoDual(ctx context.Context) (*spanner.Instance, *m
 
 	eg.Go(func() error {
 		var err error
-		highPriorityMetrics, err = s.metricsClient.GetInstanceMetrics(ctx, metrics.MetricTypeHighPriority)
+		highPriorityMetrics, err = s.metricsClient.GetInstanceMetrics(ctx, metrics.MetricTypeHighPriority, now)
 		if err != nil {
 			log.Error(err, "unable to get high priority cpu metrics")
 			return err
@@ -449,7 +459,7 @@ func (s *syncer) getInstanceInfoDual(ctx context.Context) (*spanner.Instance, *m
 
 	eg.Go(func() error {
 		var err error
-		totalMetrics, err = s.metricsClient.GetInstanceMetrics(ctx, metrics.MetricTypeTotal)
+		totalMetrics, err = s.metricsClient.GetInstanceMetrics(ctx, metrics.MetricTypeTotal, now)
 		if err != nil {
 			log.Error(err, "unable to get total cpu metrics")
 			return err

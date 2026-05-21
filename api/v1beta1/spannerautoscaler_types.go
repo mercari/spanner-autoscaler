@@ -307,11 +307,20 @@ type SpannerAutoscalerStatus struct {
 	// State of the Cloud Spanner instance
 	InstanceState InstanceState `json:"instanceState,omitempty"`
 
-	// Current average CPU utilization for high priority task, represented as a percentage
+	// Current average CPU utilization for high priority task, represented as a percentage.
+	// In dual CPU scaling mode (both highPriority and total configured), this value is
+	// fetched concurrently with currentTotalCPUUtilization. Because Cloud Monitoring
+	// ingests the underlying metrics (utilization_by_priority and utilization) independently,
+	// the two fields may briefly reflect different alignment windows and the relation
+	// currentTotalCPUUtilization >= currentHighPriorityCPUUtilization is not guaranteed
+	// on every sync. The autoscaling decision uses both values independently and takes
+	// the larger required processing units, so the transient inconsistency does not cause
+	// over-scaling down.
 	CurrentHighPriorityCPUUtilization int `json:"currentHighPriorityCPUUtilization,omitempty"`
 
 	// Current total CPU utilization (all priorities), represented as a percentage.
 	// This field is populated only when spec.scaleConfig.targetCPUUtilization.total is specified.
+	// See the note on currentHighPriorityCPUUtilization for the consistency caveat in dual mode.
 	CurrentTotalCPUUtilization int `json:"currentTotalCPUUtilization,omitempty"`
 
 	// CurrentCPUMetricType is the CPU metric type that was used in the last sync cycle.
