@@ -403,42 +403,52 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 		statusChanged = true
 	}
 
-	decision := calcDesiredProcessingUnits(sa)
+	desiredProcessingUnits := calcDesiredProcessingUnits(sa)
 
-	if now := r.clock.Now(); r.needUpdateProcessingUnits(log, &sa, decision.DesiredPU, now) {
+	if now := r.clock.Now(); r.needUpdateProcessingUnits(log, &sa, desiredProcessingUnits, now) {
+		// Targets are *int because a single-mode spec leaves one of them nil.
+		// Normalise to 0 for the log so consumers see "metric not active" as
+		// an explicit zero rather than tripping on a nil deref.
+		var highPriorityTarget, totalTarget int
+		if p := sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority; p != nil {
+			highPriorityTarget = *p
+		}
+		if p := sa.Spec.ScaleConfig.TargetCPUUtilization.Total; p != nil {
+			totalTarget = *p
+		}
 		log.V(1).Info("processing units need to be changed",
 			"currentPU", sa.Status.CurrentProcessingUnits,
-			"desiredPU", decision.DesiredPU,
+			"desiredPU", desiredProcessingUnits,
 			"currentCPUMetricType", sa.Status.CurrentCPUMetricType,
-			"desiredByHighPriority", decision.DesiredByHighPriority,
-			"desiredByTotal", decision.DesiredByTotal,
 			"currentHighPriorityCPUUtilization", sa.Status.CurrentHighPriorityCPUUtilization,
 			"currentTotalCPUUtilization", sa.Status.CurrentTotalCPUUtilization,
+			"highPriorityTarget", highPriorityTarget,
+			"totalTarget", totalTarget,
 		)
 
-		if err := syncer.UpdateInstance(ctx, decision.DesiredPU); err != nil {
+		if err := syncer.UpdateInstance(ctx, desiredProcessingUnits); err != nil {
 			r.recorder.Event(&sa, corev1.EventTypeWarning, "FailedUpdateInstance", err.Error())
 			log.Error(err, "failed to update spanner instance")
 			return ctrlreconcile.Result{}, err
 		}
 
 		r.recorder.Eventf(&sa, corev1.EventTypeNormal, "Updated",
-			"Updated processing units of %s/%s from %d to %d (currentCPUMetricType=%s, desiredByHighPriority=%d, desiredByTotal=%d, currentHighPriorityCPUUtilization=%d%%, currentTotalCPUUtilization=%d%%)",
+			"Updated processing units of %s/%s from %d to %d (currentCPUMetricType=%s, currentHighPriorityCPUUtilization=%d%%, currentTotalCPUUtilization=%d%%, highPriorityTarget=%d%%, totalTarget=%d%%)",
 			sa.Spec.TargetInstance.ProjectID, sa.Spec.TargetInstance.InstanceID,
-			sa.Status.CurrentProcessingUnits, decision.DesiredPU,
+			sa.Status.CurrentProcessingUnits, desiredProcessingUnits,
 			sa.Status.CurrentCPUMetricType,
-			decision.DesiredByHighPriority, decision.DesiredByTotal,
 			sa.Status.CurrentHighPriorityCPUUtilization, sa.Status.CurrentTotalCPUUtilization,
+			highPriorityTarget, totalTarget,
 		)
 
 		log.Info("updated processing units via google cloud api",
 			"before", sa.Status.CurrentProcessingUnits,
-			"after", decision.DesiredPU,
+			"after", desiredProcessingUnits,
 			"currentCPUMetricType", sa.Status.CurrentCPUMetricType,
-			"desiredByHighPriority", decision.DesiredByHighPriority,
-			"desiredByTotal", decision.DesiredByTotal,
 			"currentHighPriorityCPUUtilization", sa.Status.CurrentHighPriorityCPUUtilization,
 			"currentTotalCPUUtilization", sa.Status.CurrentTotalCPUUtilization,
+			"highPriorityTarget", highPriorityTarget,
+			"totalTarget", totalTarget,
 		)
 
 		statusChanged = true
@@ -446,7 +456,7 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 	}
 
 	if statusChanged {
-		sa.Status.DesiredProcessingUnits = decision.DesiredPU
+		sa.Status.DesiredProcessingUnits = desiredProcessingUnits
 
 		if err = r.ctrlClient.Status().Update(ctx, &sa); err != nil {
 			r.recorder.Event(&sa, corev1.EventTypeWarning, "FailedUpdateStatus", err.Error())
@@ -693,30 +703,14 @@ func (r *SpannerAutoscalerReconciler) needUpdateProcessingUnits(log logr.Logger,
 	return true
 }
 
-// scaleDecision bundles the chosen PU value together with the per-metric
-// candidates that produced it. The candidates are kept so that callers can log
-// the breakdown — in dual mode, a reader can identify which metric drove the
-// scale event by comparing DesiredByHighPriority and DesiredByTotal against
-// the final DesiredPU.
-type scaleDecision struct {
-	// DesiredPU is the processing-unit count to apply.
-	DesiredPU int
-	// DesiredByHighPriority is the PU candidate computed from
-	// CurrentHighPriorityCPUUtilization. Zero when HighPriority is not active.
-	DesiredByHighPriority int
-	// DesiredByTotal is the PU candidate computed from
-	// CurrentTotalCPUUtilization. Zero when Total is not active.
-	DesiredByTotal int
-}
-
 // calcDesiredProcessingUnits calculates the values needed to keep CPU utilization below TargetCPU.
-func calcDesiredProcessingUnits(sa spannerv1beta1.SpannerAutoscaler) scaleDecision {
+func calcDesiredProcessingUnits(sa spannerv1beta1.SpannerAutoscaler) int {
 	switch sa.Spec.ScaleConfig.TargetCPUUtilization.ActiveMetricFlags() {
 	case spannerv1beta1.CPUMetricFlagHighPriority | spannerv1beta1.CPUMetricFlagTotal:
 		// Dual mode: scale-out when either threshold is exceeded (OR condition).
 		// Guard: wait until syncer has populated both metrics in status.
 		if sa.Status.CurrentCPUMetricType != spannerv1beta1.CPUMetricTypeBoth {
-			return scaleDecision{DesiredPU: sa.Status.CurrentProcessingUnits}
+			return sa.Status.CurrentProcessingUnits
 		}
 		desiredByHigh := calcDesiredPUFromCPU(
 			sa.Status.CurrentHighPriorityCPUUtilization,
@@ -728,30 +722,21 @@ func calcDesiredProcessingUnits(sa spannerv1beta1.SpannerAutoscaler) scaleDecisi
 			*sa.Spec.ScaleConfig.TargetCPUUtilization.Total,
 			sa,
 		)
-		desiredPU := desiredByHigh
-		if desiredByTotal > desiredByHigh {
-			desiredPU = desiredByTotal
+		if desiredByHigh > desiredByTotal {
+			return desiredByHigh
 		}
-		return scaleDecision{
-			DesiredPU:             desiredPU,
-			DesiredByHighPriority: desiredByHigh,
-			DesiredByTotal:        desiredByTotal,
-		}
+		return desiredByTotal
 
 	case spannerv1beta1.CPUMetricFlagTotal:
 		// If the status was last synced for a different metric type, skip this reconcile.
 		if sa.Status.CurrentCPUMetricType != spannerv1beta1.CPUMetricTypeTotal {
-			return scaleDecision{DesiredPU: sa.Status.CurrentProcessingUnits}
+			return sa.Status.CurrentProcessingUnits
 		}
-		desiredByTotal := calcDesiredPUFromCPU(
+		return calcDesiredPUFromCPU(
 			sa.Status.CurrentTotalCPUUtilization,
 			*sa.Spec.ScaleConfig.TargetCPUUtilization.Total,
 			sa,
 		)
-		return scaleDecision{
-			DesiredPU:      desiredByTotal,
-			DesiredByTotal: desiredByTotal,
-		}
 
 	case spannerv1beta1.CPUMetricFlagHighPriority:
 		// If the status was last synced for a different metric type, the CPU value
@@ -759,22 +744,18 @@ func calcDesiredProcessingUnits(sa spannerv1beta1.SpannerAutoscaler) scaleDecisi
 		// Skip this reconcile; the syncer will update CurrentCPUMetricType within one
 		// sync cycle (≤1 minute).
 		if sa.Status.CurrentCPUMetricType != spannerv1beta1.CPUMetricTypeHighPriority {
-			return scaleDecision{DesiredPU: sa.Status.CurrentProcessingUnits}
+			return sa.Status.CurrentProcessingUnits
 		}
-		desiredByHigh := calcDesiredPUFromCPU(
+		return calcDesiredPUFromCPU(
 			sa.Status.CurrentHighPriorityCPUUtilization,
 			*sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority,
 			sa,
 		)
-		return scaleDecision{
-			DesiredPU:             desiredByHigh,
-			DesiredByHighPriority: desiredByHigh,
-		}
 
 	default:
 		// No metric configured — invalid spec that bypassed webhook validation,
 		// or malformed objects already existing in-cluster. Hold current PU.
-		return scaleDecision{DesiredPU: sa.Status.CurrentProcessingUnits}
+		return sa.Status.CurrentProcessingUnits
 	}
 }
 
