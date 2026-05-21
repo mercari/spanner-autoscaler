@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/mercari/spanner-autoscaler/internal/metrics"
 )
@@ -30,7 +31,7 @@ func TestMetricsClient_GetInstanceMetrics_Static(t *testing.T) {
 		t.Fatalf("failed to create metrics client: %v", err)
 	}
 
-	got, err := c.GetInstanceMetrics(ctx, metrics.MetricTypeHighPriority)
+	got, err := c.GetInstanceMetrics(ctx, metrics.MetricTypeHighPriority, time.Now())
 	if err != nil {
 		t.Fatalf("GetInstanceMetrics() error: %v", err)
 	}
@@ -50,7 +51,7 @@ func TestMetricsClient_GetInstanceMetrics_NotFound(t *testing.T) {
 		t.Fatalf("failed to create metrics client: %v", err)
 	}
 
-	_, err = c.GetInstanceMetrics(ctx, metrics.MetricTypeHighPriority)
+	_, err = c.GetInstanceMetrics(ctx, metrics.MetricTypeHighPriority, time.Now())
 	if err == nil {
 		t.Fatal("GetInstanceMetrics() expected error for unconfigured instance, got nil")
 	}

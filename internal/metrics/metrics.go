@@ -16,7 +16,6 @@ import (
 	"google.golang.org/api/option"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-	utilclock "k8s.io/utils/clock"
 )
 
 // MetricType represents which Cloud Monitoring metric to query.
@@ -51,7 +50,12 @@ type InstanceMetrics struct {
 // Client is a client for manipulation of InstanceMetrics.
 type Client interface {
 	// GetInstanceMetrics gets the instance metrics for the given metric type.
-	GetInstanceMetrics(ctx context.Context, metricType MetricType) (*InstanceMetrics, error)
+	// The now parameter is the reference time for the query window
+	// (StartTime = now - term, EndTime = now). Callers that issue several
+	// GetInstanceMetrics calls whose results need to align should pass the
+	// same now to each call so the underlying Cloud Monitoring queries hit
+	// the same alignment window.
+	GetInstanceMetrics(ctx context.Context, metricType MetricType, now time.Time) (*InstanceMetrics, error)
 }
 
 // client is a client for Stackdriver Monitoring.
@@ -65,8 +69,7 @@ type client struct {
 	endpoint    string
 	tokenSource oauth2.TokenSource
 
-	clock utilclock.Clock
-	log   logr.Logger
+	log logr.Logger
 }
 
 var _ Client = (*client)(nil)
@@ -91,12 +94,6 @@ func WithTokenSource(ts oauth2.TokenSource) Option {
 	}
 }
 
-func WithClock(clock utilclock.Clock) Option {
-	return func(c *client) {
-		c.clock = clock
-	}
-}
-
 func WithLog(log logr.Logger) Option {
 	return func(c *client) {
 		c.log = log.WithName("metrics")
@@ -109,7 +106,6 @@ func NewClient(ctx context.Context, projectID, instanceID string, opts ...Option
 		projectID:  projectID,
 		instanceID: instanceID,
 		term:       10 * time.Minute,
-		clock:      utilclock.RealClock{},
 		log:        logr.Discard(),
 	}
 
@@ -141,7 +137,7 @@ func NewClient(ctx context.Context, projectID, instanceID string, opts ...Option
 
 // GetInstanceMetrics implements Client.
 // https://cloud.google.com/monitoring/custom-metrics/reading-metrics#monitoring_read_timeseries_fields-go
-func (c *client) GetInstanceMetrics(ctx context.Context, metricType MetricType) (*InstanceMetrics, error) {
+func (c *client) GetInstanceMetrics(ctx context.Context, metricType MetricType, now time.Time) (*InstanceMetrics, error) {
 	log := c.log.WithValues("instance-id", c.instanceID, "project-id", c.projectID)
 
 	log.V(1).Info("getting monitoring time series data")
@@ -154,15 +150,16 @@ func (c *client) GetInstanceMetrics(ctx context.Context, metricType MetricType) 
 		filter = fmt.Sprintf(metricsFilterFormatHighPriority, c.instanceID)
 	}
 
+	nowUTC := now.UTC()
 	req := &monitoringpb.ListTimeSeriesRequest{
 		Name:   fmt.Sprintf("projects/%s", c.projectID),
 		Filter: filter,
 		Interval: &monitoringpb.TimeInterval{
 			StartTime: &timestamp.Timestamp{
-				Seconds: c.clock.Now().UTC().Add(-c.term).Unix(),
+				Seconds: nowUTC.Add(-c.term).Unix(),
 			},
 			EndTime: &timestamp.Timestamp{
-				Seconds: c.clock.Now().UTC().Unix(),
+				Seconds: nowUTC.Unix(),
 			},
 		},
 		Aggregation: &monitoringpb.Aggregation{

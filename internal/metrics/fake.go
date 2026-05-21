@@ -3,6 +3,7 @@ package metrics
 import (
 	"context"
 	"sync"
+	"time"
 )
 
 // FakeClient implements Client but operates fake objects for testing.
@@ -27,8 +28,9 @@ func NewFakeClient(metrics *InstanceMetrics) *FakeClient {
 // GetInstanceMetrics implements Client.
 // It returns a copy of the stored metrics with only the field corresponding to
 // metricType populated, mirroring the real client's behavior and preventing the
-// other field from masking bugs caused by stale values.
-func (c *FakeClient) GetInstanceMetrics(ctx context.Context, metricType MetricType) (*InstanceMetrics, error) {
+// other field from masking bugs caused by stale values. The now argument is
+// accepted to satisfy the Client interface and is otherwise ignored.
+func (c *FakeClient) GetInstanceMetrics(ctx context.Context, metricType MetricType, _ time.Time) (*InstanceMetrics, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	switch metricType {
