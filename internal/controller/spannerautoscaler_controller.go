@@ -416,6 +416,12 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 		if p := sa.Spec.ScaleConfig.TargetCPUUtilization.Total; p != nil {
 			totalTarget = *p
 		}
+		activeScheduleNames := make([]string, 0, len(sa.Status.CurrentlyActiveSchedules))
+		var scheduleAdditionalPU int
+		for _, as := range sa.Status.CurrentlyActiveSchedules {
+			activeScheduleNames = append(activeScheduleNames, as.ScheduleName)
+			scheduleAdditionalPU += as.AdditionalPU
+		}
 		log.V(1).Info("processing units need to be changed",
 			"currentPU", sa.Status.CurrentProcessingUnits,
 			"desiredPU", desiredProcessingUnits,
@@ -424,6 +430,8 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 			"currentTotalCPUUtilization", sa.Status.CurrentTotalCPUUtilization,
 			"highPriorityTarget", highPriorityTarget,
 			"totalTarget", totalTarget,
+			"activeSchedules", activeScheduleNames,
+			"scheduleAdditionalPU", scheduleAdditionalPU,
 		)
 
 		if err := syncer.UpdateInstance(ctx, desiredProcessingUnits); err != nil {
@@ -449,6 +457,8 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 			"currentTotalCPUUtilization", sa.Status.CurrentTotalCPUUtilization,
 			"highPriorityTarget", highPriorityTarget,
 			"totalTarget", totalTarget,
+			"activeSchedules", activeScheduleNames,
+			"scheduleAdditionalPU", scheduleAdditionalPU,
 		)
 
 		statusChanged = true
@@ -564,7 +574,11 @@ func pruneActiveSchedules(log logr.Logger, sa spannerv1beta1.SpannerAutoscaler) 
 	changed := false
 	for _, as := range sa.Status.CurrentlyActiveSchedules {
 		if _, found := findInArray(sa.Status.Schedules, as.ScheduleName); !found {
-			log.V(1).Info("removed currently active schedule", "ActiveSchedule", as)
+			log.Info("removed currently active schedule",
+				"schedule", as.ScheduleName,
+				"additionalPU", as.AdditionalPU,
+				"endTime", as.EndTime.Time,
+			)
 			changed = true
 			continue
 		}
