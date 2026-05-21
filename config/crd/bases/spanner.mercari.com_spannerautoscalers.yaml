@@ -477,8 +477,16 @@ spec:
                 - Both
                 type: string
               currentHighPriorityCPUUtilization:
-                description: Current average CPU utilization for high priority task,
-                  represented as a percentage
+                description: |-
+                  Current average CPU utilization for high priority task, represented as a percentage.
+                  In dual CPU scaling mode (both highPriority and total configured), this value is
+                  fetched concurrently with currentTotalCPUUtilization. Because Cloud Monitoring
+                  ingests the underlying metrics (utilization_by_priority and utilization) independently,
+                  the two fields may briefly reflect different alignment windows and the relation
+                  currentTotalCPUUtilization >= currentHighPriorityCPUUtilization is not guaranteed
+                  on every sync. The autoscaling decision uses both values independently and takes
+                  the larger required processing units, so the transient inconsistency does not cause
+                  over-scaling down.
                 type: integer
               currentProcessingUnits:
                 description: Current number of processing-units in the Spanner instance
@@ -487,6 +495,7 @@ spec:
                 description: |-
                   Current total CPU utilization (all priorities), represented as a percentage.
                   This field is populated only when spec.scaleConfig.targetCPUUtilization.total is specified.
+                  See the note on currentHighPriorityCPUUtilization for the consistency caveat in dual mode.
                 type: integer
               currentlyActiveSchedules:
                 description: List of all the schedules which are currently active
