@@ -3,6 +3,7 @@ package syncer
 import (
 	"context"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -222,6 +223,7 @@ func Test_syncer_getInstanceInfo(t *testing.T) {
 					l := zap.NewAtomicLevelAt(zap.DebugLevel)
 					return ctrlzap.New(ctrlzap.Level(&l))
 				}(),
+				clock: testingclock.NewFakeClock(time.Date(2020, 4, 1, 0, 0, 0, 0, time.Local)),
 			}
 
 			ctx := context.Background()
@@ -241,3 +243,59 @@ func Test_syncer_getInstanceInfo(t *testing.T) {
 }
 
 func intPtr(i int) *int { return &i }
+
+// recordingMetricsClient is a metrics.Client that records the now value each
+// GetInstanceMetrics call received, keyed by MetricType. Used to verify that
+// dual-mode metric queries share a single base time.
+type recordingMetricsClient struct {
+	mu    sync.Mutex
+	calls map[metrics.MetricType]time.Time
+}
+
+func (c *recordingMetricsClient) GetInstanceMetrics(_ context.Context, metricType metrics.MetricType, now time.Time) (*metrics.InstanceMetrics, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.calls == nil {
+		c.calls = map[metrics.MetricType]time.Time{}
+	}
+	c.calls[metricType] = now
+	switch metricType {
+	case metrics.MetricTypeTotal:
+		return &metrics.InstanceMetrics{CurrentTotalCPUUtilization: 10}, nil
+	default:
+		return &metrics.InstanceMetrics{CurrentHighPriorityCPUUtilization: 20}, nil
+	}
+}
+
+func Test_syncer_getInstanceInfoDual_sharesBaseTime(t *testing.T) {
+	rec := &recordingMetricsClient{}
+	fakeTime := time.Date(2020, 4, 1, 12, 34, 56, 0, time.UTC)
+	s := &syncer{
+		spannerClient: spanner.NewFakeClient(&spanner.Instance{
+			ProcessingUnits: 1000,
+			InstanceState:   spanner.StateReady,
+		}),
+		metricsClient: rec,
+		log: func() logr.Logger {
+			l := zap.NewAtomicLevelAt(zap.DebugLevel)
+			return ctrlzap.New(ctrlzap.Level(&l))
+		}(),
+		clock: testingclock.NewFakeClock(fakeTime),
+	}
+
+	if _, _, _, err := s.getInstanceInfoDual(context.Background()); err != nil {
+		t.Fatalf("getInstanceInfoDual() error: %v", err)
+	}
+
+	hp, okHP := rec.calls[metrics.MetricTypeHighPriority]
+	tot, okTotal := rec.calls[metrics.MetricTypeTotal]
+	if !okHP || !okTotal {
+		t.Fatalf("expected both metric types to be queried, got calls=%v", rec.calls)
+	}
+	if !hp.Equal(tot) {
+		t.Errorf("dual-mode calls received different now values: highPriority=%s total=%s", hp, tot)
+	}
+	if !hp.Equal(fakeTime) {
+		t.Errorf("now passed to GetInstanceMetrics = %s, want %s", hp, fakeTime)
+	}
+}
