@@ -406,7 +406,25 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 	desiredProcessingUnits := calcDesiredProcessingUnits(sa)
 
 	if now := r.clock.Now(); r.needUpdateProcessingUnits(log, &sa, desiredProcessingUnits, now) {
-		log.V(1).Info("processing units need to be changed", "desiredProcessingUnits", desiredProcessingUnits, "sa.Status", sa.Status)
+		// Targets are *int because a single-mode spec leaves one of them nil.
+		// Normalise to 0 for the log so consumers see "metric not active" as
+		// an explicit zero rather than tripping on a nil deref.
+		var highPriorityTarget, totalTarget int
+		if p := sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority; p != nil {
+			highPriorityTarget = *p
+		}
+		if p := sa.Spec.ScaleConfig.TargetCPUUtilization.Total; p != nil {
+			totalTarget = *p
+		}
+		log.V(1).Info("processing units need to be changed",
+			"currentPU", sa.Status.CurrentProcessingUnits,
+			"desiredPU", desiredProcessingUnits,
+			"currentCPUMetricType", sa.Status.CurrentCPUMetricType,
+			"currentHighPriorityCPUUtilization", sa.Status.CurrentHighPriorityCPUUtilization,
+			"currentTotalCPUUtilization", sa.Status.CurrentTotalCPUUtilization,
+			"highPriorityTarget", highPriorityTarget,
+			"totalTarget", totalTarget,
+		)
 
 		if err := syncer.UpdateInstance(ctx, desiredProcessingUnits); err != nil {
 			r.recorder.Event(&sa, corev1.EventTypeWarning, "FailedUpdateInstance", err.Error())
@@ -414,10 +432,24 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 			return ctrlreconcile.Result{}, err
 		}
 
-		r.recorder.Eventf(&sa, corev1.EventTypeNormal, "Updated", "Updated processing units of %s/%s from %d to %d", sa.Spec.TargetInstance.ProjectID, sa.Spec.TargetInstance.InstanceID,
-			sa.Status.CurrentProcessingUnits, desiredProcessingUnits)
+		r.recorder.Eventf(&sa, corev1.EventTypeNormal, "Updated",
+			"Updated processing units of %s/%s from %d to %d (currentCPUMetricType=%s, currentHighPriorityCPUUtilization=%d%%, currentTotalCPUUtilization=%d%%, highPriorityTarget=%d%%, totalTarget=%d%%)",
+			sa.Spec.TargetInstance.ProjectID, sa.Spec.TargetInstance.InstanceID,
+			sa.Status.CurrentProcessingUnits, desiredProcessingUnits,
+			sa.Status.CurrentCPUMetricType,
+			sa.Status.CurrentHighPriorityCPUUtilization, sa.Status.CurrentTotalCPUUtilization,
+			highPriorityTarget, totalTarget,
+		)
 
-		log.Info("updated processing units via google cloud api", "before", sa.Status.CurrentProcessingUnits, "after", desiredProcessingUnits)
+		log.Info("updated processing units via google cloud api",
+			"before", sa.Status.CurrentProcessingUnits,
+			"after", desiredProcessingUnits,
+			"currentCPUMetricType", sa.Status.CurrentCPUMetricType,
+			"currentHighPriorityCPUUtilization", sa.Status.CurrentHighPriorityCPUUtilization,
+			"currentTotalCPUUtilization", sa.Status.CurrentTotalCPUUtilization,
+			"highPriorityTarget", highPriorityTarget,
+			"totalTarget", totalTarget,
+		)
 
 		statusChanged = true
 		sa.Status.LastScaleTime = metav1.Time{Time: now}
