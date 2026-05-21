@@ -416,6 +416,11 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 		if p := sa.Spec.ScaleConfig.TargetCPUUtilization.Total; p != nil {
 			totalTarget = *p
 		}
+		// For logging only: summarize the schedules currently in effect.
+		// CurrentlyActiveSchedules contains only schedules whose cron has fired
+		// and whose EndTime has not yet passed (not every configured schedule).
+		// Overlapping active schedules stack additively — this mirrors how
+		// calcDesiredPURange folds AdditionalPU into the min/max PU range.
 		activeScheduleNames := make([]string, 0, len(sa.Status.CurrentlyActiveSchedules))
 		var scheduleAdditionalPU int
 		for _, as := range sa.Status.CurrentlyActiveSchedules {
