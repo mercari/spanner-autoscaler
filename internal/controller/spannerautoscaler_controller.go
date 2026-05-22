@@ -318,12 +318,7 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 				log.Info("removed scheduler")
 			}
 
-			r.mu.Lock()
-			if cached, ok := r.labelsCache[nnsa]; ok {
-				observability.DeleteSeries(cached)
-				delete(r.labelsCache, nnsa)
-			}
-			r.mu.Unlock()
+			r.updateLabelsCache(nnsa, nil)
 
 			return ctrlreconcile.Result{}, nil
 		} else {
@@ -332,16 +327,7 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 		}
 	}
 
-	// Refresh the labels cache. If project_id / instance_id changed on the
-	// same NamespacedName, clear the old series first so they do not linger
-	// as orphans on /metrics.
-	cur := observability.LabelsForAutoscaler(&sa)
-	r.mu.Lock()
-	if prev, ok := r.labelsCache[nnsa]; ok && prev != cur {
-		observability.DeleteSeries(prev)
-	}
-	r.labelsCache[nnsa] = cur
-	r.mu.Unlock()
+	r.updateLabelsCache(nnsa, &sa)
 
 	credentials, err := r.fetchCredentials(ctx, &sa)
 	if err != nil {
@@ -627,6 +613,30 @@ func pruneCronJobs(log logr.Logger, sa spannerv1beta1.SpannerAutoscaler, c *cron
 			log.V(1).Info("removed cron job", "cron", job.Cron, "schedule", entry.Name, "cronjob-count", len(c.Entries()))
 		}
 	}
+}
+
+// updateLabelsCache refreshes the cached identity labels for nnsa so that the
+// reconcile NotFound branch knows which series to clean up when sa.Spec is no
+// longer available. Passing sa == nil signals a deletion: any cached entry is
+// erased from /metrics. Otherwise the entry is refreshed, and if
+// spec.targetInstance (project_id / instance_id) changed on the same
+// NamespacedName, the previous series are erased first so they do not linger
+// as orphans.
+func (r *SpannerAutoscalerReconciler) updateLabelsCache(nnsa types.NamespacedName, sa *spannerv1beta1.SpannerAutoscaler) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if sa == nil {
+		if cached, ok := r.labelsCache[nnsa]; ok {
+			observability.DeleteSeries(cached)
+			delete(r.labelsCache, nnsa)
+		}
+		return
+	}
+	cur := observability.LabelsForAutoscaler(sa)
+	if prev, ok := r.labelsCache[nnsa]; ok && prev != cur {
+		observability.DeleteSeries(prev)
+	}
+	r.labelsCache[nnsa] = cur
 }
 
 // pruneActiveSchedules partitions sa.Status.CurrentlyActiveSchedules into
