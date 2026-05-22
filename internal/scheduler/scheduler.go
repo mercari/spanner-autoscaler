@@ -6,6 +6,7 @@ import (
 
 	"github.com/go-logr/logr"
 	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
+	"github.com/mercari/spanner-autoscaler/internal/observability"
 	cronpkg "github.com/netresearch/go-cron"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -84,8 +85,8 @@ func (s scheduler) Stop() {
 
 func (s scheduler) Update(ctx context.Context) error {
 	log := s.log.WithValues("autoscaler", s.namespacedName.String())
-	statusChanged := false
 	var autoscaler spannerv1beta1.SpannerAutoscaler
+	var expired []spannerv1beta1.ActiveSchedule
 
 	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 		if err := s.ctrlClient.Get(ctx, s.namespacedName, &autoscaler); err != nil {
@@ -93,12 +94,13 @@ func (s scheduler) Update(ctx context.Context) error {
 		}
 		log.V(1).Info("cleanup expired schedules", "autoscaler schedules", autoscaler.Status.Schedules, "autoscaler active schedules", autoscaler.Status.CurrentlyActiveSchedules)
 
-		autoscaler.Status.CurrentlyActiveSchedules, statusChanged = cleanupActiveSchedules(log, autoscaler.Status.CurrentlyActiveSchedules)
-
-		if statusChanged {
-			return s.ctrlClient.Status().Update(ctx, &autoscaler)
+		var kept []spannerv1beta1.ActiveSchedule
+		kept, expired = cleanupActiveSchedules(autoscaler.Status.CurrentlyActiveSchedules)
+		if len(expired) == 0 {
+			return nil
 		}
-		return nil
+		autoscaler.Status.CurrentlyActiveSchedules = kept
+		return s.ctrlClient.Status().Update(ctx, &autoscaler)
 	})
 	if err != nil {
 		// May be conflict if max retries were hit, or may be something unrelated
@@ -106,26 +108,39 @@ func (s scheduler) Update(ctx context.Context) error {
 		log.Error(err, "failed to update spanner-autoscaler status")
 		return err
 	}
-	return nil
-}
 
-func cleanupActiveSchedules(log logr.Logger, activeSchedules []spannerv1beta1.ActiveSchedule) ([]spannerv1beta1.ActiveSchedule, bool) {
-	changed := false
-	result := []spannerv1beta1.ActiveSchedule{}
-	now := metav1.Now()
-	for _, as := range activeSchedules {
-		if as.EndTime.Before(&now) {
-			changed = true
+	// Emit deactivation side effects only after the status update succeeded.
+	// cleanupActiveSchedules runs inside retry.RetryOnConflict, so doing this
+	// inline would multiply the log line and the deactivation counter on every
+	// conflict retry.
+	if len(expired) > 0 {
+		labels := observability.LabelsForAutoscaler(&autoscaler)
+		for _, as := range expired {
 			log.Info("scheduled scaling deactivated",
 				"schedule", as.ScheduleName,
 				"additionalPU", as.AdditionalPU,
 				"endTime", as.EndTime.Time,
 			)
+			observability.RecordScheduleDeactivation(labels, observability.ScheduleDeactivationExpired)
+		}
+	}
+	return nil
+}
+
+// cleanupActiveSchedules partitions activeSchedules into entries kept (still
+// within their EndTime window) and expired (past EndTime). The function is
+// intentionally side-effect free so callers can invoke it inside a retry
+// loop without re-emitting logs or metrics on each attempt.
+func cleanupActiveSchedules(activeSchedules []spannerv1beta1.ActiveSchedule) (kept, expired []spannerv1beta1.ActiveSchedule) {
+	now := metav1.Now()
+	for _, as := range activeSchedules {
+		if as.EndTime.Before(&now) {
+			expired = append(expired, as)
 			continue
 		}
-		result = append(result, as)
+		kept = append(kept, as)
 	}
-	return result, changed
+	return kept, expired
 }
 
 func (j Job) Run() {
@@ -179,6 +194,7 @@ func (j Job) Run() {
 			"endTime", cas.EndTime.Time,
 			"duration", sas.Spec.Schedule.Duration,
 		)
+		observability.RecordScheduleActivation(observability.LabelsForAutoscaler(&sa))
 	}
 	j.Log.V(1).Info("cron job is now over")
 }

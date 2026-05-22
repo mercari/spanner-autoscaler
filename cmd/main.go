@@ -30,6 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	ctrlmanager "sigs.k8s.io/controller-runtime/pkg/manager"
 	ctrlsignals "sigs.k8s.io/controller-runtime/pkg/manager/signals"
+	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	ctrlwebhook "sigs.k8s.io/controller-runtime/pkg/webhook"
 
@@ -38,6 +39,7 @@ import (
 
 	spannerv1alpha1 "github.com/mercari/spanner-autoscaler/api/v1alpha1"
 	"github.com/mercari/spanner-autoscaler/internal/controller"
+	"github.com/mercari/spanner-autoscaler/internal/observability"
 )
 
 var (
@@ -98,6 +100,11 @@ func main() {
 	cfg, err := config.GetConfig()
 	if err != nil {
 		setupLog.Error(err, "failed to get config")
+		os.Exit(exitCode)
+	}
+
+	if err := observability.Register(ctrlmetrics.Registry); err != nil {
+		setupLog.Error(err, "failed to register custom metrics")
 		os.Exit(exitCode)
 	}
 

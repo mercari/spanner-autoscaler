@@ -22,6 +22,7 @@ import (
 
 	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
 	"github.com/mercari/spanner-autoscaler/internal/metrics"
+	"github.com/mercari/spanner-autoscaler/internal/observability"
 	"github.com/mercari/spanner-autoscaler/internal/spanner"
 	"google.golang.org/api/impersonate"
 )
@@ -131,7 +132,12 @@ type syncer struct {
 	metricsClient metrics.Client
 
 	namespacedName types.NamespacedName
-	interval       time.Duration
+	// projectID and instanceID are cached so observability metrics can be
+	// emitted without an extra ctrlClient.Get of the SpannerAutoscaler on
+	// every Cloud Monitoring fetch.
+	projectID  string
+	instanceID string
+	interval   time.Duration
 
 	stopCh chan struct{}
 
@@ -168,6 +174,7 @@ func New(
 	ctx context.Context,
 	ctrlClient ctrlclient.Client,
 	namespacedName types.NamespacedName,
+	projectID, instanceID string,
 	credentials *Credentials,
 	recorder record.EventRecorder,
 	spannerClient spanner.Client,
@@ -181,6 +188,8 @@ func New(
 		spannerClient:  spannerClient,
 		metricsClient:  metricsClient,
 		namespacedName: namespacedName,
+		projectID:      projectID,
+		instanceID:     instanceID,
 		interval:       time.Minute,
 		stopCh:         make(chan struct{}),
 		log:            logr.Discard(),
@@ -230,6 +239,11 @@ func (s *syncer) Stop() {
 func (s *syncer) HasCredentials(credentials *Credentials) bool {
 	// TODO: Consider deepCopy
 	return reflect.DeepEqual(s.credentials, credentials)
+}
+
+// labels returns the observability identity labels for this syncer's target.
+func (s *syncer) labels() observability.Labels {
+	return observability.LabelsFor(s.namespacedName, s.projectID, s.instanceID)
 }
 
 // UpdateInstance updates the target Spanner instance withe the desired number of processing units
@@ -390,8 +404,10 @@ func (s *syncer) getInstanceInfo(ctx context.Context, metricType metrics.MetricT
 	})
 
 	eg.Go(func() error {
+		start := s.clock.Now()
 		var err error
 		instanceMetrics, err = s.metricsClient.GetInstanceMetrics(ctx, metricType, now)
+		observability.RecordMetricsFetch(s.labels(), s.clock.Now().Sub(start), err)
 		if err != nil {
 			log.Error(err, "unable to get spanner instance metrics with client")
 			return err
@@ -445,8 +461,10 @@ func (s *syncer) getInstanceInfoDual(ctx context.Context) (*spanner.Instance, *m
 	})
 
 	eg.Go(func() error {
+		start := s.clock.Now()
 		var err error
 		highPriorityMetrics, err = s.metricsClient.GetInstanceMetrics(ctx, metrics.MetricTypeHighPriority, now)
+		observability.RecordMetricsFetch(s.labels(), s.clock.Now().Sub(start), err)
 		if err != nil {
 			log.Error(err, "unable to get high priority cpu metrics")
 			return err
@@ -458,8 +476,10 @@ func (s *syncer) getInstanceInfoDual(ctx context.Context) (*spanner.Instance, *m
 	})
 
 	eg.Go(func() error {
+		start := s.clock.Now()
 		var err error
 		totalMetrics, err = s.metricsClient.GetInstanceMetrics(ctx, metrics.MetricTypeTotal, now)
+		observability.RecordMetricsFetch(s.labels(), s.clock.Now().Sub(start), err)
 		if err != nil {
 			log.Error(err, "unable to get total cpu metrics")
 			return err

@@ -88,7 +88,7 @@ func TestSyncer_SyncResource(t *testing.T) {
 
 	creds := syncer.NewADCCredentials()
 	recorder := record.NewFakeRecorder(100)
-	s, err := syncer.New(ctx, k8sClient, nn, creds, recorder, spannerClient, metricsClient,
+	s, err := syncer.New(ctx, k8sClient, nn, projectID, instanceID, creds, recorder, spannerClient, metricsClient,
 		syncer.WithInterval(2*time.Second),
 	)
 	if err != nil {
@@ -188,7 +188,7 @@ func TestSyncer_SyncResource_TotalOnly(t *testing.T) {
 
 	creds := syncer.NewADCCredentials()
 	recorder := record.NewFakeRecorder(100)
-	s, err := syncer.New(ctx, k8sClient, nn, creds, recorder, spannerClient, metricsClient,
+	s, err := syncer.New(ctx, k8sClient, nn, projectID, instanceID, creds, recorder, spannerClient, metricsClient,
 		syncer.WithInterval(2*time.Second),
 	)
 	if err != nil {
@@ -292,7 +292,7 @@ func TestSyncer_SyncResource_Dual(t *testing.T) {
 
 	creds := syncer.NewADCCredentials()
 	recorder := record.NewFakeRecorder(100)
-	s, err := syncer.New(ctx, k8sClient, nn, creds, recorder, spannerClient, metricsClient,
+	s, err := syncer.New(ctx, k8sClient, nn, projectID, instanceID, creds, recorder, spannerClient, metricsClient,
 		syncer.WithInterval(2*time.Second),
 	)
 	if err != nil {
