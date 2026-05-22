@@ -407,8 +407,9 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 		pruneCronJobs(log, sa, c)
 	}
 
-	if newActiveSchedules, updated := pruneActiveSchedules(log, sa); updated {
-		sa.Status.CurrentlyActiveSchedules = newActiveSchedules
+	keptActiveSchedules, droppedActiveSchedules := pruneActiveSchedules(sa)
+	if len(droppedActiveSchedules) > 0 {
+		sa.Status.CurrentlyActiveSchedules = keptActiveSchedules
 		statusChanged = true
 	}
 
@@ -513,6 +514,23 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 			log.Error(err, "failed to update spanner autoscaler status")
 			return ctrlreconcile.Result{}, err
 		}
+
+		// Emit prune side effects only after the status update has been
+		// persisted. Doing so inside pruneActiveSchedules would re-fire on
+		// every reconcile until the status write eventually succeeds, since
+		// CurrentlyActiveSchedules still contains the orphan entries until
+		// then.
+		if len(droppedActiveSchedules) > 0 {
+			labels := observability.LabelsForAutoscaler(&sa)
+			for _, as := range droppedActiveSchedules {
+				log.Info("removed currently active schedule",
+					"schedule", as.ScheduleName,
+					"additionalPU", as.AdditionalPU,
+					"endTime", as.EndTime.Time,
+				)
+				observability.RecordScheduleDeactivation(labels, observability.ScheduleDeactivationUnregistered)
+			}
+		}
 	}
 
 	observability.RecordState(&sa)
@@ -611,24 +629,21 @@ func pruneCronJobs(log logr.Logger, sa spannerv1beta1.SpannerAutoscaler, c *cron
 	}
 }
 
-func pruneActiveSchedules(log logr.Logger, sa spannerv1beta1.SpannerAutoscaler) ([]spannerv1beta1.ActiveSchedule, bool) {
-	result := []spannerv1beta1.ActiveSchedule{}
-	changed := false
-	labels := observability.LabelsForAutoscaler(&sa)
+// pruneActiveSchedules partitions sa.Status.CurrentlyActiveSchedules into
+// entries kept (their ScheduleName is still registered on the autoscaler) and
+// dropped (the SpannerAutoscaleSchedule resource is no longer registered).
+// The function is intentionally side-effect free so callers can decide when
+// to emit logs and counters — emitting inline here would double-count when
+// the subsequent Status().Update fails and the reconcile is requeued.
+func pruneActiveSchedules(sa spannerv1beta1.SpannerAutoscaler) (kept, dropped []spannerv1beta1.ActiveSchedule) {
 	for _, as := range sa.Status.CurrentlyActiveSchedules {
 		if _, found := findInArray(sa.Status.Schedules, as.ScheduleName); !found {
-			log.Info("removed currently active schedule",
-				"schedule", as.ScheduleName,
-				"additionalPU", as.AdditionalPU,
-				"endTime", as.EndTime.Time,
-			)
-			observability.RecordScheduleDeactivation(labels, observability.ScheduleDeactivationUnregistered)
-			changed = true
+			dropped = append(dropped, as)
 			continue
 		}
-		result = append(result, as)
+		kept = append(kept, as)
 	}
-	return result, changed
+	return kept, dropped
 }
 
 // TODO: move this (and other similar functions) to 'internal/util' package
