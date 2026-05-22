@@ -6,6 +6,7 @@ import (
 
 	"github.com/go-logr/logr"
 	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
+	"github.com/mercari/spanner-autoscaler/internal/observability"
 	cronpkg "github.com/netresearch/go-cron"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -93,7 +94,8 @@ func (s scheduler) Update(ctx context.Context) error {
 		}
 		log.V(1).Info("cleanup expired schedules", "autoscaler schedules", autoscaler.Status.Schedules, "autoscaler active schedules", autoscaler.Status.CurrentlyActiveSchedules)
 
-		autoscaler.Status.CurrentlyActiveSchedules, statusChanged = cleanupActiveSchedules(autoscaler.Status.CurrentlyActiveSchedules)
+		labels := observability.LabelsForAutoscaler(&autoscaler)
+		autoscaler.Status.CurrentlyActiveSchedules, statusChanged = cleanupActiveSchedules(labels, autoscaler.Status.CurrentlyActiveSchedules)
 
 		if statusChanged {
 			return s.ctrlClient.Status().Update(ctx, &autoscaler)
@@ -109,13 +111,14 @@ func (s scheduler) Update(ctx context.Context) error {
 	return nil
 }
 
-func cleanupActiveSchedules(activeSchedules []spannerv1beta1.ActiveSchedule) ([]spannerv1beta1.ActiveSchedule, bool) {
+func cleanupActiveSchedules(labels observability.Labels, activeSchedules []spannerv1beta1.ActiveSchedule) ([]spannerv1beta1.ActiveSchedule, bool) {
 	changed := false
 	result := []spannerv1beta1.ActiveSchedule{}
 	now := metav1.Now()
 	for _, as := range activeSchedules {
 		if as.EndTime.Before(&now) {
 			changed = true
+			observability.RecordScheduleDeactivation(labels, observability.ScheduleDeactivationExpired)
 			continue
 		}
 		result = append(result, as)
@@ -167,6 +170,8 @@ func (j Job) Run() {
 		// May be conflict if max retries were hit, or may be something unrelated
 		// like permissions or a network error
 		j.Log.Error(err, "failed to update spanner-autoscaler status for CurrentlyActiveSchedules")
+	} else {
+		observability.RecordScheduleActivation(observability.LabelsForAutoscaler(&sa))
 	}
 	j.Log.V(1).Info("cron job is now over")
 }

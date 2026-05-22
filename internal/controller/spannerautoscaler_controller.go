@@ -42,6 +42,7 @@ import (
 	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
 	"github.com/mercari/spanner-autoscaler/internal/cron"
 	"github.com/mercari/spanner-autoscaler/internal/metrics"
+	"github.com/mercari/spanner-autoscaler/internal/observability"
 	schedulerpkg "github.com/mercari/spanner-autoscaler/internal/scheduler"
 	"github.com/mercari/spanner-autoscaler/internal/spanner"
 	syncerpkg "github.com/mercari/spanner-autoscaler/internal/syncer"
@@ -66,6 +67,11 @@ type SpannerAutoscalerReconciler struct {
 	syncers    map[types.NamespacedName]syncerpkg.Syncer
 	crons      map[types.NamespacedName]*cronpkg.Cron
 	schedulers map[types.NamespacedName]schedulerpkg.Scheduler
+	// labelsCache remembers the most recently observed identity labels per
+	// SpannerAutoscaler so that DeleteSeries can be called on the NotFound
+	// branch (when sa.Spec is no longer available) and on spec changes that
+	// alter project_id / instance_id (to avoid leaving orphan series).
+	labelsCache map[types.NamespacedName]observability.Labels
 
 	scaleDownInterval time.Duration
 	scaleUpInterval   time.Duration
@@ -250,6 +256,7 @@ func NewSpannerAutoscalerReconciler(
 		syncers:           make(map[types.NamespacedName]syncerpkg.Syncer),
 		schedulers:        make(map[types.NamespacedName]schedulerpkg.Scheduler),
 		crons:             make(map[types.NamespacedName]*cronpkg.Cron),
+		labelsCache:       make(map[types.NamespacedName]observability.Labels),
 		scaleDownInterval: 55 * time.Minute,
 		scaleUpInterval:   60 * time.Second,
 		clock:             utilclock.RealClock{},
@@ -311,12 +318,30 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 				log.Info("removed scheduler")
 			}
 
+			r.mu.Lock()
+			if cached, ok := r.labelsCache[nnsa]; ok {
+				observability.DeleteSeries(cached)
+				delete(r.labelsCache, nnsa)
+			}
+			r.mu.Unlock()
+
 			return ctrlreconcile.Result{}, nil
 		} else {
 			log.Error(err, "failed to get spanner-autoscaler")
 			return ctrlreconcile.Result{}, err
 		}
 	}
+
+	// Refresh the labels cache. If project_id / instance_id changed on the
+	// same NamespacedName, clear the old series first so they do not linger
+	// as orphans on /metrics.
+	cur := observability.LabelsForAutoscaler(&sa)
+	r.mu.Lock()
+	if prev, ok := r.labelsCache[nnsa]; ok && prev != cur {
+		observability.DeleteSeries(prev)
+	}
+	r.labelsCache[nnsa] = cur
+	r.mu.Unlock()
 
 	credentials, err := r.fetchCredentials(ctx, &sa)
 	if err != nil {
@@ -389,11 +414,13 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 
 	if sa.Status.InstanceState != spanner.StateReady {
 		log.Info("instance state is not ready")
+		observability.RecordScaleSkipped(observability.LabelsForAutoscaler(&sa), observability.SkipReasonInstanceNotReady)
 		return ctrlreconcile.Result{}, nil
 	}
 
 	if sa.Status.CurrentProcessingUnits == 0 {
 		log.Info("current processing units have not fetched yet")
+		observability.RecordScaleSkipped(observability.LabelsForAutoscaler(&sa), observability.SkipReasonCPUNotReady)
 		return ctrlreconcile.Result{}, nil
 	}
 
@@ -426,11 +453,19 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 			"totalTarget", totalTarget,
 		)
 
-		if err := syncer.UpdateInstance(ctx, desiredProcessingUnits); err != nil {
-			r.recorder.Event(&sa, corev1.EventTypeWarning, "FailedUpdateInstance", err.Error())
-			log.Error(err, "failed to update spanner instance")
-			return ctrlreconcile.Result{}, err
+		labels := observability.LabelsForAutoscaler(&sa)
+		updateStart := r.clock.Now()
+		updateErr := syncer.UpdateInstance(ctx, desiredProcessingUnits)
+		observability.RecordInstanceUpdate(labels, r.clock.Now().Sub(updateStart), updateErr)
+		if updateErr != nil {
+			r.recorder.Event(&sa, corev1.EventTypeWarning, "FailedUpdateInstance", updateErr.Error())
+			log.Error(updateErr, "failed to update spanner instance")
+			return ctrlreconcile.Result{}, updateErr
 		}
+		observability.RecordScaleEvent(labels,
+			sa.Status.CurrentProcessingUnits, desiredProcessingUnits,
+			scaleDriver(&sa, desiredProcessingUnits),
+		)
 
 		r.recorder.Eventf(&sa, corev1.EventTypeNormal, "Updated",
 			"Updated processing units of %s/%s from %d to %d (currentCPUMetricType=%s, currentHighPriorityCPUUtilization=%d%%, currentTotalCPUUtilization=%d%%, highPriorityTarget=%d%%, totalTarget=%d%%)",
@@ -464,6 +499,8 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 			return ctrlreconcile.Result{}, err
 		}
 	}
+
+	observability.RecordState(&sa)
 
 	return ctrlreconcile.Result{}, nil
 }
@@ -562,9 +599,11 @@ func pruneCronJobs(log logr.Logger, sa spannerv1beta1.SpannerAutoscaler, c *cron
 func pruneActiveSchedules(log logr.Logger, sa spannerv1beta1.SpannerAutoscaler) ([]spannerv1beta1.ActiveSchedule, bool) {
 	result := []spannerv1beta1.ActiveSchedule{}
 	changed := false
+	labels := observability.LabelsForAutoscaler(&sa)
 	for _, as := range sa.Status.CurrentlyActiveSchedules {
 		if _, found := findInArray(sa.Status.Schedules, as.ScheduleName); !found {
 			log.V(1).Info("removed currently active schedule", "ActiveSchedule", as)
+			observability.RecordScheduleDeactivation(labels, observability.ScheduleDeactivationUnregistered)
 			changed = true
 			continue
 		}
@@ -633,7 +672,7 @@ func (r *SpannerAutoscalerReconciler) startSyncer(ctx context.Context, log logr.
 		syncerOpts = append(syncerOpts, syncerpkg.WithInterval(r.syncInterval))
 	}
 
-	s, err := syncerpkg.New(ctx, r.ctrlClient, nn, credentials, r.recorder, spannerClient, metricsClient, syncerOpts...)
+	s, err := syncerpkg.New(ctx, r.ctrlClient, nn, projectID, instanceID, credentials, r.recorder, spannerClient, metricsClient, syncerOpts...)
 	if err != nil {
 		return err
 	}
@@ -650,6 +689,7 @@ func (r *SpannerAutoscalerReconciler) startSyncer(ctx context.Context, log logr.
 
 func (r *SpannerAutoscalerReconciler) needUpdateProcessingUnits(log logr.Logger, sa *spannerv1beta1.SpannerAutoscaler, desiredProcessingUnits int, now time.Time) bool {
 	currentProcessingUnits := sa.Status.CurrentProcessingUnits
+	labels := observability.LabelsForAutoscaler(sa)
 
 	switch {
 	case desiredProcessingUnits == currentProcessingUnits:
@@ -659,6 +699,7 @@ func (r *SpannerAutoscalerReconciler) needUpdateProcessingUnits(log logr.Logger,
 			"currentHighPriorityCPUUtilization", sa.Status.CurrentHighPriorityCPUUtilization,
 			"currentTotalCPUUtilization", sa.Status.CurrentTotalCPUUtilization,
 		)
+		observability.RecordScaleSkipped(labels, observability.SkipReasonSame)
 		return false
 
 	case currentProcessingUnits < desiredProcessingUnits && r.clock.Now().Before(sa.Status.LastScaleTime.Time.Add(getOrConvertTimeDuration(sa.Spec.ScaleConfig.ScaleupInterval, r.scaleUpInterval))):
@@ -669,6 +710,7 @@ func (r *SpannerAutoscalerReconciler) needUpdateProcessingUnits(log logr.Logger,
 			"currentPU", currentProcessingUnits,
 			"desiredPU", desiredProcessingUnits,
 		)
+		observability.RecordScaleSkipped(labels, observability.SkipReasonScaleUpInterval)
 		return false
 
 	case desiredProcessingUnits < currentProcessingUnits && r.clock.Now().Before(sa.Status.LastScaleTime.Time.Add(getOrConvertTimeDuration(sa.Spec.ScaleConfig.ScaledownInterval, r.scaleDownInterval))):
@@ -679,6 +721,7 @@ func (r *SpannerAutoscalerReconciler) needUpdateProcessingUnits(log logr.Logger,
 			"currentPU", currentProcessingUnits,
 			"desiredPU", desiredProcessingUnits,
 		)
+		observability.RecordScaleSkipped(labels, observability.SkipReasonScaleDownInterval)
 		return false
 
 	case desiredProcessingUnits < currentProcessingUnits:
@@ -696,6 +739,7 @@ func (r *SpannerAutoscalerReconciler) needUpdateProcessingUnits(log logr.Logger,
 				"scaledownAllowedTimes", sa.Spec.ScaleConfig.ScaledownAllowedTimes,
 				"scaledownNotAllowedTimes", sa.Spec.ScaleConfig.ScaledownNotAllowedTimes,
 			)
+			observability.RecordScaleSkipped(labels, observability.SkipReasonScaleDownWindow)
 			return false
 		}
 	}
@@ -858,6 +902,49 @@ func calcDesiredPUFromCPU(currentCPU, targetCPU int, sa spannerv1beta1.SpannerAu
 	}
 
 	return desiredPU
+}
+
+// scaleDriver attributes the chosen desired PU to one of the available
+// drivers (CPU metric or schedule). Used by RecordScaleEvent to label
+// the scale_events_total counter. The attribution is best-effort and not
+// load-bearing for control flow: in particular, scale-down events caused
+// by the upper schedule bound shrinking are still reported as CPU-driven
+// since no symmetric Status field tracks the upper schedule contribution
+// separately.
+func scaleDriver(sa *spannerv1beta1.SpannerAutoscaler, after int) string {
+	// Schedule attribution: the desired value sits on a min floor that the
+	// user's spec.processingUnits.min alone would not have created.
+	if sa.Status.DesiredMinPUs > sa.Spec.ScaleConfig.ProcessingUnits.Min && after == sa.Status.DesiredMinPUs {
+		return observability.DriverSchedule
+	}
+
+	switch sa.Spec.ScaleConfig.TargetCPUUtilization.ActiveMetricFlags() {
+	case spannerv1beta1.CPUMetricFlagHighPriority:
+		return observability.DriverCPUHighPriority
+	case spannerv1beta1.CPUMetricFlagTotal:
+		return observability.DriverCPUTotal
+	case spannerv1beta1.CPUMetricFlagHighPriority | spannerv1beta1.CPUMetricFlagTotal:
+		// Recompute the per-metric candidates the same way calcDesiredProcessingUnits
+		// does internally; the larger candidate is the one that drove the decision.
+		desiredByHigh := calcDesiredPUFromCPU(
+			sa.Status.CurrentHighPriorityCPUUtilization,
+			*sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority,
+			*sa,
+		)
+		desiredByTotal := calcDesiredPUFromCPU(
+			sa.Status.CurrentTotalCPUUtilization,
+			*sa.Spec.ScaleConfig.TargetCPUUtilization.Total,
+			*sa,
+		)
+		if desiredByHigh >= desiredByTotal {
+			return observability.DriverCPUHighPriority
+		}
+		return observability.DriverCPUTotal
+	default:
+		// Unreachable on a webhook-validated spec; fall back to the historical
+		// default before the total-only mode existed.
+		return observability.DriverCPUHighPriority
+	}
 }
 
 func calcDesiredPURange(sa spannerv1beta1.SpannerAutoscaler) (int, int, bool) {

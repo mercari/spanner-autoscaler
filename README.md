@@ -450,6 +450,82 @@ Following are some other advanced methods which can also be used for GCP authent
 </details>
 
 
+## Metrics
+
+The controller exposes custom Prometheus metrics on the standard controller-runtime `/metrics` endpoint (bound to `--metrics-bind-address`, default `127.0.0.1:8080`). All business metrics carry the four identity labels `namespace`, `name`, `project_id`, `instance_id` so they can be sliced by either the Kubernetes resource identity or the target Spanner instance.
+
+The endpoint can be scraped by Prometheus (`ServiceMonitor` / `PodMonitor`), the Datadog Agent's OpenMetrics check, VictoriaMetrics, Grafana Cloud, or any tool that consumes the Prometheus exposition format. No vendor-specific SDK is required.
+
+### Available metrics
+
+#### State (Gauge)
+
+| Name | Extra labels | Description |
+|---|---|---|
+| `spanner_autoscaler_current_processing_units` | — | Current Spanner processing units. |
+| `spanner_autoscaler_desired_processing_units` | — | Desired processing units computed in the latest reconcile. |
+| `spanner_autoscaler_min_processing_units` | — | Configured `spec.scaleConfig.processingUnits.min`. |
+| `spanner_autoscaler_max_processing_units` | — | Configured `spec.scaleConfig.processingUnits.max`. |
+| `spanner_autoscaler_effective_min_processing_units` | — | Effective lower bound including additions from currently active schedules. |
+| `spanner_autoscaler_effective_max_processing_units` | — | Effective upper bound including additions from currently active schedules. |
+| `spanner_autoscaler_cpu_utilization` | `type=high_priority\|total` | Current CPU utilization percentage (0–100) per metric type. |
+| `spanner_autoscaler_cpu_utilization_target` | `type=high_priority\|total` | Configured target CPU utilization percentage. |
+| `spanner_autoscaler_instance_ready` | — | `1` when the Spanner instance state is `ready`, `0` otherwise. |
+| `spanner_autoscaler_active_schedules` | — | Number of `SpannerAutoscaleSchedule` entries currently in effect. |
+| `spanner_autoscaler_active_schedule_additional_pu` | — | Sum of `AdditionalPU` contributed by currently active schedules. |
+| `spanner_autoscaler_last_scale_timestamp_seconds` | — | Unix timestamp of the last successful processing-units update. |
+| `spanner_autoscaler_last_sync_timestamp_seconds` | — | Unix timestamp of the last successful Cloud Monitoring sync. |
+
+#### Scaling events
+
+| Name | Type | Extra labels | Description |
+|---|---|---|---|
+| `spanner_autoscaler_scale_events_total` | Counter | `direction=up\|down`, `driver=cpu_high_priority\|cpu_total\|schedule` | Successful processing-units updates. The `driver` label is a best-effort attribution to the metric (or schedule floor) that drove the decision. |
+| `spanner_autoscaler_scale_skipped_total` | Counter | `reason` | Reconciles where scaling was skipped. Reasons: `same`, `scale_up_interval`, `scale_down_interval`, `scale_down_window`, `instance_not_ready`, `cpu_not_ready`. |
+| `spanner_autoscaler_scale_pu_delta` | Histogram | `direction=up\|down` | Absolute processing-units change per scale event. Buckets: 100, 200, 500, 1000, 2000, 5000, 10000, 20000. |
+
+#### Scheduled scaling
+
+| Name | Extra labels | Description |
+|---|---|---|
+| `spanner_autoscaler_schedule_activations_total` | — | Number of cron firings that created an `ActiveSchedule` entry. |
+| `spanner_autoscaler_schedule_deactivations_total` | `reason=expired\|unregistered` | Number of `ActiveSchedule` entries removed (by `EndTime` expiry or by schedule resource deletion). |
+
+#### Operational (API quality)
+
+| Name | Type | Extra labels | Description |
+|---|---|---|---|
+| `spanner_autoscaler_instance_update_total` | Counter | `result=success\|error` | Spanner `UpdateInstance` API call count. |
+| `spanner_autoscaler_instance_update_duration_seconds` | Histogram | — | Latency of `UpdateInstance` calls. Buckets: 0.1, 0.5, 1, 2, 5, 10, 30, 60. |
+| `spanner_autoscaler_metrics_fetch_total` | Counter | `result=success\|error` | Cloud Monitoring `GetInstanceMetrics` call count. |
+| `spanner_autoscaler_metrics_fetch_duration_seconds` | Histogram | — | Latency of Cloud Monitoring fetches. Buckets: 0.05, 0.1, 0.25, 0.5, 1, 2, 5. |
+
+The standard controller-runtime metrics (`controller_runtime_reconcile_*`, `workqueue_*`) and Go runtime metrics are also exposed on the same endpoint and are not duplicated here.
+
+### Example PromQL queries
+
+```promql
+# Gap between desired and current PU (scaling lag).
+spanner_autoscaler_desired_processing_units - spanner_autoscaler_current_processing_units
+
+# UpdateInstance error rate over the last 5 minutes.
+sum(rate(spanner_autoscaler_instance_update_total{result="error"}[5m]))
+  /
+sum(rate(spanner_autoscaler_instance_update_total[5m]))
+
+# Scale-up frequency by driver over the last hour.
+sum by (driver) (rate(spanner_autoscaler_scale_events_total{direction="up"}[1h]))
+
+# Cloud Monitoring fetch p99 latency.
+histogram_quantile(0.99, sum by (le) (rate(spanner_autoscaler_metrics_fetch_duration_seconds_bucket[5m])))
+
+# Autoscalers pinned at their effective max for 5+ minutes.
+max_over_time(
+  (spanner_autoscaler_current_processing_units
+    == bool spanner_autoscaler_effective_max_processing_units)[5m:1m]
+) == 1
+```
+
 ## Development and Contribution
 
 See [docs/development.md](docs/development.md) and [CONTRIBUTING.md](.github/CONTRIBUTING.md) respectively.
