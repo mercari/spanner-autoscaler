@@ -2,11 +2,20 @@ package observability
 
 import (
 	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	dto "github.com/prometheus/client_model/go"
+	"github.com/prometheus/common/expfmt"
+	"github.com/prometheus/common/model"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
@@ -289,6 +298,142 @@ func TestDeleteSeries(t *testing.T) {
 
 	// Clean up the lazily-created zero series so other tests are unaffected.
 	DeleteSeries(l)
+}
+
+// TestMetricsHTTPExposition exercises the full chain — Register, Record*, and
+// HTTP exposition through promhttp.Handler — that the controller binary uses
+// at runtime. It avoids depending on envtest by standing up a dedicated
+// registry and an httptest server.
+//
+// To stay robust against metric additions / bucket changes / value tweaks,
+// this test asserts invariants rather than literal lines:
+//
+//  1. Every metric family populated through the registry is also reachable
+//     via the HTTP /metrics endpoint (discovery via reg.Gather, not a
+//     hardcoded list — adding a new collector to allCollectors() and
+//     calling its Record* helper below is enough).
+//  2. Every series of every spanner_autoscaler_* family carries the four
+//     identity labels with the values we recorded.
+//
+// When a new Record* helper is introduced, append a call to it in the
+// "drive samples" block; no other test edits are required.
+func TestMetricsHTTPExposition(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	if err := Register(reg); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	l := labelsFor("http")
+	teardown(t, l)
+
+	// Drive one sample through every Record* path so every metric family
+	// ends up populated. The specific values do not matter for the
+	// invariant assertions below.
+	high := 40
+	sa := &spannerv1beta1.SpannerAutoscaler{
+		ObjectMeta: metav1.ObjectMeta{Namespace: l.Namespace, Name: l.Name},
+		Spec: spannerv1beta1.SpannerAutoscalerSpec{
+			TargetInstance: spannerv1beta1.TargetInstance{ProjectID: l.ProjectID, InstanceID: l.InstanceID},
+			ScaleConfig: spannerv1beta1.ScaleConfig{
+				ProcessingUnits: spannerv1beta1.ScaleConfigPUs{Min: 200, Max: 7000},
+				TargetCPUUtilization: spannerv1beta1.TargetCPUUtilization{
+					HighPriority: &high,
+				},
+			},
+		},
+		Status: spannerv1beta1.SpannerAutoscalerStatus{
+			CurrentProcessingUnits:            2000,
+			DesiredProcessingUnits:            3000,
+			DesiredMinPUs:                     200,
+			DesiredMaxPUs:                     7000,
+			CurrentHighPriorityCPUUtilization: 55,
+			InstanceState:                     spannerv1beta1.InstanceStateReady,
+		},
+	}
+	RecordState(sa)
+	RecordScaleEvent(l, 2000, 3000, DriverCPUHighPriority)
+	RecordScaleSkipped(l, SkipReasonScaleUpInterval)
+	RecordScheduleActivation(l)
+	RecordScheduleDeactivation(l, ScheduleDeactivationExpired)
+	RecordInstanceUpdate(l, 250*time.Millisecond, nil)
+	RecordMetricsFetch(l, 80*time.Millisecond, nil)
+
+	srv := httptest.NewServer(promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/metrics") //nolint:noctx
+	if err != nil {
+		t.Fatalf("GET /metrics: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /metrics: status %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read /metrics body: %v", err)
+	}
+
+	parser := expfmt.NewTextParser(model.UTF8Validation)
+	httpFamilies, err := parser.TextToMetricFamilies(strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatalf("parse exposition: %v", err)
+	}
+
+	gathered, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("Gather: %v", err)
+	}
+
+	for _, want := range gathered {
+		name := want.GetName()
+		if !strings.HasPrefix(name, "spanner_autoscaler_") {
+			// Skip standard process_* / go_* families that promhttp adds.
+			continue
+		}
+		got, ok := httpFamilies[name]
+		if !ok {
+			t.Errorf("metric %q present in registry but missing from /metrics body", name)
+			continue
+		}
+		for _, m := range got.GetMetric() {
+			if missing := missingIdentityLabels(m.GetLabel(), l); len(missing) > 0 {
+				t.Errorf("metric %q series missing identity labels %v: {%s}",
+					name, missing, formatLabels(m.GetLabel()))
+			}
+		}
+	}
+}
+
+// missingIdentityLabels returns the identity-label keys whose presence or
+// value does not match want. An empty result means the series is correctly
+// tagged.
+func missingIdentityLabels(labels []*dto.LabelPair, want Labels) []string {
+	got := make(map[string]string, len(labels))
+	for _, p := range labels {
+		got[p.GetName()] = p.GetValue()
+	}
+	expected := map[string]string{
+		"namespace":   want.Namespace,
+		"name":        want.Name,
+		"project_id":  want.ProjectID,
+		"instance_id": want.InstanceID,
+	}
+	var missing []string
+	for k, v := range expected {
+		if got[k] != v {
+			missing = append(missing, k)
+		}
+	}
+	return missing
+}
+
+func formatLabels(labels []*dto.LabelPair) string {
+	parts := make([]string, 0, len(labels))
+	for _, p := range labels {
+		parts = append(parts, fmt.Sprintf("%s=%q", p.GetName(), p.GetValue()))
+	}
+	return strings.Join(parts, ",")
 }
 
 func TestResultFor(t *testing.T) {
