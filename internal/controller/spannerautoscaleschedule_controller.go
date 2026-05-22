@@ -156,9 +156,8 @@ func (r *SpannerAutoscaleScheduleReconciler) Reconcile(ctx context.Context, req 
 		return ctrl.Result{}, nil
 	}
 
-	log.Info("registering schedule with spanner-autoscaler", "autoscaler", ctrlclient.ObjectKeyFromObject(&sa).String())
-
 	if _, ok := findInArray(sa.Status.Schedules, req.NamespacedName.String()); !ok {
+		log.Info("registering schedule with spanner-autoscaler", "autoscaler", ctrlclient.ObjectKeyFromObject(&sa).String())
 		err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 			if err := r.ctrlClient.Get(ctx, nnsa, &sa); err != nil {
 				return err
