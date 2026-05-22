@@ -95,7 +95,7 @@ func (s scheduler) Update(ctx context.Context) error {
 		log.V(1).Info("cleanup expired schedules", "autoscaler schedules", autoscaler.Status.Schedules, "autoscaler active schedules", autoscaler.Status.CurrentlyActiveSchedules)
 
 		labels := observability.LabelsForAutoscaler(&autoscaler)
-		autoscaler.Status.CurrentlyActiveSchedules, statusChanged = cleanupActiveSchedules(labels, autoscaler.Status.CurrentlyActiveSchedules)
+		autoscaler.Status.CurrentlyActiveSchedules, statusChanged = cleanupActiveSchedules(log, labels, autoscaler.Status.CurrentlyActiveSchedules)
 
 		if statusChanged {
 			return s.ctrlClient.Status().Update(ctx, &autoscaler)
@@ -111,13 +111,18 @@ func (s scheduler) Update(ctx context.Context) error {
 	return nil
 }
 
-func cleanupActiveSchedules(labels observability.Labels, activeSchedules []spannerv1beta1.ActiveSchedule) ([]spannerv1beta1.ActiveSchedule, bool) {
+func cleanupActiveSchedules(log logr.Logger, labels observability.Labels, activeSchedules []spannerv1beta1.ActiveSchedule) ([]spannerv1beta1.ActiveSchedule, bool) {
 	changed := false
 	result := []spannerv1beta1.ActiveSchedule{}
 	now := metav1.Now()
 	for _, as := range activeSchedules {
 		if as.EndTime.Before(&now) {
 			changed = true
+			log.Info("scheduled scaling deactivated",
+				"schedule", as.ScheduleName,
+				"additionalPU", as.AdditionalPU,
+				"endTime", as.EndTime.Time,
+			)
 			observability.RecordScheduleDeactivation(labels, observability.ScheduleDeactivationExpired)
 			continue
 		}
@@ -138,6 +143,7 @@ func (j Job) Run() {
 	if err := j.CtrlClient.Get(ctx, j.ScheduleName, &sas); err != nil {
 		j.Log.Error(err, "failed to get spanner-autoscale-schedule")
 	}
+	var cas spannerv1beta1.ActiveSchedule
 	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 		if err := j.CtrlClient.Get(ctx, j.AutoscalerName, &sa); err != nil {
 			j.Log.Error(err, "failed to get spanner-autoscaler")
@@ -154,7 +160,7 @@ func (j Job) Run() {
 				activeSchedules = append(activeSchedules, as)
 			}
 		}
-		cas := spannerv1beta1.ActiveSchedule{
+		cas = spannerv1beta1.ActiveSchedule{
 			ScheduleName: j.ScheduleName.String(),
 			AdditionalPU: sas.Spec.AdditionalProcessingUnits,
 			EndTime:      metav1.Time{Time: metav1.Now().Add(duration)},
@@ -171,6 +177,11 @@ func (j Job) Run() {
 		// like permissions or a network error
 		j.Log.Error(err, "failed to update spanner-autoscaler status for CurrentlyActiveSchedules")
 	} else {
+		j.Log.Info("scheduled scaling activated",
+			"additionalPU", cas.AdditionalPU,
+			"endTime", cas.EndTime.Time,
+			"duration", sas.Spec.Schedule.Duration,
+		)
 		observability.RecordScheduleActivation(observability.LabelsForAutoscaler(&sa))
 	}
 	j.Log.V(1).Info("cron job is now over")

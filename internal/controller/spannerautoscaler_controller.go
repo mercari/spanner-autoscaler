@@ -443,6 +443,17 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 		if p := sa.Spec.ScaleConfig.TargetCPUUtilization.Total; p != nil {
 			totalTarget = *p
 		}
+		// For logging only: summarize the schedules currently in effect.
+		// CurrentlyActiveSchedules contains only schedules whose cron has fired
+		// and whose EndTime has not yet passed (not every configured schedule).
+		// Overlapping active schedules stack additively — this mirrors how
+		// calcDesiredPURange folds AdditionalPU into the min/max PU range.
+		activeScheduleNames := make([]string, 0, len(sa.Status.CurrentlyActiveSchedules))
+		var scheduleAdditionalPU int
+		for _, as := range sa.Status.CurrentlyActiveSchedules {
+			activeScheduleNames = append(activeScheduleNames, as.ScheduleName)
+			scheduleAdditionalPU += as.AdditionalPU
+		}
 		log.V(1).Info("processing units need to be changed",
 			"currentPU", sa.Status.CurrentProcessingUnits,
 			"desiredPU", desiredProcessingUnits,
@@ -451,6 +462,8 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 			"currentTotalCPUUtilization", sa.Status.CurrentTotalCPUUtilization,
 			"highPriorityTarget", highPriorityTarget,
 			"totalTarget", totalTarget,
+			"activeSchedules", activeScheduleNames,
+			"scheduleAdditionalPU", scheduleAdditionalPU,
 		)
 
 		labels := observability.LabelsForAutoscaler(&sa)
@@ -484,6 +497,8 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 			"currentTotalCPUUtilization", sa.Status.CurrentTotalCPUUtilization,
 			"highPriorityTarget", highPriorityTarget,
 			"totalTarget", totalTarget,
+			"activeSchedules", activeScheduleNames,
+			"scheduleAdditionalPU", scheduleAdditionalPU,
 		)
 
 		statusChanged = true
@@ -602,7 +617,11 @@ func pruneActiveSchedules(log logr.Logger, sa spannerv1beta1.SpannerAutoscaler) 
 	labels := observability.LabelsForAutoscaler(&sa)
 	for _, as := range sa.Status.CurrentlyActiveSchedules {
 		if _, found := findInArray(sa.Status.Schedules, as.ScheduleName); !found {
-			log.V(1).Info("removed currently active schedule", "ActiveSchedule", as)
+			log.Info("removed currently active schedule",
+				"schedule", as.ScheduleName,
+				"additionalPU", as.AdditionalPU,
+				"endTime", as.EndTime.Time,
+			)
 			observability.RecordScheduleDeactivation(labels, observability.ScheduleDeactivationUnregistered)
 			changed = true
 			continue
