@@ -329,6 +329,13 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 
 	r.updateLabelsCache(nnsa, &sa)
 
+	// Refresh every state gauge on every return from this point on, so that
+	// transitions such as ready -> not_ready (which take an early return below)
+	// are reflected in /metrics instead of leaving the previous values stuck.
+	// sa is mutated throughout Reconcile; capturing &sa here lets the defer see
+	// the final state at return time.
+	defer observability.RecordState(&sa)
+
 	credentials, err := r.fetchCredentials(ctx, &sa)
 	if err != nil {
 		r.recorder.Event(&sa, corev1.EventTypeWarning, "ServiceAccountRequired", err.Error())
@@ -518,8 +525,6 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 			}
 		}
 	}
-
-	observability.RecordState(&sa)
 
 	return ctrlreconcile.Result{}, nil
 }
