@@ -30,7 +30,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/tools/record"
 	utilclock "k8s.io/utils/clock"
 	ctrlbuilder "sigs.k8s.io/controller-runtime/pkg/builder"
@@ -877,49 +876,12 @@ func calcDesiredPUFromCPU(currentCPU, targetCPU int, sa spannerv1beta1.SpannerAu
 		desiredPU = ((requiredPU / 1000) + 1) * 1000
 	}
 
-	sdStepSize, sdStepSizeErr := intstr.GetScaledValueFromIntOrPercent(&sa.Spec.ScaleConfig.ScaledownStepSize, sa.Status.CurrentProcessingUnits, false)
-	if sdStepSizeErr != nil {
-		// unlikely, but revert to the default value if sdStepSize cannot be resolved
-		sdStepSize = 2000
-	}
-	suStepSize, suStepSizeErr := intstr.GetScaledValueFromIntOrPercent(&sa.Spec.ScaleConfig.ScaleupStepSize, sa.Status.CurrentProcessingUnits, false)
-	if suStepSizeErr != nil {
-		// unlikely, revert to the default value if suStepSize cannot be resolved
-		suStepSize = 0
-	}
-
-	// in case of percentages, round down to the scaledownStepSize to the nearest hundred or thousand
-	// to keep the scaledownStepSize within the percentage
-	if sdStepSize < 1000 {
-		sdStepSize = (sdStepSize / 100) * 100
-	} else {
-		sdStepSize = (sdStepSize / 1000) * 1000
-	}
-	// in case of percentages, round down to the scaleupStepSize to the nearest hundred or thousand
-	// to keep the scaleupStepSize within the percentage
-	if suStepSize < 1000 {
-		suStepSize = (suStepSize / 100) * 100
-	} else {
-		suStepSize = (suStepSize / 1000) * 1000
-	}
-
-	// round up the scaledownStepSize to avoid intermediate values
-	// for example: 8000 -> 7000 instead of 8000 -> 7400
-	//              800 -> 700 instead of 800 -> 740
-	if sdStepSize < 1000 && sa.Status.CurrentProcessingUnits > 1000 {
-		sdStepSize = 1000
-	} else if sdStepSize < 100 && sa.Status.CurrentProcessingUnits <= 1000 {
-		sdStepSize = 100
-	}
-	// round up the scaleupStepSize to avoid intermediate values
-	// for example: 7000 -> 8000 instead of 7000 -> 7600
-	//              700 -> 800 instead of 700 -> 760
-	// To keep compatibility, check if scaleupStepSize is not 0
-	if suStepSize != 0 && suStepSize < 1000 && sa.Status.CurrentProcessingUnits+suStepSize > 1000 {
-		suStepSize = 1000
-	} else if suStepSize != 0 && suStepSize < 100 && sa.Status.CurrentProcessingUnits+suStepSize <= 1000 {
-		suStepSize = 100
-	}
+	// Step size resolution is shared with the SpannerManualScaling path via
+	// resolveStepSize (see stepsize.go). The helper preserves the legacy
+	// rounding rules and the asymmetric "0 = no cap" semantics for scaleup;
+	// stepsize_test.go's differential test locks this equivalence down.
+	sdStepSize := resolveStepSize(&sa.Spec.ScaleConfig.ScaledownStepSize, sa.Status.CurrentProcessingUnits, stepDirectionScaledown)
+	suStepSize := resolveStepSize(&sa.Spec.ScaleConfig.ScaleupStepSize, sa.Status.CurrentProcessingUnits, stepDirectionScaleup)
 
 	// in case of scaling down, check that we don't scale down beyond the ScaledownStepSize
 	if scaledDownPU := sa.Status.CurrentProcessingUnits - sdStepSize; desiredPU < scaledDownPU {
