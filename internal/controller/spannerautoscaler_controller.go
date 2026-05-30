@@ -88,6 +88,17 @@ type SpannerAutoscalerReconciler struct {
 	// syncInterval overrides the default syncer polling interval (used in tests).
 	syncInterval time.Duration
 
+	// rejectManualScaledown mirrors the --reject-manual-scaledown flag. When
+	// true, the reconcile-time defense in depth refuses to apply a
+	// SpannerManualScaling whose target PU is below the current PU (the
+	// webhook is the primary enforcer; this catches webhook bypass).
+	rejectManualScaledown bool
+
+	// manualScalingHistoryPerNamespace mirrors the
+	// --manual-scaling-history-per-namespace flag. 0 (default) disables the
+	// GC; >0 keeps at most N finished SpannerManualScalings per namespace.
+	manualScalingHistoryPerNamespace int
+
 	clock utilclock.Clock
 	log   logr.Logger
 	mu    sync.RWMutex
@@ -238,6 +249,38 @@ func (o withSyncInterval) applySpannerAutoscalerReconciler(r *SpannerAutoscalerR
 	r.syncInterval = o.interval
 }
 
+// WithRejectManualScaledown enables the cluster-wide policy that refuses to
+// apply a SpannerManualScaling whose spec.processingUnits is below the
+// parent SpannerAutoscaler's current PU. Mirrors the --reject-manual-scaledown
+// CLI flag and the webhook option of the same name.
+func WithRejectManualScaledown(enabled bool) Option {
+	return withRejectManualScaledown{enabled: enabled}
+}
+
+type withRejectManualScaledown struct {
+	enabled bool
+}
+
+func (o withRejectManualScaledown) applySpannerAutoscalerReconciler(r *SpannerAutoscalerReconciler) {
+	r.rejectManualScaledown = o.enabled
+}
+
+// WithManualScalingHistoryPerNamespace caps the number of finished
+// (Expired/Superseded/Invalid) SpannerManualScaling resources retained per
+// namespace. 0 disables the GC. Mirrors the
+// --manual-scaling-history-per-namespace CLI flag.
+func WithManualScalingHistoryPerNamespace(n int) Option {
+	return withManualScalingHistoryPerNamespace{n: n}
+}
+
+type withManualScalingHistoryPerNamespace struct {
+	n int
+}
+
+func (o withManualScalingHistoryPerNamespace) applySpannerAutoscalerReconciler(r *SpannerAutoscalerReconciler) {
+	r.manualScalingHistoryPerNamespace = o.n
+}
+
 // NewSpannerAutoscalerReconciler returns a new SpannerAutoscalerReconciler.
 func NewSpannerAutoscalerReconciler(
 	ctrlClient ctrlclient.Client,
@@ -273,6 +316,9 @@ func NewSpannerAutoscalerReconciler(
 // +kubebuilder:rbac:groups=spanner.mercari.com,resources=spannerautoscalers,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=spanner.mercari.com,resources=spannerautoscalers/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=spanner.mercari.com,resources=spannerautoscalers/finalizers,verbs=update
+// +kubebuilder:rbac:groups=spanner.mercari.com,resources=spannermanualscalings,verbs=get;list;watch;update;delete
+// +kubebuilder:rbac:groups=spanner.mercari.com,resources=spannermanualscalings/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=spanner.mercari.com,resources=spannermanualscalings/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get,resourceNames=spanner-autoscaler-gcp-sa
 
@@ -415,6 +461,10 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 		log.Info("current processing units have not fetched yet")
 		observability.RecordScaleSkipped(observability.LabelsForAutoscaler(&sa), observability.SkipReasonCPUNotReady)
 		return ctrlreconcile.Result{}, nil
+	}
+
+	if result, handled, err := r.dispatchManualScaling(ctx, log, &sa, syncer, &statusChanged); handled || err != nil {
+		return result, err
 	}
 
 	if minPU, maxPU, updated := calcDesiredPURange(sa); updated {
@@ -560,6 +610,26 @@ func (r *SpannerAutoscalerReconciler) SetupWithManager(mgr ctrlmanager.Manager) 
 					NamespacedName: types.NamespacedName{
 						Namespace: sas.Namespace,
 						Name:      sas.Spec.TargetResource,
+					},
+				}}
+			}),
+		).
+		// Watch SpannerManualScaling so create / update / delete events on a
+		// SpannerManualScaling immediately requeue the parent SpannerAutoscaler.
+		// This is the single mechanism by which "manual override picked up",
+		// "deletion clears the active CR", and "phase transitions to terminal"
+		// all reach reconcileManualScaling without delay.
+		Watches(
+			&spannerv1beta1.SpannerManualScaling{},
+			ctrlhandler.EnqueueRequestsFromMapFunc(func(_ context.Context, obj ctrlclient.Object) []ctrlreconcile.Request {
+				sms, ok := obj.(*spannerv1beta1.SpannerManualScaling)
+				if !ok || sms.Spec.TargetResource == "" {
+					return nil
+				}
+				return []ctrlreconcile.Request{{
+					NamespacedName: types.NamespacedName{
+						Namespace: sms.Namespace,
+						Name:      sms.Spec.TargetResource,
 					},
 				}}
 			}),
