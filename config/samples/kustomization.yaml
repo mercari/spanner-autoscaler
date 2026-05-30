@@ -4,4 +4,5 @@ resources:
 - rbac/role.yaml
 - spanner_v1beta1_spannerautoscaler.yaml
 - spanner_v1beta1_spannerautoscaleschedule.yaml
+- spanner_v1beta1_spannermanualscaling.yaml
 #+kubebuilder:scaffold:manifestskustomizesamples
