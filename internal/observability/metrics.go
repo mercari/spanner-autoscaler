@@ -42,6 +42,13 @@ const (
 	DriverCPUHighPriority = "cpu_high_priority"
 	DriverCPUTotal        = "cpu_total"
 	DriverSchedule        = "schedule"
+	// DriverManualImmediate marks a scale event driven by a SpannerManualScaling
+	// override with no step size set on the active direction (single-jump).
+	DriverManualImmediate = "manual_immediate"
+	// DriverManualRamp marks a scale event driven by a SpannerManualScaling
+	// override with a step size set on the active direction (stepped ramp).
+	// One step per reconcile contributes one event.
+	DriverManualRamp = "manual_ramp"
 
 	// Skip reasons for scale_skipped_total.
 	SkipReasonSame              = "same"
@@ -245,6 +252,33 @@ var (
 	}, identityLabels)
 )
 
+// --- E. Manual scaling -------------------------------------------------------
+//
+// These metrics are emitted only while a SpannerManualScaling is driving a
+// given SpannerAutoscaler. They are independent of the existing scale_events
+// metrics; the ramp label here distinguishes single-jump vs stepped overrides
+// (the same distinction that drives the DriverManualImmediate /
+// DriverManualRamp values on scale_events_total).
+
+const rampLabel = "ramp"
+
+var (
+	manualScalingActive = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "spanner_autoscaler_manual_scaling_active",
+		Help: "1 if a SpannerManualScaling is currently driving processing units for this autoscaler, 0 otherwise. The ramp label is 'true' when the source has scaleupStepSize or scaledownStepSize set, 'false' for single-jump.",
+	}, append(identityLabels, rampLabel))
+
+	manualScalingTargetPU = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "spanner_autoscaler_manual_scaling_target_processing_units",
+		Help: "Target processing units of the currently active SpannerManualScaling (0 if none). Useful alongside current PU gauge to chart stepped ramps.",
+	}, append(identityLabels, rampLabel))
+
+	manualScalingHistoryEvicted = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "spanner_autoscaler_manual_scaling_history_evicted_total",
+		Help: "Number of finished SpannerManualScaling resources deleted by --manual-scaling-history-per-namespace GC.",
+	}, []string{namespaceLabel})
+)
+
 // allCollectors returns every collector defined in this package. Used by
 // Register and by DeleteSeries to iterate vectors uniformly.
 func allCollectors() []prometheus.Collector {
@@ -271,6 +305,9 @@ func allCollectors() []prometheus.Collector {
 		instanceUpdateDurationSeconds,
 		metricsFetchTotal,
 		metricsFetchDurationSeconds,
+		manualScalingActive,
+		manualScalingTargetPU,
+		manualScalingHistoryEvicted,
 	}
 }
 
@@ -305,6 +342,12 @@ func allVectors() []partialDeleter {
 		instanceUpdateDurationSeconds,
 		metricsFetchTotal,
 		metricsFetchDurationSeconds,
+		manualScalingActive,
+		manualScalingTargetPU,
+		// manualScalingHistoryEvicted is keyed only by namespace, not the
+		// per-autoscaler identity labels, so it is NOT erased by
+		// DeleteSeries(autoscaler). The counter accumulates over the
+		// lifetime of the namespace.
 	}
 }
 
@@ -415,6 +458,58 @@ func RecordInstanceUpdate(l Labels, duration time.Duration, err error) {
 func RecordMetricsFetch(l Labels, duration time.Duration, err error) {
 	metricsFetchDurationSeconds.WithLabelValues(l.values()...).Observe(duration.Seconds())
 	metricsFetchTotal.WithLabelValues(l.withExtra(resultFor(err))...).Inc()
+}
+
+// RampLabelValue returns the canonical ramp label value ("true"/"false") for
+// the manual_scaling_* metrics. Centralized so call sites cannot drift on
+// the label literal.
+func RampLabelValue(ramp bool) string {
+	if ramp {
+		return "true"
+	}
+	return "false"
+}
+
+// RecordManualScalingActive sets the per-autoscaler active gauge for the
+// matching ramp label, and zeroes the other ramp label so the two series do
+// not both report 1 at the same time. ramp should reflect whether the source
+// SpannerManualScaling has any step size set (= stepped ramp).
+func RecordManualScalingActive(l Labels, active bool, ramp bool) {
+	var v float64
+	if active {
+		v = 1
+	}
+	manualScalingActive.WithLabelValues(l.withExtra(RampLabelValue(ramp))...).Set(v)
+	manualScalingActive.WithLabelValues(l.withExtra(RampLabelValue(!ramp))...).Set(0)
+}
+
+// RecordManualScalingTarget sets the per-autoscaler target PU gauge. When no
+// manual scaling is active, callers should pass targetPU=0 and ramp=false
+// (the helper zeroes both ramp variants).
+func RecordManualScalingTarget(l Labels, targetPU int, ramp bool) {
+	manualScalingTargetPU.WithLabelValues(l.withExtra(RampLabelValue(ramp))...).Set(float64(targetPU))
+	if targetPU == 0 {
+		// No active override — zero the opposite ramp label too so a
+		// previous reading does not linger.
+		manualScalingTargetPU.WithLabelValues(l.withExtra(RampLabelValue(!ramp))...).Set(0)
+	}
+}
+
+// RecordManualScalingHistoryEvicted increments the per-namespace counter for
+// finished SpannerManualScaling resources deleted by the history-limit GC.
+func RecordManualScalingHistoryEvicted(namespace string) {
+	manualScalingHistoryEvicted.WithLabelValues(namespace).Inc()
+}
+
+// DriverForManualScaling returns the scale_events_total driver value for a
+// manual override, based on whether the override has a step size set on the
+// direction it is currently driving. Centralized so call sites in the
+// reconciler do not drift on the constant choice.
+func DriverForManualScaling(ramp bool) string {
+	if ramp {
+		return DriverManualRamp
+	}
+	return DriverManualImmediate
 }
 
 // DeleteSeries removes every series associated with this resource across all
