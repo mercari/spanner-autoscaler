@@ -277,6 +277,32 @@ type ActiveSchedule struct {
 	AdditionalPU int `json:"additionalPU"`
 }
 
+// A `SpannerManualScaling` which is currently overriding this autoscaler's
+// processing units, if any. Used as a convenience field on
+// `SpannerAutoscaler.status` so that the active override is visible without
+// listing SpannerManualScaling resources separately.
+type ActiveManualScaling struct {
+	// Name of the `SpannerManualScaling` resource in the same namespace.
+	Name string `json:"name"`
+
+	// ProcessingUnits being targeted. When a step size is set on the source,
+	// this is the final target — not the value currently applied to the
+	// Spanner instance (use SpannerAutoscaler.status.currentProcessingUnits
+	// for that).
+	ProcessingUnits int `json:"processingUnits"`
+
+	// Ramp is true when the source has either `scaleupStepSize` or
+	// `scaledownStepSize` set, indicating step-bounded pacing rather than a
+	// single-jump override. Derived from the source spec for convenience in
+	// printer columns and dashboards. (Interval-only specification is
+	// treated as single-jump.)
+	Ramp bool `json:"ramp"`
+
+	// ExpiresAt, if specified on the source resource.
+	// +optional
+	ExpiresAt *metav1.Time `json:"expiresAt,omitempty"`
+}
+
 // SpannerAutoscalerStatus defines the observed state of SpannerAutoscaler
 type SpannerAutoscalerStatus struct {
 	// List of schedules which are registered with this spanner-autoscaler instance
@@ -327,6 +353,12 @@ type SpannerAutoscalerStatus struct {
 	// The controller uses this to detect metric-type switches and skip scaling until
 	// the status reflects the newly configured metric type.
 	CurrentCPUMetricType CPUMetricType `json:"currentCPUMetricType,omitempty"`
+
+	// ActiveManualScaling references the `SpannerManualScaling` resource that
+	// is currently overriding this autoscaler's processing units. Empty when
+	// normal (CPU- and schedule-driven) autoscaling is in effect.
+	// +optional
+	ActiveManualScaling *ActiveManualScaling `json:"activeManualScaling,omitempty"`
 }
 
 //+kubebuilder:object:root=true
@@ -342,6 +374,8 @@ type SpannerAutoscalerStatus struct {
 //+kubebuilder:printcolumn:name="Target CPU Total",type="integer",JSONPath=".spec.scaleConfig.targetCPUUtilization.total"
 //+kubebuilder:printcolumn:name="Current CPU High",type="integer",JSONPath=".status.currentHighPriorityCPUUtilization"
 //+kubebuilder:printcolumn:name="Current CPU Total",type="integer",JSONPath=".status.currentTotalCPUUtilization"
+//+kubebuilder:printcolumn:name="Manual PU",type="integer",JSONPath=".status.activeManualScaling.processingUnits"
+//+kubebuilder:printcolumn:name="Manual Ramp",type="boolean",JSONPath=".status.activeManualScaling.ramp"
 //+kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 
 // SpannerAutoscaler is the Schema for the spannerautoscalers API

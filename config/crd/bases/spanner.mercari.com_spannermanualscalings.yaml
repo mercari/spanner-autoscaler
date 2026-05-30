@@ -1,0 +1,205 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: spannermanualscalings.spanner.mercari.com
+spec:
+  group: spanner.mercari.com
+  names:
+    kind: SpannerManualScaling
+    listKind: SpannerManualScalingList
+    plural: spannermanualscalings
+    singular: spannermanualscaling
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.targetResource
+      name: Target
+      type: string
+    - jsonPath: .spec.processingUnits
+      name: Target PU
+      type: integer
+    - jsonPath: .status.currentProcessingUnits
+      name: Current PU
+      type: integer
+    - jsonPath: .spec.expiresAt
+      name: Expires At
+      type: date
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1beta1
+    schema:
+      openAPIV3Schema:
+        description: SpannerManualScaling is the Schema for the spannermanualscalings
+          API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              SpannerManualScalingSpec defines a one-shot operation that drives the parent
+              SpannerAutoscaler's processing units toward a target value, bypassing
+              CPU-based autoscaling, SpannerAutoscaleSchedule additions, and the
+              scaledownAllowedTimes / scaledownNotAllowedTimes windows for as long as it
+              is active.
+
+              Pacing is inferred from the presence of the step-size field for the required
+              direction:
+
+                - ScaleupStepSize unset (when target > current)  → single-jump scale-up.
+                - ScaleupStepSize set    (when target > current) → stepped ramp; the
+                  cadence comes from ScaleupInterval when set, otherwise from the
+                  controller's --scale-up-interval flag default.
+                - ScaledownStepSize / ScaledownInterval behave symmetrically.
+
+              Interval-only specification (e.g. ScaleupInterval set but ScaleupStepSize
+              unset) has no effect; the validating webhook emits an admission warning to
+              flag the likely typo.
+
+              Spec is IMMUTABLE after creation: the validating webhook rejects any spec
+              mutation. To change the target PU, ramp parameters, or extend ExpiresAt,
+              create a new SpannerManualScaling — the newest-creationTimestamp rule
+              atomically supersedes the older resource with no autoscaling gap. To
+              shorten / force expiration, kubectl delete the resource.
+            properties:
+              expiresAt:
+                description: |-
+                  ExpiresAt is the time after which this override is automatically
+                  deactivated. When omitted, the override remains active until the
+                  resource is deleted.
+
+                  Accepts any RFC 3339 timestamp with a timezone designator (Z, +09:00,
+                  -08:00, etc.). Per Kubernetes convention (metav1.Time), the value is
+                  normalized to UTC for storage in etcd and for kubectl get/describe
+                  output; the absolute instant in time is preserved.
+
+                  When a step size is set, the controller does not guarantee that
+                  ProcessingUnits is reached before ExpiresAt — it is the user's
+                  responsibility to size ExpiresAt against ScaleupStepSize /
+                  ScaleupInterval (or the scaledown counterparts) so the ramp fits in the
+                  window. If ExpiresAt elapses mid-ramp, the override is deactivated
+                  wherever CurrentProcessingUnits happens to be and normal autoscaling
+                  resumes from there.
+                format: date-time
+                type: string
+              processingUnits:
+                description: |-
+                  ProcessingUnits is the target value that this override drives toward
+                  while active. Must be a multiple of 100 (for values < 1000) or a
+                  multiple of 1000.
+                minimum: 100
+                type: integer
+              scaledownInterval:
+                description: |-
+                  ScaledownInterval mirrors ScaleupInterval for the downward direction.
+                  Unset falls back to the controller's --scale-down-interval flag value.
+                type: string
+              scaledownStepSize:
+                anyOf:
+                - type: integer
+                - type: string
+                description: |-
+                  ScaledownStepSize mirrors ScaleupStepSize for the downward direction
+                  (ProcessingUnits < CurrentProcessingUnits).
+                x-kubernetes-int-or-string: true
+              scaleupInterval:
+                description: |-
+                  ScaleupInterval is the minimum wall-clock time the controller waits
+                  between successive upward steps. Only consulted when ScaleupStepSize is
+                  set. Unset falls back to the controller's --scale-up-interval flag
+                  value.
+
+                  Setting ScaleupInterval without ScaleupStepSize has no effect; the
+                  validating webhook emits an admission warning for that combination.
+                type: string
+              scaleupStepSize:
+                anyOf:
+                - type: integer
+                - type: string
+                description: |-
+                  ScaleupStepSize, when set, activates stepped scale-up: each reconcile
+                  applies at most this delta until ProcessingUnits is reached. Accepts the
+                  same int-or-percent format as the parent SpannerAutoscaler's
+                  scaleConfig.scaleupStepSize. Unset means single-jump scale-up — the
+                  override jumps the full upward delta in one reconcile.
+
+                  Presence of this field (when target > current) is the sole signal that
+                  gates stepped vs single-jump scale-up.
+                x-kubernetes-int-or-string: true
+              targetResource:
+                description: |-
+                  The `SpannerAutoscaler` resource name (in the same namespace) this
+                  override applies to. Immutable after creation.
+                type: string
+            required:
+            - processingUnits
+            - targetResource
+            type: object
+          status:
+            description: |-
+              SpannerManualScalingStatus defines the observed state of
+              SpannerManualScaling.
+            properties:
+              appliedAt:
+                description: |-
+                  AppliedAt is the time the controller first applied this override to
+                  the target.
+                format: date-time
+                type: string
+              currentProcessingUnits:
+                description: |-
+                  CurrentProcessingUnits is the parent SpannerAutoscaler's PU as last
+                  observed by this controller. Useful for stepped ramps to see progress
+                  toward spec.processingUnits without a cross-resource lookup.
+                type: integer
+              finishedAt:
+                description: |-
+                  FinishedAt is the time this resource first transitioned to a terminal
+                  phase (Expired, Superseded, or Invalid). Used as the sort key by the
+                  controller's history-limit GC. Set once and not updated thereafter
+                  (terminal phases do not transition back).
+                format: date-time
+                type: string
+              message:
+                description: |-
+                  Message is a human-readable explanation, especially when Phase is
+                  Invalid or when Expired occurred mid-ramp (target not reached).
+                type: string
+              phase:
+                description: Phase reflects the lifecycle stage of this override.
+                type: string
+              reachedAt:
+                description: |-
+                  ReachedAt is the time CurrentProcessingUnits first matched
+                  spec.processingUnits while this override was active. Set only when the
+                  target has been reached; remains nil for stepped ramps still in
+                  progress.
+                format: date-time
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
