@@ -17,7 +17,11 @@ package controller
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sort"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -25,14 +29,68 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
+	clocktesting "k8s.io/utils/clock/testing"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 	fakeclient "sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
+	syncerpkg "github.com/mercari/spanner-autoscaler/internal/syncer"
 )
+
+// stubSyncer is a minimal Syncer implementation used by reconcileManualScaling
+// tests. Records every UpdateInstance call and returns the configured err.
+type stubSyncer struct {
+	mu    sync.Mutex
+	calls []int
+	err   error
+}
+
+var _ syncerpkg.Syncer = (*stubSyncer)(nil)
+
+func (s *stubSyncer) UpdateInstance(_ context.Context, pu int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls = append(s.calls, pu)
+	return s.err
+}
+
+func (s *stubSyncer) Start()                                     {}
+func (s *stubSyncer) Stop()                                      {}
+func (s *stubSyncer) HasCredentials(*syncerpkg.Credentials) bool { return true }
+
+func newReconcilerForApply(t *testing.T, cl ctrlclient.Client, now time.Time, rejectScaledown bool) (*SpannerAutoscalerReconciler, *record.FakeRecorder) {
+	t.Helper()
+	rec := record.NewFakeRecorder(20)
+	return &SpannerAutoscalerReconciler{
+		ctrlClient:            cl,
+		recorder:              rec,
+		clock:                 clocktesting.NewFakeClock(now),
+		scaleUpInterval:       60 * time.Second,
+		scaleDownInterval:     55 * time.Minute,
+		rejectManualScaledown: rejectScaledown,
+	}, rec
+}
+
+func eventLooksLike(t *testing.T, rec *record.FakeRecorder, want string) {
+	t.Helper()
+	for {
+		select {
+		case ev := <-rec.Events:
+			if strings.Contains(ev, want) {
+				return
+			}
+		default:
+			t.Errorf("no event containing %q was recorded", want)
+			return
+		}
+	}
+}
 
 // manualScalingTestScheme builds a runtime.Scheme registered with both core
 // k8s types (so events, etc. work) and our v1beta1 group. Avoid importing
@@ -375,3 +433,511 @@ func TestReconcileManualScaling_NoActive_Deactivates(t *testing.T) {
 		t.Error("expected a Deactivated event but none was recorded")
 	}
 }
+
+// activeMS builds a SpannerManualScaling fixture suitable for the apply-path
+// tests: non-terminal phase, targets sa-target, processingUnits=desiredPU.
+func activeMS(name string, desiredPU int, created time.Time, opts ...func(*spannerv1beta1.SpannerManualScaling)) *spannerv1beta1.SpannerManualScaling {
+	ms := msFixture(name, "sa-target", "", created, time.Time{}, nil)
+	ms.Spec.ProcessingUnits = desiredPU
+	for _, o := range opts {
+		o(ms)
+	}
+	return ms
+}
+
+// TestReconcileManualScaling_ApplySingleJumpScaleUp covers the apply branch
+// where the active override has no ScaleupStepSize (single-jump): syncer is
+// called once with the target PU, an Applied event is recorded, status
+// reflects the new desired PU + ActiveManualScaling snapshot, and the
+// per-CR status flips to phase=Active.
+func TestReconcileManualScaling_ApplySingleJumpScaleUp(t *testing.T) {
+	scheme := manualScalingTestScheme(t)
+	now := time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
+	ms := activeMS("ms-up", 5000, now.Add(-time.Minute))
+	sa := &spannerv1beta1.SpannerAutoscaler{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ns1", Name: "sa-target"},
+		Status: spannerv1beta1.SpannerAutoscalerStatus{
+			CurrentProcessingUnits: 1000,
+		},
+	}
+	cl := fakeclient.NewClientBuilder().WithScheme(scheme).WithObjects(sa, ms).
+		WithStatusSubresource(&spannerv1beta1.SpannerManualScaling{}).Build()
+	r, rec := newReconcilerForApply(t, cl, now, false)
+	syncer := &stubSyncer{}
+
+	statusChanged := false
+	handled, requeue, err := r.reconcileManualScaling(context.Background(), logr.Discard(), sa, syncer, now, &statusChanged)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !handled {
+		t.Error("handled should be true once an active override is selected")
+	}
+	if requeue != 0 {
+		t.Errorf("single-jump requeueAfter should be 0; got %v", requeue)
+	}
+	if len(syncer.calls) != 1 || syncer.calls[0] != 5000 {
+		t.Errorf("UpdateInstance calls = %v, want [5000]", syncer.calls)
+	}
+	if sa.Status.DesiredProcessingUnits != 5000 {
+		t.Errorf("DesiredProcessingUnits = %d, want 5000", sa.Status.DesiredProcessingUnits)
+	}
+	if sa.Status.ActiveManualScaling == nil || sa.Status.ActiveManualScaling.Name != "ms-up" {
+		t.Errorf("ActiveManualScaling snapshot not set, got %+v", sa.Status.ActiveManualScaling)
+	}
+	eventLooksLike(t, rec, "ManualScalingApplied")
+}
+
+// TestReconcileManualScaling_SteppedRampProgressing covers the apply branch
+// where ScaleupStepSize is set: the first reconcile steps current+stepSize
+// (not the full target), emits a Progressing event, and asks the caller to
+// requeue at the scaleup interval.
+func TestReconcileManualScaling_SteppedRampProgressing(t *testing.T) {
+	scheme := manualScalingTestScheme(t)
+	now := time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
+	stepSize := intstrFromInt(1000)
+	interval := metav1.Duration{Duration: 2 * time.Minute}
+	ms := activeMS("ms-step", 5000, now.Add(-time.Minute), func(m *spannerv1beta1.SpannerManualScaling) {
+		m.Spec.ScaleupStepSize = &stepSize
+		m.Spec.ScaleupInterval = &interval
+	})
+	sa := &spannerv1beta1.SpannerAutoscaler{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ns1", Name: "sa-target"},
+		Status: spannerv1beta1.SpannerAutoscalerStatus{
+			CurrentProcessingUnits: 1000,
+		},
+	}
+	cl := fakeclient.NewClientBuilder().WithScheme(scheme).WithObjects(sa, ms).
+		WithStatusSubresource(&spannerv1beta1.SpannerManualScaling{}).Build()
+	r, rec := newReconcilerForApply(t, cl, now, false)
+	syncer := &stubSyncer{}
+
+	statusChanged := false
+	_, requeue, err := r.reconcileManualScaling(context.Background(), logr.Discard(), sa, syncer, now, &statusChanged)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(syncer.calls) != 1 || syncer.calls[0] != 2000 {
+		t.Errorf("UpdateInstance calls = %v, want [2000] (one step from 1000)", syncer.calls)
+	}
+	if requeue != interval.Duration {
+		t.Errorf("requeueAfter = %v, want %v (scaleup interval)", requeue, interval.Duration)
+	}
+	eventLooksLike(t, rec, "ManualScalingProgressing")
+}
+
+// TestReconcileManualScaling_SyncerUpdateFails ensures that a syncer failure
+// is propagated as an error (so dispatchManualScaling can persist a status
+// revert + reraise to controller-runtime) and an Event of type Warning is
+// emitted with the reason FailedUpdateInstance.
+func TestReconcileManualScaling_SyncerUpdateFails(t *testing.T) {
+	scheme := manualScalingTestScheme(t)
+	now := time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
+	ms := activeMS("ms-up", 5000, now.Add(-time.Minute))
+	sa := &spannerv1beta1.SpannerAutoscaler{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ns1", Name: "sa-target"},
+		Status: spannerv1beta1.SpannerAutoscalerStatus{
+			CurrentProcessingUnits: 1000,
+		},
+	}
+	cl := fakeclient.NewClientBuilder().WithScheme(scheme).WithObjects(sa, ms).Build()
+	r, rec := newReconcilerForApply(t, cl, now, false)
+	syncer := &stubSyncer{err: errors.New("spanner blew up")}
+
+	statusChanged := false
+	_, _, err := r.reconcileManualScaling(context.Background(), logr.Discard(), sa, syncer, now, &statusChanged)
+	if err == nil || !strings.Contains(err.Error(), "spanner blew up") {
+		t.Fatalf("expected syncer error to bubble up; got %v", err)
+	}
+	eventLooksLike(t, rec, "FailedUpdateInstance")
+}
+
+// TestReconcileManualScaling_RejectScaledownPolicy ensures that when the
+// cluster-wide --reject-manual-scaledown flag is true and the override
+// targets a lower PU, the candidate is marked Invalid and the parent's
+// ActiveManualScaling is cleared. No syncer call is made.
+func TestReconcileManualScaling_RejectScaledownPolicy(t *testing.T) {
+	scheme := manualScalingTestScheme(t)
+	now := time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
+	ms := activeMS("ms-down", 1000, now.Add(-time.Minute))
+	sa := &spannerv1beta1.SpannerAutoscaler{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ns1", Name: "sa-target"},
+		Status: spannerv1beta1.SpannerAutoscalerStatus{
+			CurrentProcessingUnits: 5000,
+			ActiveManualScaling: &spannerv1beta1.ActiveManualScaling{
+				Name: "stale", ProcessingUnits: 5000,
+			},
+		},
+	}
+	cl := fakeclient.NewClientBuilder().WithScheme(scheme).WithObjects(sa, ms).
+		WithStatusSubresource(&spannerv1beta1.SpannerManualScaling{}).Build()
+	r, rec := newReconcilerForApply(t, cl, now, true /* rejectScaledown */)
+	syncer := &stubSyncer{}
+
+	statusChanged := false
+	handled, _, err := r.reconcileManualScaling(context.Background(), logr.Discard(), sa, syncer, now, &statusChanged)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if handled {
+		t.Error("handled should be false on rejected scaledown so caller falls through to CPU path")
+	}
+	if len(syncer.calls) != 0 {
+		t.Errorf("syncer should not be invoked on rejected scaledown; got calls=%v", syncer.calls)
+	}
+	if sa.Status.ActiveManualScaling != nil {
+		t.Errorf("ActiveManualScaling should be cleared after reject; got %+v", sa.Status.ActiveManualScaling)
+	}
+	var fresh spannerv1beta1.SpannerManualScaling
+	if err := cl.Get(context.Background(), ctrlclient.ObjectKeyFromObject(ms), &fresh); err != nil {
+		t.Fatalf("get after reject failed: %v", err)
+	}
+	if fresh.Status.Phase != spannerv1beta1.SpannerManualScalingPhaseInvalid {
+		t.Errorf("phase = %q, want Invalid", fresh.Status.Phase)
+	}
+	eventLooksLike(t, rec, "ManualScalingRejected")
+}
+
+// TestReconcileManualScaling_CooldownHoldEmitsSkip covers the case where
+// LastScaleTime is recent enough that the per-direction cooldown has not
+// elapsed: nextManualPU returns currentPU + remaining-cooldown duration,
+// no syncer call is made, and requeueAfter equals the remaining cooldown.
+func TestReconcileManualScaling_CooldownHoldEmitsSkip(t *testing.T) {
+	scheme := manualScalingTestScheme(t)
+	now := time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
+	stepSize := intstrFromInt(1000)
+	interval := metav1.Duration{Duration: 5 * time.Minute}
+	ms := activeMS("ms-step", 5000, now.Add(-time.Hour), func(m *spannerv1beta1.SpannerManualScaling) {
+		m.Spec.ScaleupStepSize = &stepSize
+		m.Spec.ScaleupInterval = &interval
+	})
+	sa := &spannerv1beta1.SpannerAutoscaler{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ns1", Name: "sa-target"},
+		Status: spannerv1beta1.SpannerAutoscalerStatus{
+			CurrentProcessingUnits: 1000,
+			LastScaleTime:          metav1.Time{Time: now.Add(-1 * time.Minute)},
+		},
+	}
+	cl := fakeclient.NewClientBuilder().WithScheme(scheme).WithObjects(sa, ms).
+		WithStatusSubresource(&spannerv1beta1.SpannerManualScaling{}).Build()
+	r, _ := newReconcilerForApply(t, cl, now, false)
+	syncer := &stubSyncer{}
+
+	statusChanged := false
+	_, requeue, err := r.reconcileManualScaling(context.Background(), logr.Discard(), sa, syncer, now, &statusChanged)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(syncer.calls) != 0 {
+		t.Errorf("syncer must not be invoked during cooldown hold; got %v", syncer.calls)
+	}
+	// remaining cooldown = 5min - 1min = 4min.
+	want := 4 * time.Minute
+	if requeue != want {
+		t.Errorf("requeueAfter = %v, want %v", requeue, want)
+	}
+}
+
+// TestReconcileManualScaling_ExpiresAtClampsRequeue covers the requeue
+// floor: when the override's ExpiresAt is earlier than the next-step
+// boundary, the returned requeueAfter must clamp to the time-until-expiry.
+func TestReconcileManualScaling_ExpiresAtClampsRequeue(t *testing.T) {
+	scheme := manualScalingTestScheme(t)
+	now := time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
+	stepSize := intstrFromInt(1000)
+	interval := metav1.Duration{Duration: 10 * time.Minute}
+	// expiresAt is 1 minute away — earlier than the 10-minute step interval.
+	expiresAt := now.Add(time.Minute)
+	ms := activeMS("ms-step", 5000, now.Add(-time.Minute), func(m *spannerv1beta1.SpannerManualScaling) {
+		m.Spec.ScaleupStepSize = &stepSize
+		m.Spec.ScaleupInterval = &interval
+		m.Spec.ExpiresAt = &metav1.Time{Time: expiresAt}
+	})
+	sa := &spannerv1beta1.SpannerAutoscaler{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ns1", Name: "sa-target"},
+		Status: spannerv1beta1.SpannerAutoscalerStatus{
+			CurrentProcessingUnits: 1000,
+		},
+	}
+	cl := fakeclient.NewClientBuilder().WithScheme(scheme).WithObjects(sa, ms).
+		WithStatusSubresource(&spannerv1beta1.SpannerManualScaling{}).Build()
+	r, _ := newReconcilerForApply(t, cl, now, false)
+	syncer := &stubSyncer{}
+
+	statusChanged := false
+	_, requeue, err := r.reconcileManualScaling(context.Background(), logr.Discard(), sa, syncer, now, &statusChanged)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	wantClamp := time.Minute
+	if requeue != wantClamp {
+		t.Errorf("requeueAfter = %v, want %v (clamped to ExpiresAt)", requeue, wantClamp)
+	}
+}
+
+// TestDispatchManualScaling_StatusConflictRequeues ensures that a
+// Status().Update conflict on the success path is treated as benign and
+// translated into a Requeue (not an error) so controller-runtime retries
+// with the latest resourceVersion.
+func TestDispatchManualScaling_StatusConflictRequeues(t *testing.T) {
+	scheme := manualScalingTestScheme(t)
+	now := time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
+	ms := activeMS("ms-up", 5000, now.Add(-time.Minute))
+	sa := &spannerv1beta1.SpannerAutoscaler{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ns1", Name: "sa-target"},
+		Status: spannerv1beta1.SpannerAutoscalerStatus{
+			CurrentProcessingUnits: 1000,
+		},
+	}
+	base := fakeclient.NewClientBuilder().WithScheme(scheme).WithObjects(sa, ms).Build()
+	cl := interceptor.NewClient(base, interceptor.Funcs{
+		SubResourceUpdate: func(ctx context.Context, c ctrlclient.Client, sub string, obj ctrlclient.Object, opts ...ctrlclient.SubResourceUpdateOption) error {
+			if sub == "status" {
+				if _, ok := obj.(*spannerv1beta1.SpannerAutoscaler); ok {
+					return apierrors.NewConflict(
+						schema.GroupResource{Group: "spanner.mercari.com", Resource: "spannerautoscalers"},
+						obj.GetName(), errors.New("stale"))
+				}
+			}
+			return c.SubResource(sub).Update(ctx, obj, opts...)
+		},
+	})
+	r, _ := newReconcilerForApply(t, cl, now, false)
+	syncer := &stubSyncer{}
+
+	statusChanged := false
+	res, handled, err := r.dispatchManualScaling(context.Background(), logr.Discard(), sa, syncer, &statusChanged, nil)
+	if err != nil {
+		t.Fatalf("conflict should be swallowed; got err %v", err)
+	}
+	if !handled {
+		t.Error("handled should be true on conflict path so caller short-circuits")
+	}
+	if !res.Requeue { //nolint:staticcheck // production code returns Result{Requeue: true} for benign conflict.
+		t.Errorf("expected Requeue=true on status conflict; got %+v", res)
+	}
+}
+
+// TestDispatchManualScaling_StatusWriteFailsEmitsEvent covers the
+// non-conflict status-write failure: the failure must be returned as an
+// error and a FailedUpdateStatus event must be recorded so operators can
+// detect persistent API issues.
+func TestDispatchManualScaling_StatusWriteFailsEmitsEvent(t *testing.T) {
+	scheme := manualScalingTestScheme(t)
+	now := time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
+	ms := activeMS("ms-up", 5000, now.Add(-time.Minute))
+	sa := &spannerv1beta1.SpannerAutoscaler{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ns1", Name: "sa-target"},
+		Status: spannerv1beta1.SpannerAutoscalerStatus{
+			CurrentProcessingUnits: 1000,
+		},
+	}
+	base := fakeclient.NewClientBuilder().WithScheme(scheme).WithObjects(sa, ms).Build()
+	cl := interceptor.NewClient(base, interceptor.Funcs{
+		SubResourceUpdate: func(_ context.Context, _ ctrlclient.Client, sub string, obj ctrlclient.Object, _ ...ctrlclient.SubResourceUpdateOption) error {
+			if sub == "status" {
+				if _, ok := obj.(*spannerv1beta1.SpannerAutoscaler); ok {
+					return fmt.Errorf("simulated API outage")
+				}
+			}
+			return nil
+		},
+	})
+	r, rec := newReconcilerForApply(t, cl, now, false)
+	syncer := &stubSyncer{}
+
+	statusChanged := false
+	_, _, err := r.dispatchManualScaling(context.Background(), logr.Discard(), sa, syncer, &statusChanged, nil)
+	if err == nil || !strings.Contains(err.Error(), "simulated API outage") {
+		t.Fatalf("expected the status-write error to bubble up; got %v", err)
+	}
+	eventLooksLike(t, rec, "FailedUpdateStatus")
+}
+
+// TestDispatchManualScaling_NoActiveFallsThrough ensures that handled=false
+// is returned when no override is active so the caller's CPU autoscale
+// branch can run.
+func TestDispatchManualScaling_NoActiveFallsThrough(t *testing.T) {
+	scheme := manualScalingTestScheme(t)
+	now := time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
+	sa := &spannerv1beta1.SpannerAutoscaler{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ns1", Name: "sa-target"},
+	}
+	cl := fakeclient.NewClientBuilder().WithScheme(scheme).WithObjects(sa).Build()
+	r, _ := newReconcilerForApply(t, cl, now, false)
+
+	statusChanged := false
+	res, handled, err := r.dispatchManualScaling(context.Background(), logr.Discard(), sa, &stubSyncer{}, &statusChanged, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if handled {
+		t.Error("handled should be false when no override exists")
+	}
+	if res.RequeueAfter != 0 || res.Requeue { //nolint:staticcheck // production code returns Result{Requeue: true} for benign conflict; the field is still supported in controller-runtime v0.24.
+		t.Errorf("no-active should not requeue; got %+v", res)
+	}
+}
+
+// TestUpdateManualScalingProgress_AppliedAtFirstStamp ensures AppliedAt is
+// only stamped the first time didApply=true (later reconciles preserve the
+// original instant) and is NOT stamped when didApply=false (e.g. on a
+// cooldown-hold reconcile).
+func TestUpdateManualScalingProgress_AppliedAtFirstStamp(t *testing.T) {
+	scheme := manualScalingTestScheme(t)
+	t0 := time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
+	t1 := t0.Add(time.Minute)
+	t2 := t0.Add(5 * time.Minute)
+	ms := activeMS("ms-up", 5000, t0)
+	cl := fakeclient.NewClientBuilder().WithScheme(scheme).WithObjects(ms).
+		WithStatusSubresource(&spannerv1beta1.SpannerManualScaling{}).Build()
+	r := &SpannerAutoscalerReconciler{ctrlClient: cl}
+
+	// 1. didApply=false → AppliedAt must remain nil.
+	if err := r.updateManualScalingProgress(context.Background(), ms, 1000, 5000, t0, false); err != nil {
+		t.Fatalf("first call returned err: %v", err)
+	}
+	var fresh spannerv1beta1.SpannerManualScaling
+	mustGet := func() { //nolint:thelper // wrapper, not a helper
+		if err := cl.Get(context.Background(), ctrlclient.ObjectKeyFromObject(ms), &fresh); err != nil {
+			t.Fatalf("get failed: %v", err)
+		}
+	}
+	mustGet()
+	if fresh.Status.AppliedAt != nil {
+		t.Errorf("AppliedAt should remain nil when didApply=false; got %v", fresh.Status.AppliedAt)
+	}
+
+	// 2. didApply=true → AppliedAt stamped to t1.
+	if err := r.updateManualScalingProgress(context.Background(), &fresh, 2000, 5000, t1, true); err != nil {
+		t.Fatalf("second call returned err: %v", err)
+	}
+	mustGet()
+	if fresh.Status.AppliedAt == nil || !fresh.Status.AppliedAt.Time.Equal(t1) {
+		t.Errorf("AppliedAt = %v, want %v", fresh.Status.AppliedAt, t1)
+	}
+
+	// 3. didApply=true again → AppliedAt unchanged (first-time-wins).
+	if err := r.updateManualScalingProgress(context.Background(), &fresh, 3000, 5000, t2, true); err != nil {
+		t.Fatalf("third call returned err: %v", err)
+	}
+	mustGet()
+	if !fresh.Status.AppliedAt.Time.Equal(t1) {
+		t.Errorf("AppliedAt should remain at t1; got %v", fresh.Status.AppliedAt.Time)
+	}
+}
+
+// TestUpdateManualScalingProgress_ReachedAtOnlyOnActive ensures ReachedAt
+// is stamped only when current == target (phase=Active), and only on the
+// first time that transition happens.
+func TestUpdateManualScalingProgress_ReachedAtOnlyOnActive(t *testing.T) {
+	scheme := manualScalingTestScheme(t)
+	t0 := time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
+	t1 := t0.Add(time.Minute)
+	ms := activeMS("ms-up", 5000, t0)
+	cl := fakeclient.NewClientBuilder().WithScheme(scheme).WithObjects(ms).
+		WithStatusSubresource(&spannerv1beta1.SpannerManualScaling{}).Build()
+	r := &SpannerAutoscalerReconciler{ctrlClient: cl}
+
+	// Progressing — ReachedAt must remain nil.
+	if err := r.updateManualScalingProgress(context.Background(), ms, 2000, 5000, t0, true); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	var fresh spannerv1beta1.SpannerManualScaling
+	if err := cl.Get(context.Background(), ctrlclient.ObjectKeyFromObject(ms), &fresh); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if fresh.Status.Phase != spannerv1beta1.SpannerManualScalingPhaseProgressing {
+		t.Errorf("phase = %q, want Progressing", fresh.Status.Phase)
+	}
+	if fresh.Status.ReachedAt != nil {
+		t.Errorf("ReachedAt should remain nil before reaching target; got %v", fresh.Status.ReachedAt)
+	}
+
+	// Reach target — ReachedAt must be t1.
+	if err := r.updateManualScalingProgress(context.Background(), &fresh, 5000, 5000, t1, true); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if err := cl.Get(context.Background(), ctrlclient.ObjectKeyFromObject(ms), &fresh); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if fresh.Status.Phase != spannerv1beta1.SpannerManualScalingPhaseActive {
+		t.Errorf("phase = %q, want Active", fresh.Status.Phase)
+	}
+	if fresh.Status.ReachedAt == nil || !fresh.Status.ReachedAt.Time.Equal(t1) {
+		t.Errorf("ReachedAt = %v, want %v", fresh.Status.ReachedAt, t1)
+	}
+}
+
+// TestUpdateManualScalingProgress_NotFound ensures a concurrently-deleted
+// CR (Get returns NotFound) is treated as a no-op rather than an error.
+func TestUpdateManualScalingProgress_NotFound(t *testing.T) {
+	scheme := manualScalingTestScheme(t)
+	ms := activeMS("ms-gone", 5000, time.Now())
+	cl := fakeclient.NewClientBuilder().WithScheme(scheme).
+		WithStatusSubresource(&spannerv1beta1.SpannerManualScaling{}).Build()
+	r := &SpannerAutoscalerReconciler{ctrlClient: cl}
+
+	if err := r.updateManualScalingProgress(context.Background(), ms, 1000, 5000, time.Now(), true); err != nil {
+		t.Errorf("NotFound should be swallowed; got %v", err)
+	}
+}
+
+// TestMarkExpiredSiblings_Sweeps covers the controller-down-across-boundary
+// catch-up: selectActiveManualScaling skips siblings whose ExpiresAt has
+// elapsed, but markExpiredSiblings must still transition them to Expired so
+// the history GC can claim them and operators can see the terminal state.
+// Already-terminal siblings, DeletionTimestamp-set siblings, and
+// wrong-target siblings must be skipped (idempotency / scope guards).
+func TestMarkExpiredSiblings_Sweeps(t *testing.T) {
+	scheme := manualScalingTestScheme(t)
+	now := time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
+	past := now.Add(-time.Hour)
+	future := now.Add(time.Hour)
+
+	expiredA := msFixture("expired-a", "sa-target", "", now.Add(-2*time.Hour), time.Time{}, &past)
+	expiredB := msFixture("expired-b", "sa-target", "", now.Add(-2*time.Hour), time.Time{}, &past)
+	// expiredB also has a non-zero observed PU different from target so the
+	// "target not reached" message branch is exercised.
+	expiredB.Status.CurrentProcessingUnits = 2000
+
+	notYetExpired := msFixture("not-yet", "sa-target", "", now.Add(-time.Minute), time.Time{}, &future)
+	alreadyTerminal := msFixture("already-terminal", "sa-target",
+		spannerv1beta1.SpannerManualScalingPhaseSuperseded,
+		now.Add(-3*time.Hour), now.Add(-3*time.Hour), &past)
+	wrongTarget := msFixture("wrong-target", "other-sa", "", now.Add(-time.Minute), time.Time{}, &past)
+
+	cl := fakeclient.NewClientBuilder().WithScheme(scheme).WithObjects(
+		expiredA, expiredB, notYetExpired, alreadyTerminal, wrongTarget,
+	).WithStatusSubresource(&spannerv1beta1.SpannerManualScaling{}).Build()
+	sa := &spannerv1beta1.SpannerAutoscaler{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ns1", Name: "sa-target"},
+	}
+	r := &SpannerAutoscalerReconciler{ctrlClient: cl}
+
+	r.markExpiredSiblings(context.Background(), logr.Discard(), sa, now)
+
+	wantPhase := func(name string, want spannerv1beta1.SpannerManualScalingPhase, wantMsgSub string) {
+		t.Helper()
+		var fresh spannerv1beta1.SpannerManualScaling
+		if err := cl.Get(context.Background(), ctrlclient.ObjectKey{Namespace: "ns1", Name: name}, &fresh); err != nil {
+			t.Fatalf("get %s failed: %v", name, err)
+		}
+		if fresh.Status.Phase != want {
+			t.Errorf("%s phase = %q, want %q", name, fresh.Status.Phase, want)
+		}
+		if wantMsgSub != "" && !strings.Contains(fresh.Status.Message, wantMsgSub) {
+			t.Errorf("%s message = %q, want it to contain %q", name, fresh.Status.Message, wantMsgSub)
+		}
+	}
+	wantPhase("expired-a", spannerv1beta1.SpannerManualScalingPhaseExpired, "expiresAt")
+	wantPhase("expired-b", spannerv1beta1.SpannerManualScalingPhaseExpired, "target not reached")
+	wantPhase("not-yet", "", "")
+	wantPhase("already-terminal", spannerv1beta1.SpannerManualScalingPhaseSuperseded, "")
+	wantPhase("wrong-target", "", "")
+}
+
+// intstrFromInt mirrors intstr.FromInt32 for the int32 path used by the
+// SpannerManualScaling specs; kept tiny so each test can declare a step size
+// inline without importing intstr.
+func intstrFromInt(v int32) intstr.IntOrString { return intstr.FromInt32(v) }
