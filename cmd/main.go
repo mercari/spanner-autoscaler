@@ -192,6 +192,17 @@ func main() {
 		controller.WithLog(log),
 	)
 
+	smsr := controller.NewSpannerManualScalingReconciler(
+		mgr.GetClient(),
+		mgr.GetScheme(),
+		mgr.GetEventRecorderFor("spannermanualscaling-controller"), //nolint:staticcheck // Migrating to the new events.EventRecorder API requires a wholesale refactor of event call sites; tracked separately.
+		controller.WithLog(log),
+	)
+	if err := smsr.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "SpannerManualScaling")
+		os.Exit(exitCode)
+	}
+
 	if err = sasr.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "SpannerAutoscaleSchedule")
 		os.Exit(exitCode)
