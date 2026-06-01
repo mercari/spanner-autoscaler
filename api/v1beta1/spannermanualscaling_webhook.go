@@ -40,6 +40,8 @@ var spannermanualscalinglog = logf.Log.WithName("spannermanualscaling-resource.w
 // webhook. Callers (typically cmd/main.go) wire up controller flags such as
 // --reject-manual-scaledown via these options so the validation behavior
 // reflects the cluster-wide policy.
+//
+// +kubebuilder:object:generate=false
 type ManualScalingWebhookOption func(*spannerManualScalingWebhook)
 
 // WithRejectManualScaledown enables the cluster-wide policy that rejects any
