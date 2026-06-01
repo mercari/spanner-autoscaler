@@ -281,6 +281,69 @@ func TestManualScalingHasRamp(t *testing.T) {
 	}
 }
 
+// TestManualScalingActiveRamp asserts the direction-aware ramp helper used
+// for the scale_events_total `driver` label and ActiveManualScaling.Ramp.
+// The naive manualScalingHasRamp (OR across both directions) would
+// misattribute single-jump scale-ups as ramped if the spec also had a
+// scaledown step size set; this helper resolves that by consulting only the
+// direction implied by target vs current.
+func TestManualScalingActiveRamp(t *testing.T) {
+	stepUp := intstrPtr(intstr.FromInt(1000))
+	stepDown := intstrPtr(intstr.FromInt(1000))
+
+	cases := []struct {
+		name      string
+		spec      spannerv1beta1.SpannerManualScalingSpec
+		currentPU int
+		want      bool
+	}{
+		{
+			name:      "scale-up direction, scaleupStepSize set → true (stepped)",
+			spec:      spannerv1beta1.SpannerManualScalingSpec{ProcessingUnits: 7000, ScaleupStepSize: stepUp},
+			currentPU: 3000,
+			want:      true,
+		},
+		{
+			name:      "scale-up direction, only scaledownStepSize set → false (single-jump; wrong-direction step is ignored)",
+			spec:      spannerv1beta1.SpannerManualScalingSpec{ProcessingUnits: 7000, ScaledownStepSize: stepDown},
+			currentPU: 3000,
+			want:      false,
+		},
+		{
+			name:      "scale-down direction, scaledownStepSize set → true",
+			spec:      spannerv1beta1.SpannerManualScalingSpec{ProcessingUnits: 3000, ScaledownStepSize: stepDown},
+			currentPU: 7000,
+			want:      true,
+		},
+		{
+			name:      "scale-down direction, only scaleupStepSize set → false",
+			spec:      spannerv1beta1.SpannerManualScalingSpec{ProcessingUnits: 3000, ScaleupStepSize: stepUp},
+			currentPU: 7000,
+			want:      false,
+		},
+		{
+			name:      "no scaling (target == current) → false",
+			spec:      spannerv1beta1.SpannerManualScalingSpec{ProcessingUnits: 5000, ScaleupStepSize: stepUp, ScaledownStepSize: stepDown},
+			currentPU: 5000,
+			want:      false,
+		},
+		{
+			name:      "scale-up direction with both step sizes set → true",
+			spec:      spannerv1beta1.SpannerManualScalingSpec{ProcessingUnits: 7000, ScaleupStepSize: stepUp, ScaledownStepSize: stepDown},
+			currentPU: 3000,
+			want:      true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := manualScalingActiveRamp(&tc.spec, tc.currentPU); got != tc.want {
+				t.Errorf("manualScalingActiveRamp(target=%d, current=%d) = %v, want %v",
+					tc.spec.ProcessingUnits, tc.currentPU, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestActiveManualScalingEqual exercises the status-write-avoidance helper:
 // nil/nil is equal; nil/non-nil isn't; otherwise field-by-field with
 // ExpiresAt compared by absolute instant so timezone re-encoding does not

@@ -40,14 +40,25 @@ import (
 // caller returns. Extracted from Reconcile to keep its cyclomatic complexity
 // within the project's golangci-lint threshold.
 //
+// droppedActiveSchedules carries entries that pruneActiveSchedules already
+// removed from sa.Status.CurrentlyActiveSchedules. When this function
+// successfully persists sa.Status, it emits the per-entry
+// "removed currently active schedule" log line + RecordScheduleDeactivation
+// counter for each one. Without this, schedules orphaned in the same
+// reconcile as a manual override would have their drop silently swallowed
+// (the trailing emission loop in Reconcile's CPU path is skipped when this
+// function returns handled=true).
+//
 // The `handled` return tells the caller whether to short-circuit (true) or
-// fall through to the CPU-based autoscale path (false).
+// fall through to the CPU-based autoscale path (false). When handled=false,
+// the caller is responsible for emitting the deactivations itself.
 func (r *SpannerAutoscalerReconciler) dispatchManualScaling(
 	ctx context.Context,
 	log logr.Logger,
 	sa *spannerv1beta1.SpannerAutoscaler,
 	syncer syncerpkg.Syncer,
 	statusChanged *bool,
+	droppedActiveSchedules []spannerv1beta1.ActiveSchedule,
 ) (ctrlreconcile.Result, bool, error) {
 	handled, requeueAfter, err := r.reconcileManualScaling(ctx, log, sa, syncer, r.clock.Now(), statusChanged)
 	if err != nil {
@@ -72,8 +83,33 @@ func (r *SpannerAutoscalerReconciler) dispatchManualScaling(
 			log.Error(uerr, "manual scaling: failed to update spanner autoscaler status")
 			return ctrlreconcile.Result{}, true, uerr
 		}
+		// Status persisted — emit schedule deactivations that were pruned in
+		// the same reconcile (analog of the trailing block in Reconcile's CPU
+		// path).
+		emitScheduleDeactivations(log, sa, droppedActiveSchedules)
 	}
 	return ctrlreconcile.Result{RequeueAfter: requeueAfter}, true, nil
+}
+
+// emitScheduleDeactivations logs and increments the deactivation counter for
+// every entry in droppedActiveSchedules. Called from both the manual scaling
+// success path (dispatchManualScaling) and the CPU autoscale success path
+// (Reconcile's trailing block) after sa.Status has been persisted, so a
+// failed Status().Update does not lose the event and a successful persist
+// emits it exactly once.
+func emitScheduleDeactivations(log logr.Logger, sa *spannerv1beta1.SpannerAutoscaler, dropped []spannerv1beta1.ActiveSchedule) {
+	if len(dropped) == 0 {
+		return
+	}
+	labels := observability.LabelsForAutoscaler(sa)
+	for _, as := range dropped {
+		log.Info("removed currently active schedule",
+			"schedule", as.ScheduleName,
+			"additionalPU", as.AdditionalPU,
+			"endTime", as.EndTime.Time,
+		)
+		observability.RecordScheduleDeactivation(labels, observability.ScheduleDeactivationUnregistered)
+	}
 }
 
 // reconcileManualScaling drives any active SpannerManualScaling that targets
@@ -164,6 +200,12 @@ func (r *SpannerAutoscalerReconciler) reconcileManualScaling(
 			sa.Status.ActiveManualScaling = nil
 			*statusChanged = true
 		}
+		// Zero the manual_scaling_* gauges so a previously-active gauge
+		// reading does not linger past the rejection (operator switches
+		// --reject-manual-scaledown true mid-flight, or webhook is bypassed).
+		labels := observability.LabelsForAutoscaler(sa)
+		observability.RecordManualScalingActive(labels, false, false)
+		observability.RecordManualScalingTarget(labels, 0, false)
 		return false, 0, nil
 	}
 
@@ -175,7 +217,10 @@ func (r *SpannerAutoscalerReconciler) reconcileManualScaling(
 		*statusChanged = true
 	}
 
-	ramp := manualScalingHasRamp(&active.Spec)
+	// ramp reflects what this reconcile will actually do (stepped vs
+	// single-jump for the direction being driven), not just whether any step
+	// size is set in the spec. See manualScalingActiveRamp's docstring.
+	ramp := manualScalingActiveRamp(&active.Spec, sa.Status.CurrentProcessingUnits)
 	targetPU := active.Spec.ProcessingUnits
 	nextPU, nextInterval := r.nextManualPU(sa, active, now)
 
@@ -194,6 +239,7 @@ func (r *SpannerAutoscalerReconciler) reconcileManualScaling(
 		*statusChanged = true
 	}
 
+	didApply := false
 	if r.needApplyManualScaling(sa, nextPU) {
 		labels := observability.LabelsForAutoscaler(sa)
 		updateStart := r.clock.Now()
@@ -212,6 +258,7 @@ func (r *SpannerAutoscalerReconciler) reconcileManualScaling(
 		sa.Status.LastScaleTime = metav1.Time{Time: now}
 		sa.Status.DesiredProcessingUnits = nextPU
 		*statusChanged = true
+		didApply = true
 
 		if nextPU != targetPU {
 			r.recorder.Eventf(sa, corev1.EventTypeNormal, "ManualScalingProgressing",
@@ -227,11 +274,29 @@ func (r *SpannerAutoscalerReconciler) reconcileManualScaling(
 			"after", nextPU, "target", targetPU, "ramp", ramp,
 		)
 	} else {
-		observability.RecordScaleSkipped(observability.LabelsForAutoscaler(sa), observability.SkipReasonSame)
+		// nextPU == currentPU. Distinguish "we are at target" from "we are
+		// holding because the override's cooldown has not elapsed yet" — the
+		// latter is a cooldown-bounded skip, not a no-op. nextInterval > 0
+		// here means nextManualPU returned the current PU AND scheduled a
+		// follow-up wake-up at the cooldown boundary; we are mid-ramp,
+		// waiting.
+		reason := observability.SkipReasonSame
+		if nextInterval > 0 && sa.Status.CurrentProcessingUnits != targetPU {
+			if active.Spec.ProcessingUnits > sa.Status.CurrentProcessingUnits {
+				reason = observability.SkipReasonScaleUpInterval
+			} else {
+				reason = observability.SkipReasonScaleDownInterval
+			}
+		}
+		observability.RecordScaleSkipped(observability.LabelsForAutoscaler(sa), reason)
 	}
 
 	// Update the SpannerManualScaling status (phase / progress fields).
-	if perr := r.updateManualScalingProgress(ctx, active, sa.Status.CurrentProcessingUnits, targetPU, now); perr != nil {
+	// Pass didApply so AppliedAt is only stamped on a reconcile that actually
+	// invoked syncer.UpdateInstance — otherwise the timestamp drifts onto
+	// no-op reconciles (cooldown hold) and the docstring contract
+	// ("the time the controller first applied this override") would lie.
+	if perr := r.updateManualScalingProgress(ctx, active, sa.Status.CurrentProcessingUnits, targetPU, now, didApply); perr != nil {
 		log.Error(perr, "manual scaling: failed to update SpannerManualScaling status", "name", active.Name)
 		// Don't fail the reconcile on a status write conflict; the next
 		// reconcile will retry.
@@ -389,6 +454,12 @@ func (r *SpannerAutoscalerReconciler) needApplyManualScaling(sa *spannerv1beta1.
 // depending on whether the target has been reached, and stamps AppliedAt /
 // ReachedAt the first time each happens.
 //
+// didApply tells the function whether this reconcile actually invoked
+// syncer.UpdateInstance. AppliedAt is the documented "time the controller
+// first applied this override" — stamping it on a no-op reconcile
+// (cooldown hold) would silently break that contract. Only when didApply
+// is true and AppliedAt is still nil do we record it.
+//
 // Status-update conflicts (HTTP 409) are returned to the caller, which
 // surfaces them so controller-runtime can requeue on the latest
 // resourceVersion. Conflict on this status write is benign — the next
@@ -398,6 +469,7 @@ func (r *SpannerAutoscalerReconciler) updateManualScalingProgress(
 	ms *spannerv1beta1.SpannerManualScaling,
 	currentPU, targetPU int,
 	now time.Time,
+	didApply bool,
 ) error {
 	var fresh spannerv1beta1.SpannerManualScaling
 	if err := r.ctrlClient.Get(ctx, ctrlclient.ObjectKeyFromObject(ms), &fresh); err != nil {
@@ -417,7 +489,7 @@ func (r *SpannerAutoscalerReconciler) updateManualScalingProgress(
 		fresh.Status.Phase = desiredPhase
 		changed = true
 	}
-	if fresh.Status.AppliedAt == nil {
+	if didApply && fresh.Status.AppliedAt == nil {
 		fresh.Status.AppliedAt = &metav1.Time{Time: now}
 		changed = true
 	}
@@ -590,8 +662,37 @@ func isTerminalManualScalingPhase(p spannerv1beta1.SpannerManualScalingPhase) bo
 // in either direction (presence of scaleupStepSize or scaledownStepSize).
 // Interval-only specification does not count as ramp — the webhook surfaces
 // that combination as a warning.
+//
+// Most call sites should prefer manualScalingActiveRamp because it reflects
+// what THIS reconcile will actually do (stepped vs single-jump for the
+// direction being driven), whereas this function answers the broader
+// "anywhere in the spec" question.
 func manualScalingHasRamp(spec *spannerv1beta1.SpannerManualScalingSpec) bool {
 	return spec.ScaleupStepSize != nil || spec.ScaledownStepSize != nil
+}
+
+// manualScalingActiveRamp returns true when the override will step (rather
+// than single-jump) in the direction implied by target vs current. The
+// caller uses this for the scale_events_total `driver` label and for
+// SpannerAutoscaler.status.activeManualScaling.Ramp so both reflect the
+// actual transition, not just the spec shape.
+//
+//   - target > current → consults ScaleupStepSize (scaledown fields are
+//     irrelevant for a scale-up).
+//   - target < current → consults ScaledownStepSize.
+//   - target == current → no transition; returns false (single-jump-equivalent).
+//
+// This deliberately diverges from manualScalingHasRamp, which OR's both
+// directions for the spec-level "is any ramp configured" question.
+func manualScalingActiveRamp(spec *spannerv1beta1.SpannerManualScalingSpec, currentPU int) bool {
+	switch {
+	case spec.ProcessingUnits > currentPU:
+		return spec.ScaleupStepSize != nil
+	case spec.ProcessingUnits < currentPU:
+		return spec.ScaledownStepSize != nil
+	default:
+		return false
+	}
 }
 
 // activeManualScalingEqual compares two *ActiveManualScaling for status-write

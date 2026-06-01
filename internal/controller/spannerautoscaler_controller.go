@@ -463,7 +463,7 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 		return ctrlreconcile.Result{}, nil
 	}
 
-	if result, handled, err := r.dispatchManualScaling(ctx, log, &sa, syncer, &statusChanged); handled || err != nil {
+	if result, handled, err := r.dispatchManualScaling(ctx, log, &sa, syncer, &statusChanged, droppedActiveSchedules); handled || err != nil {
 		return result, err
 	}
 
@@ -561,18 +561,10 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 		// persisted. Doing so inside pruneActiveSchedules would re-fire on
 		// every reconcile until the status write eventually succeeds, since
 		// CurrentlyActiveSchedules still contains the orphan entries until
-		// then.
-		if len(droppedActiveSchedules) > 0 {
-			labels := observability.LabelsForAutoscaler(&sa)
-			for _, as := range droppedActiveSchedules {
-				log.Info("removed currently active schedule",
-					"schedule", as.ScheduleName,
-					"additionalPU", as.AdditionalPU,
-					"endTime", as.EndTime.Time,
-				)
-				observability.RecordScheduleDeactivation(labels, observability.ScheduleDeactivationUnregistered)
-			}
-		}
+		// then. The same emission also runs from the manual-scaling success
+		// path inside dispatchManualScaling, so schedules orphaned in the
+		// same reconcile as an active manual override are still reported.
+		emitScheduleDeactivations(log, &sa, droppedActiveSchedules)
 	}
 
 	return ctrlreconcile.Result{}, nil
