@@ -25,7 +25,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
@@ -376,7 +375,3 @@ func TestReconcileManualScaling_NoActive_Deactivates(t *testing.T) {
 		t.Error("expected a Deactivated event but none was recorded")
 	}
 }
-
-// Sanity: types.NamespacedName usage is real here (not the placeholder from
-// the prior draft) so the import is used.
-var _ = types.NamespacedName{}

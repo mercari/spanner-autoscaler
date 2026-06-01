@@ -137,14 +137,14 @@ func TestDriverForManualScaling(t *testing.T) {
 	}
 }
 
-// TestRampLabelValue locks down the canonical "true"/"false" string the
+// TestRampLabel locks down the canonical "true"/"false" string the
 // manual_scaling_* gauges use. Centralized to avoid label-literal drift
 // across the codebase.
-func TestRampLabelValue(t *testing.T) {
-	if RampLabelValue(true) != "true" {
-		t.Errorf("RampLabelValue(true) = %q, want %q", RampLabelValue(true), "true")
+func TestRampLabel(t *testing.T) {
+	if rampLabelValue(true) != "true" {
+		t.Errorf("rampLabelValue(true) = %q, want %q", rampLabelValue(true), "true")
 	}
-	if RampLabelValue(false) != "false" {
-		t.Errorf("RampLabelValue(false) = %q, want %q", RampLabelValue(false), "false")
+	if rampLabelValue(false) != "false" {
+		t.Errorf("rampLabelValue(false) = %q, want %q", rampLabelValue(false), "false")
 	}
 }

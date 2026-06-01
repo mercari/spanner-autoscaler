@@ -460,10 +460,10 @@ func RecordMetricsFetch(l Labels, duration time.Duration, err error) {
 	metricsFetchTotal.WithLabelValues(l.withExtra(resultFor(err))...).Inc()
 }
 
-// RampLabelValue returns the canonical ramp label value ("true"/"false") for
+// rampLabelValue returns the canonical ramp label value ("true"/"false") for
 // the manual_scaling_* metrics. Centralized so call sites cannot drift on
 // the label literal.
-func RampLabelValue(ramp bool) string {
+func rampLabelValue(ramp bool) string {
 	if ramp {
 		return "true"
 	}
@@ -479,19 +479,19 @@ func RecordManualScalingActive(l Labels, active bool, ramp bool) {
 	if active {
 		v = 1
 	}
-	manualScalingActive.WithLabelValues(l.withExtra(RampLabelValue(ramp))...).Set(v)
-	manualScalingActive.WithLabelValues(l.withExtra(RampLabelValue(!ramp))...).Set(0)
+	manualScalingActive.WithLabelValues(l.withExtra(rampLabelValue(ramp))...).Set(v)
+	manualScalingActive.WithLabelValues(l.withExtra(rampLabelValue(!ramp))...).Set(0)
 }
 
 // RecordManualScalingTarget sets the per-autoscaler target PU gauge. When no
 // manual scaling is active, callers should pass targetPU=0 and ramp=false
 // (the helper zeroes both ramp variants).
 func RecordManualScalingTarget(l Labels, targetPU int, ramp bool) {
-	manualScalingTargetPU.WithLabelValues(l.withExtra(RampLabelValue(ramp))...).Set(float64(targetPU))
+	manualScalingTargetPU.WithLabelValues(l.withExtra(rampLabelValue(ramp))...).Set(float64(targetPU))
 	if targetPU == 0 {
 		// No active override — zero the opposite ramp label too so a
 		// previous reading does not linger.
-		manualScalingTargetPU.WithLabelValues(l.withExtra(RampLabelValue(!ramp))...).Set(0)
+		manualScalingTargetPU.WithLabelValues(l.withExtra(rampLabelValue(!ramp))...).Set(0)
 	}
 }
 

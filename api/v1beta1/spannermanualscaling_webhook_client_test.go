@@ -18,6 +18,7 @@ package v1beta1
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -257,20 +258,14 @@ func TestValidateUpdate_SpecImmutability(t *testing.T) {
 
 // TestValidateUpdate_NilOldObj asserts the safety guard against a malformed
 // admission request (oldObj missing). Without this guard a nil pointer
-// dereference inside reflect.DeepEqual would crash the webhook.
+// dereference inside reflect.DeepEqual would crash the webhook. The
+// assertion uses errors.Is against the package-level sentinel so future
+// message rewording does not silently flip the test green.
 func TestValidateUpdate_NilOldObj(t *testing.T) {
 	w := &spannerManualScalingWebhook{}
 	newObj := &SpannerManualScaling{}
 	_, err := w.ValidateUpdate(context.Background(), nil, newObj)
-	if err == nil {
-		t.Fatal("expected an error for nil oldObj, got nil")
-	}
-	if !strings.Contains(err.Error(), "nil") {
-		t.Errorf("error %q should mention nil oldObj", err.Error())
+	if !errors.Is(err, errNilOldObject) {
+		t.Errorf("expected errNilOldObject, got %v", err)
 	}
 }
-
-// intstrPtr / durPtr are declared in spannermanualscaling_webhook_test.go
-// (same package). The intstr import here is consumed via the type literal
-// `intstr.FromInt` in the table above.
-var _ = intstr.FromInt
