@@ -18,6 +18,7 @@ package v1beta1
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"time"
@@ -35,6 +36,14 @@ import (
 )
 
 var spannermanualscalinglog = logf.Log.WithName("spannermanualscaling-resource.webhook")
+
+// errNilOldObject is returned by ValidateUpdate when the kube-apiserver
+// invokes the webhook without an oldObj. This should never happen on
+// UPDATE — Kubernetes always passes both objects — but the guard exists
+// because reflect.DeepEqual on a nil dereference would otherwise panic.
+// Exported via errors.Is to keep test assertions decoupled from the
+// concrete message string.
+var errNilOldObject = errors.New("spannermanualscaling webhook: oldObj is nil on update")
 
 // ManualScalingWebhookOption configures the SpannerManualScaling validating
 // webhook. Callers (typically cmd/main.go) wire up controller flags such as
@@ -129,7 +138,7 @@ func (w *spannerManualScalingWebhook) ValidateUpdate(_ context.Context, oldObj, 
 	spannermanualscalinglog.Info("validate update", "name", newObj.Name)
 
 	if oldObj == nil {
-		return nil, fmt.Errorf("expected old SpannerManualScaling but got nil")
+		return nil, errNilOldObject
 	}
 
 	if !reflect.DeepEqual(oldObj.Spec, newObj.Spec) {
@@ -315,7 +324,7 @@ func (w *spannerManualScalingWebhook) duplicateActiveWarning(ctx context.Context
 		if other.DeletionTimestamp != nil {
 			continue
 		}
-		if isTerminalPhase(other.Status.Phase) {
+		if other.Status.Phase.IsTerminal() {
 			continue
 		}
 		return admission.Warnings{
@@ -377,17 +386,4 @@ func (w *spannerManualScalingWebhook) checkRejectScaledown(ctx context.Context, 
 				obj.Spec.ProcessingUnits, obj.Spec.TargetResource, current))
 	}
 	return nil
-}
-
-// isTerminalPhase reports whether a SpannerManualScaling phase is one of the
-// end-states the history GC and the "active candidate" selector treat as
-// done.
-func isTerminalPhase(p SpannerManualScalingPhase) bool {
-	switch p {
-	case SpannerManualScalingPhaseExpired,
-		SpannerManualScalingPhaseSuperseded,
-		SpannerManualScalingPhaseInvalid:
-		return true
-	}
-	return false
 }

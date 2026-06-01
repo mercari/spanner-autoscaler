@@ -139,11 +139,26 @@ const (
 
 	// SpannerManualScalingPhaseInvalid: the targetResource does not exist
 	// (in the same namespace) or the override otherwise cannot be applied.
-	// The resource is retained so the operator can fix the cause; the
-	// controller transitions phase back to Pending/Active if the cause is
-	// resolved.
+	// Terminal: the resource is retained for operator inspection until the
+	// history-limit GC reclaims it. To retry after fixing the cause, create
+	// a new SpannerManualScaling — the controller will not transition this
+	// resource back to a non-terminal phase.
 	SpannerManualScalingPhaseInvalid SpannerManualScalingPhase = "Invalid"
 )
+
+// IsTerminal reports whether the phase is one of Expired, Superseded, or
+// Invalid — the three states from which the controller never transitions
+// back. Used by the active-candidate selector (to skip done overrides) and
+// by the history-limit GC (to identify rows eligible for deletion).
+func (p SpannerManualScalingPhase) IsTerminal() bool {
+	switch p {
+	case SpannerManualScalingPhaseExpired,
+		SpannerManualScalingPhaseSuperseded,
+		SpannerManualScalingPhaseInvalid:
+		return true
+	}
+	return false
+}
 
 // SpannerManualScalingStatus defines the observed state of
 // SpannerManualScaling.

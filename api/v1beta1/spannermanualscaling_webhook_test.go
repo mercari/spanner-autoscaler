@@ -285,10 +285,11 @@ func TestIntervalWithoutStepSizeWarnings(t *testing.T) {
 	}
 }
 
-// TestIsTerminalPhase locks down the set of phases the webhook's
-// duplicate-active filter treats as terminal. Adding a new terminal phase
-// requires updating this test.
-func TestIsTerminalPhase(t *testing.T) {
+// TestSpannerManualScalingPhase_IsTerminal locks down the set of phases the
+// IsTerminal helper classifies as end-state. Adding a new terminal phase
+// requires updating this test alongside both call sites
+// (webhook.duplicateActiveWarning and the controllers' phase guards).
+func TestSpannerManualScalingPhase_IsTerminal(t *testing.T) {
 	terminal := []SpannerManualScalingPhase{
 		SpannerManualScalingPhaseExpired,
 		SpannerManualScalingPhaseSuperseded,
@@ -301,12 +302,12 @@ func TestIsTerminalPhase(t *testing.T) {
 		SpannerManualScalingPhase(""), // empty = newly created
 	}
 	for _, p := range terminal {
-		if !isTerminalPhase(p) {
+		if !p.IsTerminal() {
 			t.Errorf("phase %q should be terminal", p)
 		}
 	}
 	for _, p := range nonTerminal {
-		if isTerminalPhase(p) {
+		if p.IsTerminal() {
 			t.Errorf("phase %q should not be terminal", p)
 		}
 	}

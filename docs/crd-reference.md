@@ -436,7 +436,7 @@ _Appears in:_
 | `Active` | SpannerManualScalingPhaseActive: CurrentProcessingUnits equals<br />spec.processingUnits and the override is holding the target on the<br />parent SpannerAutoscaler.<br /> |
 | `Expired` | SpannerManualScalingPhaseExpired: ExpiresAt has elapsed; no longer<br />pinning PU. With a step size set, this can occur mid-ramp; in that<br />case the target may not have been reached.<br /> |
 | `Superseded` | SpannerManualScalingPhaseSuperseded: a newer SpannerManualScaling for<br />the same targetResource was created and is now active.<br /> |
-| `Invalid` | SpannerManualScalingPhaseInvalid: the targetResource does not exist<br />(in the same namespace) or the override otherwise cannot be applied.<br />The resource is retained so the operator can fix the cause; the<br />controller transitions phase back to Pending/Active if the cause is<br />resolved.<br /> |
+| `Invalid` | SpannerManualScalingPhaseInvalid: the targetResource does not exist<br />(in the same namespace) or the override otherwise cannot be applied.<br />Terminal: the resource is retained for operator inspection until the<br />history-limit GC reclaims it. To retry after fixing the cause, create<br />a new SpannerManualScaling — the controller will not transition this<br />resource back to a non-terminal phase.<br /> |
 
 
 #### SpannerManualScalingSpec

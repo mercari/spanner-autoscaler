@@ -33,25 +33,15 @@ import (
 	syncerpkg "github.com/mercari/spanner-autoscaler/internal/syncer"
 )
 
-// dispatchManualScaling is the Reconcile-side wrapper around
-// reconcileManualScaling. It persists status changes, maps update conflicts
-// to a benign requeue, and translates reconcileManualScaling's
-// (handled, requeueAfter, err) tuple into the ctrlreconcile.Result shape the
-// caller returns. Extracted from Reconcile to keep its cyclomatic complexity
-// within the project's golangci-lint threshold.
-//
-// droppedActiveSchedules carries entries that pruneActiveSchedules already
-// removed from sa.Status.CurrentlyActiveSchedules. When this function
-// successfully persists sa.Status, it emits the per-entry
-// "removed currently active schedule" log line + RecordScheduleDeactivation
-// counter for each one. Without this, schedules orphaned in the same
-// reconcile as a manual override would have their drop silently swallowed
-// (the trailing emission loop in Reconcile's CPU path is skipped when this
-// function returns handled=true).
-//
-// The `handled` return tells the caller whether to short-circuit (true) or
-// fall through to the CPU-based autoscale path (false). When handled=false,
-// the caller is responsible for emitting the deactivations itself.
+// dispatchManualScaling runs the manual-scaling reconcile and converts its
+// (handled, requeueAfter, err) return into the ctrlreconcile.Result shape
+// the caller returns. On the success path it persists sa.Status, maps
+// status-update conflicts to a benign requeue, and emits the per-entry
+// schedule-deactivation events that the caller queued before invoking this
+// function. handled=true tells the caller to short-circuit Reconcile;
+// handled=false means there was no active override and Reconcile should
+// fall through to the CPU autoscale path (which emits the deactivations
+// itself).
 func (r *SpannerAutoscalerReconciler) dispatchManualScaling(
 	ctx context.Context,
 	log logr.Logger,
@@ -160,52 +150,24 @@ func (r *SpannerAutoscalerReconciler) reconcileManualScaling(
 		}
 	}
 
-	// Also sweep any orphan / expired siblings whose ExpiresAt elapsed but
-	// the controller never observed them (e.g. controller was down). This
-	// keeps phase=Expired/Invalid eventually consistent without requiring a
-	// dedicated SpannerManualScaling reconciler.
-	r.markExpiredOrInvalidSiblings(ctx, log, sa, now)
+	// Also sweep any siblings whose ExpiresAt elapsed but the controller
+	// never observed them (e.g. controller was down across the boundary).
+	// The Invalid phase for orphan targetResource is owned by the
+	// SpannerManualScalingReconciler — see spannermanualscaling_controller.go.
+	r.markExpiredSiblings(ctx, log, sa, now)
 
 	if active == nil {
-		// No active override. If this autoscaler was previously holding a
-		// manual override, clear the status and emit Deactivated.
 		if sa.Status.ActiveManualScaling != nil {
 			r.recorder.Eventf(sa, corev1.EventTypeNormal, "ManualScalingDeactivated",
 				"manual scaling deactivated (no active SpannerManualScaling for this target)")
-			sa.Status.ActiveManualScaling = nil
-			*statusChanged = true
 		}
-		// Zero the manual_scaling_* gauges so previous readings don't
-		// linger.
-		observability.RecordManualScalingActive(observability.LabelsForAutoscaler(sa), false, false)
-		observability.RecordManualScalingTarget(observability.LabelsForAutoscaler(sa), 0, false)
+		r.clearActiveManualScalingState(sa, statusChanged)
 		return false, 0, nil
 	}
 
 	// We have an Active candidate. Defense-in-depth scaledown check.
 	if r.rejectManualScaledown && active.Spec.ProcessingUnits < sa.Status.CurrentProcessingUnits {
-		msg := fmt.Sprintf(
-			"rejected: scaledown is disabled cluster-wide (--reject-manual-scaledown=true); "+
-				"spec.processingUnits=%d < currentProcessingUnits=%d",
-			active.Spec.ProcessingUnits, sa.Status.CurrentProcessingUnits)
-		log.Info("manual scaling: rejected", "name", active.Name, "reason", msg)
-		if perr := r.transitionManualScalingPhase(ctx, active,
-			spannerv1beta1.SpannerManualScalingPhaseInvalid, msg, now,
-		); perr != nil {
-			log.Error(perr, "manual scaling: failed to record rejection")
-		}
-		r.recorder.Eventf(sa, corev1.EventTypeWarning, "ManualScalingRejected",
-			"manual scaling rejected (source=%s): %s", active.Name, msg)
-		if sa.Status.ActiveManualScaling != nil {
-			sa.Status.ActiveManualScaling = nil
-			*statusChanged = true
-		}
-		// Zero the manual_scaling_* gauges so a previously-active gauge
-		// reading does not linger past the rejection (operator switches
-		// --reject-manual-scaledown true mid-flight, or webhook is bypassed).
-		labels := observability.LabelsForAutoscaler(sa)
-		observability.RecordManualScalingActive(labels, false, false)
-		observability.RecordManualScalingTarget(labels, 0, false)
+		r.rejectScaledownPolicy(ctx, log, sa, active, now, statusChanged)
 		return false, 0, nil
 	}
 
@@ -240,7 +202,7 @@ func (r *SpannerAutoscalerReconciler) reconcileManualScaling(
 	}
 
 	didApply := false
-	if r.needApplyManualScaling(sa, nextPU) {
+	if nextPU != sa.Status.CurrentProcessingUnits {
 		labels := observability.LabelsForAutoscaler(sa)
 		updateStart := r.clock.Now()
 		updateErr := syncer.UpdateInstance(ctx, nextPU)
@@ -357,7 +319,7 @@ func (r *SpannerAutoscalerReconciler) selectActiveManualScaling(
 		if ms.Spec.ExpiresAt != nil && !now.Before(ms.Spec.ExpiresAt.Time) {
 			continue
 		}
-		if isTerminalManualScalingPhase(ms.Status.Phase) {
+		if ms.Status.Phase.IsTerminal() {
 			continue
 		}
 		candidates = append(candidates, *ms)
@@ -406,13 +368,19 @@ func (r *SpannerAutoscalerReconciler) nextManualPU(
 			return target, 0 // single-jump scale-up
 		}
 		stepSize = resolveStepSize(ms.Spec.ScaleupStepSize, current, stepDirectionScaleup)
-		interval = durationOr(ms.Spec.ScaleupInterval, r.scaleUpInterval)
+		interval = r.scaleUpInterval
+		if ms.Spec.ScaleupInterval != nil {
+			interval = ms.Spec.ScaleupInterval.Duration
+		}
 	} else {
 		if ms.Spec.ScaledownStepSize == nil {
 			return target, 0 // single-jump scale-down
 		}
 		stepSize = resolveStepSize(ms.Spec.ScaledownStepSize, current, stepDirectionScaledown)
-		interval = durationOr(ms.Spec.ScaledownInterval, r.scaleDownInterval)
+		interval = r.scaleDownInterval
+		if ms.Spec.ScaledownInterval != nil {
+			interval = ms.Spec.ScaledownInterval.Duration
+		}
 	}
 
 	// Honor cooldown: if LastScaleTime + interval has not elapsed, do not
@@ -439,14 +407,6 @@ func (r *SpannerAutoscalerReconciler) nextManualPU(
 		}
 	}
 	return next, interval
-}
-
-// needApplyManualScaling returns true when nextPU differs from currentPU and
-// thus a syncer.UpdateInstance call is required this reconcile. The
-// same-value case is reported as SkipReasonSame so the existing skip metric
-// records "nothing to do" reconciles uniformly.
-func (r *SpannerAutoscalerReconciler) needApplyManualScaling(sa *spannerv1beta1.SpannerAutoscaler, nextPU int) bool {
-	return nextPU != sa.Status.CurrentProcessingUnits
 }
 
 // updateManualScalingProgress writes phase / progress fields onto the active
@@ -525,7 +485,7 @@ func (r *SpannerAutoscalerReconciler) transitionManualScalingPhase(
 		}
 		return err
 	}
-	if isTerminalManualScalingPhase(fresh.Status.Phase) {
+	if fresh.Status.Phase.IsTerminal() {
 		// Already terminal — do not overwrite FinishedAt or Message; the
 		// first transition wins.
 		return nil
@@ -545,18 +505,21 @@ func (r *SpannerAutoscalerReconciler) transitionManualScalingPhase(
 	return nil
 }
 
-// markExpiredOrInvalidSiblings sweeps SpannerManualScalings targeting sa for
-// (a) ExpiresAt in the past and (b) target SpannerAutoscaler does not match
-// any existing resource (the spec.targetResource is wrong). The first case
-// gets phase=Expired; the second gets phase=Invalid. Both transitions are
-// idempotent (already-terminal resources are skipped).
+// markExpiredSiblings sweeps SpannerManualScalings targeting sa whose
+// ExpiresAt has elapsed and transitions them to phase=Expired. Idempotent:
+// already-terminal resources are skipped.
 //
-// This is the catch-up path: selectActiveManualScaling skips these
-// candidates, but their phase needs to be updated to Expired/Invalid so the
-// history GC can claim them. Running this in every reconcile of the parent
-// keeps things eventually consistent without a dedicated controller for
-// SpannerManualScaling.
-func (r *SpannerAutoscalerReconciler) markExpiredOrInvalidSiblings(
+// This is the catch-up path that handles the controller having been down
+// across an expiry boundary: selectActiveManualScaling skips those
+// candidates, but their phase still needs to be updated so the history GC
+// can claim them. Running it on every reconcile of the parent keeps the
+// state eventually consistent.
+//
+// The Invalid phase (orphan targetResource) is owned by the dedicated
+// SpannerManualScalingReconciler in spannermanualscaling_controller.go,
+// which runs for every SpannerManualScaling regardless of whether its
+// target exists.
+func (r *SpannerAutoscalerReconciler) markExpiredSiblings(
 	ctx context.Context,
 	log logr.Logger,
 	sa *spannerv1beta1.SpannerAutoscaler,
@@ -575,7 +538,7 @@ func (r *SpannerAutoscalerReconciler) markExpiredOrInvalidSiblings(
 		if ms.DeletionTimestamp != nil {
 			continue
 		}
-		if isTerminalManualScalingPhase(ms.Status.Phase) {
+		if ms.Status.Phase.IsTerminal() {
 			continue
 		}
 		if ms.Spec.ExpiresAt != nil && !now.Before(ms.Spec.ExpiresAt.Time) {
@@ -614,18 +577,24 @@ func (r *SpannerAutoscalerReconciler) enforceHistoryLimit(ctx context.Context, n
 		if ms.DeletionTimestamp != nil {
 			continue
 		}
-		if isTerminalManualScalingPhase(ms.Status.Phase) {
+		if ms.Status.Phase.IsTerminal() {
 			finished = append(finished, *ms)
 		}
 	}
 	if len(finished) <= limit {
 		return nil
 	}
-	// Sort newest-first by FinishedAt (fallback: CreationTimestamp).
+	// Sort newest-first by FinishedAt, falling back to CreationTimestamp
+	// when the terminal phase write did not capture FinishedAt (legacy
+	// rows or controller-side error in transitionManualScalingPhase).
+	finishedAt := func(ms spannerv1beta1.SpannerManualScaling) time.Time {
+		if ms.Status.FinishedAt != nil {
+			return ms.Status.FinishedAt.Time
+		}
+		return ms.CreationTimestamp.Time
+	}
 	sort.Slice(finished, func(i, j int) bool {
-		ti := finishedSortKey(finished[i])
-		tj := finishedSortKey(finished[j])
-		return ti.After(tj)
+		return finishedAt(finished[i]).After(finishedAt(finished[j]))
 	})
 	toDelete := finished[limit:]
 	for i := range toDelete {
@@ -635,40 +604,6 @@ func (r *SpannerAutoscalerReconciler) enforceHistoryLimit(ctx context.Context, n
 		observability.RecordManualScalingHistoryEvicted(toDelete[i].Namespace)
 	}
 	return nil
-}
-
-// finishedSortKey returns the timestamp used to order terminal
-// SpannerManualScaling resources newest-first for the history-limit GC.
-func finishedSortKey(ms spannerv1beta1.SpannerManualScaling) time.Time {
-	if ms.Status.FinishedAt != nil {
-		return ms.Status.FinishedAt.Time
-	}
-	return ms.CreationTimestamp.Time
-}
-
-// isTerminalManualScalingPhase reports whether p is a phase the history GC
-// and the active-candidate selector both treat as done.
-func isTerminalManualScalingPhase(p spannerv1beta1.SpannerManualScalingPhase) bool {
-	switch p {
-	case spannerv1beta1.SpannerManualScalingPhaseExpired,
-		spannerv1beta1.SpannerManualScalingPhaseSuperseded,
-		spannerv1beta1.SpannerManualScalingPhaseInvalid:
-		return true
-	}
-	return false
-}
-
-// manualScalingHasRamp returns true when the spec configures stepped scaling
-// in either direction (presence of scaleupStepSize or scaledownStepSize).
-// Interval-only specification does not count as ramp — the webhook surfaces
-// that combination as a warning.
-//
-// Most call sites should prefer manualScalingActiveRamp because it reflects
-// what THIS reconcile will actually do (stepped vs single-jump for the
-// direction being driven), whereas this function answers the broader
-// "anywhere in the spec" question.
-func manualScalingHasRamp(spec *spannerv1beta1.SpannerManualScalingSpec) bool {
-	return spec.ScaleupStepSize != nil || spec.ScaledownStepSize != nil
 }
 
 // manualScalingActiveRamp returns true when the override will step (rather
@@ -681,9 +616,6 @@ func manualScalingHasRamp(spec *spannerv1beta1.SpannerManualScalingSpec) bool {
 //     irrelevant for a scale-up).
 //   - target < current → consults ScaledownStepSize.
 //   - target == current → no transition; returns false (single-jump-equivalent).
-//
-// This deliberately diverges from manualScalingHasRamp, which OR's both
-// directions for the spec-level "is any ramp configured" question.
 func manualScalingActiveRamp(spec *spannerv1beta1.SpannerManualScalingSpec, currentPU int) bool {
 	switch {
 	case spec.ProcessingUnits > currentPU:
@@ -693,6 +625,48 @@ func manualScalingActiveRamp(spec *spannerv1beta1.SpannerManualScalingSpec, curr
 	default:
 		return false
 	}
+}
+
+// clearActiveManualScalingState clears sa.Status.ActiveManualScaling (when
+// set) and zeroes the manual_scaling_* gauges. Shared by every reconcile
+// branch that ends without an active override in effect (no-active, reject
+// policy). The caller is responsible for emitting the branch-specific event
+// (ManualScalingDeactivated / ManualScalingRejected) BEFORE invoking this.
+func (r *SpannerAutoscalerReconciler) clearActiveManualScalingState(sa *spannerv1beta1.SpannerAutoscaler, statusChanged *bool) {
+	if sa.Status.ActiveManualScaling != nil {
+		sa.Status.ActiveManualScaling = nil
+		*statusChanged = true
+	}
+	labels := observability.LabelsForAutoscaler(sa)
+	observability.RecordManualScalingActive(labels, false, false)
+	observability.RecordManualScalingTarget(labels, 0, false)
+}
+
+// rejectScaledownPolicy handles the defense-in-depth branch where the
+// cluster-wide --reject-manual-scaledown flag forbids reducing PU below the
+// current value. It marks the active candidate Invalid, emits a Rejected
+// event on the parent, then clears the active-override state.
+func (r *SpannerAutoscalerReconciler) rejectScaledownPolicy(
+	ctx context.Context,
+	log logr.Logger,
+	sa *spannerv1beta1.SpannerAutoscaler,
+	active *spannerv1beta1.SpannerManualScaling,
+	now time.Time,
+	statusChanged *bool,
+) {
+	msg := fmt.Sprintf(
+		"rejected: scaledown is disabled cluster-wide (--reject-manual-scaledown=true); "+
+			"spec.processingUnits=%d < currentProcessingUnits=%d",
+		active.Spec.ProcessingUnits, sa.Status.CurrentProcessingUnits)
+	log.Info("manual scaling: rejected", "name", active.Name, "reason", msg)
+	if perr := r.transitionManualScalingPhase(ctx, active,
+		spannerv1beta1.SpannerManualScalingPhaseInvalid, msg, now,
+	); perr != nil {
+		log.Error(perr, "manual scaling: failed to record rejection")
+	}
+	r.recorder.Eventf(sa, corev1.EventTypeWarning, "ManualScalingRejected",
+		"manual scaling rejected (source=%s): %s", active.Name, msg)
+	r.clearActiveManualScalingState(sa, statusChanged)
 }
 
 // activeManualScalingEqual compares two *ActiveManualScaling for status-write
@@ -717,12 +691,4 @@ func activeManualScalingEqual(a, b *spannerv1beta1.ActiveManualScaling) bool {
 	default:
 		return a.ExpiresAt.Time.Equal(b.ExpiresAt.Time)
 	}
-}
-
-// durationOr returns d.Duration when d is non-nil, otherwise fallback.
-func durationOr(d *metav1.Duration, fallback time.Duration) time.Duration {
-	if d == nil {
-		return fallback
-	}
-	return d.Duration
 }

@@ -63,10 +63,11 @@ type SpannerManualScalingReconciler struct {
 	log        logr.Logger
 }
 
-// SpannerManualScalingReconcilerOption is the option-pattern interface for
-// this reconciler. Mirrors the convention of SpannerAutoscalerReconciler /
-// SpannerAutoscaleScheduleReconciler so cmd/main.go can pass shared options.
-type SpannerManualScalingReconcilerOption interface {
+// spannerManualScalingReconcilerOption discriminates the shared Option type
+// (defined in spannerautoscaler_controller.go) for this reconciler. Kept
+// unexported because cmd/main.go passes the shared WithLog / WithClock
+// options directly via the Option slice.
+type spannerManualScalingReconcilerOption interface {
 	applySpannerManualScalingReconciler(r *SpannerManualScalingReconciler)
 }
 
@@ -92,7 +93,7 @@ func NewSpannerManualScalingReconciler(
 		clock:      utilclock.RealClock{},
 	}
 	for _, option := range opts {
-		if opt, ok := option.(SpannerManualScalingReconcilerOption); ok {
+		if opt, ok := option.(spannerManualScalingReconcilerOption); ok {
 			opt.applySpannerManualScalingReconciler(r)
 		}
 	}
@@ -115,7 +116,7 @@ func (r *SpannerManualScalingReconciler) Reconcile(ctx context.Context, req ctrl
 	// Terminal resources are immutable from this reconciler's perspective.
 	// Both Invalid (set by us) and Expired/Superseded (set by the parent SA
 	// reconciler) short-circuit here.
-	if isTerminalManualScalingPhase(ms.Status.Phase) {
+	if ms.Status.Phase.IsTerminal() {
 		return ctrl.Result{}, nil
 	}
 	if ms.DeletionTimestamp != nil {
@@ -135,7 +136,10 @@ func (r *SpannerManualScalingReconciler) Reconcile(ctx context.Context, req ctrl
 
 	// Target exists — ensure ownerReferences point at it so cascade-delete
 	// removes this resource when the parent SpannerAutoscaler is deleted.
-	if !hasControllerRefTo(&ms, &target) {
+	// metav1.GetControllerOf returns the existing controller-typed reference
+	// (or nil); we re-set only when it points at a different UID, including
+	// the first-time case.
+	if ref := metav1.GetControllerOf(&ms); ref == nil || ref.UID != target.UID {
 		if err := controllerutil.SetControllerReference(&target, &ms, r.scheme); err != nil {
 			log.Error(err, "failed to set controller reference",
 				"target", ms.Spec.TargetResource)
@@ -168,7 +172,7 @@ func (r *SpannerManualScalingReconciler) markInvalid(
 	ms *spannerv1beta1.SpannerManualScaling,
 	reason string,
 ) (ctrl.Result, error) {
-	if isTerminalManualScalingPhase(ms.Status.Phase) {
+	if ms.Status.Phase.IsTerminal() {
 		return ctrl.Result{}, nil
 	}
 	msg := fmt.Sprintf("%s: targetResource=%q in namespace=%q does not exist",
@@ -197,19 +201,4 @@ func (r *SpannerManualScalingReconciler) SetupWithManager(mgr ctrl.Manager) erro
 	return ctrlbuilder.ControllerManagedBy(mgr).
 		For(&spannerv1beta1.SpannerManualScaling{}, ctrlbuilder.WithPredicates(ctrlpredicate.GenerationChangedPredicate{})).
 		Complete(r)
-}
-
-// hasControllerRefTo reports whether obj already has a controller-type owner
-// reference pointing at the given SpannerAutoscaler. Used to decide whether
-// SetControllerReference needs to run again on subsequent reconciles.
-func hasControllerRefTo(obj *spannerv1beta1.SpannerManualScaling, target *spannerv1beta1.SpannerAutoscaler) bool {
-	for _, ref := range obj.OwnerReferences {
-		if ref.Controller == nil || !*ref.Controller {
-			continue
-		}
-		if ref.UID == target.UID && ref.Kind == "SpannerAutoscaler" {
-			return true
-		}
-	}
-	return false
 }
