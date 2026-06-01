@@ -15,7 +15,12 @@ limitations under the License.
 
 package controller
 
-import "k8s.io/apimachinery/pkg/util/intstr"
+import (
+	"time"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
+)
 
 // stepDirection selects the direction-specific rounding behavior of
 // resolveStepSize. The two directions are mostly symmetric, but scaleup
@@ -49,6 +54,77 @@ const (
 // path so that percentage / rounding semantics stay identical. The differential
 // test in stepsize_test.go locks down equivalence with the legacy inline
 // version against the parameter space the CPU path exercises.
+//
+// rampStep bundles the per-direction step-size and interval configuration
+// for nextRampPU. StepSize=nil means "no ramp, single-jump in this
+// direction"; Interval=nil falls back to DefaultInterval (typically a
+// controller-flag default).
+type rampStep struct {
+	StepSize        *intstr.IntOrString
+	Interval        *metav1.Duration
+	DefaultInterval time.Duration
+}
+
+// nextRampPU returns the PU to apply this reconcile and a non-zero
+// requeueAfter when the caller should wake up earlier than its watch
+// cadence — either to take the next step in a ramp or to break out of
+// cooldown.
+//
+// Behavior:
+//   - current == target → (target, 0). No work.
+//   - direction's StepSize is nil → (target, 0). Single-jump fallback.
+//   - cooldown is active (lastScaleTime + resolvedInterval > now) →
+//     (current, remaining). The caller should not change PU; requeue at
+//     the cooldown boundary.
+//   - otherwise → step toward target by resolveStepSize(StepSize, current,
+//     dir), clamped at target. requeue at the resolved interval.
+//
+// Shared by the SpannerManualScaling reconcile path and the planned
+// SpannerAutoscaleSchedule ramping path so percentage / rounding /
+// cooldown / single-jump semantics stay identical across both.
+func nextRampPU(current, target int, up, down rampStep, lastScaleTime, now time.Time) (int, time.Duration) {
+	if current == target {
+		return target, 0
+	}
+	var step rampStep
+	var dir stepDirection
+	if target > current {
+		step = up
+		dir = stepDirectionScaleup
+	} else {
+		step = down
+		dir = stepDirectionScaledown
+	}
+	if step.StepSize == nil {
+		return target, 0
+	}
+
+	stepSize := resolveStepSize(step.StepSize, current, dir)
+	interval := getOrConvertTimeDuration(step.Interval, step.DefaultInterval)
+
+	if !lastScaleTime.IsZero() && interval > 0 {
+		if elapsed := now.Sub(lastScaleTime); elapsed < interval {
+			return current, interval - elapsed
+		}
+	}
+
+	next := target
+	if stepSize > 0 {
+		if target > current {
+			next = current + stepSize
+			if next > target {
+				next = target
+			}
+		} else {
+			next = current - stepSize
+			if next < target {
+				next = target
+			}
+		}
+	}
+	return next, interval
+}
+
 func resolveStepSize(s *intstr.IntOrString, basePU int, dir stepDirection) int {
 	var size int
 	if s != nil {

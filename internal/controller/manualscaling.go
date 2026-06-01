@@ -350,63 +350,32 @@ func (r *SpannerAutoscalerReconciler) selectActiveManualScaling(
 // the step size is set; when interval is unset, the controller's
 // scaleUpInterval / scaleDownInterval flag default is used (the same
 // default that governs CPU-driven cadence on SpannerAutoscaler).
+//
+// Logic is delegated to nextRampPU so SpannerManualScaling and a future
+// SpannerAutoscaleSchedule ramp share identical step / interval / cooldown
+// semantics; this method only adapts spec fields into rampStep values.
 func (r *SpannerAutoscalerReconciler) nextManualPU(
 	sa *spannerv1beta1.SpannerAutoscaler,
 	ms *spannerv1beta1.SpannerManualScaling,
 	now time.Time,
 ) (int, time.Duration) {
-	target := ms.Spec.ProcessingUnits
-	current := sa.Status.CurrentProcessingUnits
-	if current == target {
-		return target, 0
+	up := rampStep{
+		StepSize:        ms.Spec.ScaleupStepSize,
+		Interval:        ms.Spec.ScaleupInterval,
+		DefaultInterval: r.scaleUpInterval,
 	}
-
-	var stepSize int
-	var interval time.Duration
-	if target > current {
-		if ms.Spec.ScaleupStepSize == nil {
-			return target, 0 // single-jump scale-up
-		}
-		stepSize = resolveStepSize(ms.Spec.ScaleupStepSize, current, stepDirectionScaleup)
-		interval = r.scaleUpInterval
-		if ms.Spec.ScaleupInterval != nil {
-			interval = ms.Spec.ScaleupInterval.Duration
-		}
-	} else {
-		if ms.Spec.ScaledownStepSize == nil {
-			return target, 0 // single-jump scale-down
-		}
-		stepSize = resolveStepSize(ms.Spec.ScaledownStepSize, current, stepDirectionScaledown)
-		interval = r.scaleDownInterval
-		if ms.Spec.ScaledownInterval != nil {
-			interval = ms.Spec.ScaledownInterval.Duration
-		}
+	down := rampStep{
+		StepSize:        ms.Spec.ScaledownStepSize,
+		Interval:        ms.Spec.ScaledownInterval,
+		DefaultInterval: r.scaleDownInterval,
 	}
-
-	// Honor cooldown: if LastScaleTime + interval has not elapsed, do not
-	// change PU this round; schedule a wakeup at the cooldown boundary.
-	if !sa.Status.LastScaleTime.IsZero() && interval > 0 {
-		elapsed := now.Sub(sa.Status.LastScaleTime.Time)
-		if elapsed < interval {
-			return current, interval - elapsed
-		}
-	}
-
-	next := target
-	if stepSize > 0 {
-		if target > current {
-			next = current + stepSize
-			if next > target {
-				next = target
-			}
-		} else {
-			next = current - stepSize
-			if next < target {
-				next = target
-			}
-		}
-	}
-	return next, interval
+	return nextRampPU(
+		sa.Status.CurrentProcessingUnits,
+		ms.Spec.ProcessingUnits,
+		up, down,
+		sa.Status.LastScaleTime.Time,
+		now,
+	)
 }
 
 // updateManualScalingProgress writes phase / progress fields onto the active
