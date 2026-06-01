@@ -228,65 +228,12 @@ func TestNextManualPU(t *testing.T) {
 	}
 }
 
-// TestManualScalingHasRamp covers the inference rule: presence of either
-// step size means "ramp", interval-only is treated as single-jump (the
-// webhook surfaces that combination as a warning to the operator).
-func TestManualScalingHasRamp(t *testing.T) {
-	cases := []struct {
-		name string
-		spec spannerv1beta1.SpannerManualScalingSpec
-		want bool
-	}{
-		{
-			name: "all unset",
-			spec: spannerv1beta1.SpannerManualScalingSpec{},
-			want: false,
-		},
-		{
-			name: "scaleup step set",
-			spec: spannerv1beta1.SpannerManualScalingSpec{
-				ScaleupStepSize: intstrPtr(intstr.FromInt(1000)),
-			},
-			want: true,
-		},
-		{
-			name: "scaledown step set",
-			spec: spannerv1beta1.SpannerManualScalingSpec{
-				ScaledownStepSize: intstrPtr(intstr.FromInt(1000)),
-			},
-			want: true,
-		},
-		{
-			name: "scaleup interval-only (no step)",
-			spec: spannerv1beta1.SpannerManualScalingSpec{
-				ScaleupInterval: durPtr(5 * time.Minute),
-			},
-			want: false,
-		},
-		{
-			name: "both step + interval",
-			spec: spannerv1beta1.SpannerManualScalingSpec{
-				ScaleupStepSize: intstrPtr(intstr.FromInt(1000)),
-				ScaleupInterval: durPtr(5 * time.Minute),
-			},
-			want: true,
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := manualScalingHasRamp(&tc.spec); got != tc.want {
-				t.Errorf("manualScalingHasRamp = %v, want %v", got, tc.want)
-			}
-		})
-	}
-}
-
 // TestManualScalingActiveRamp asserts the direction-aware ramp helper used
 // for the scale_events_total `driver` label and ActiveManualScaling.Ramp.
-// The naive manualScalingHasRamp (OR across both directions) would
-// misattribute single-jump scale-ups as ramped if the spec also had a
-// scaledown step size set; this helper resolves that by consulting only the
-// direction implied by target vs current.
+// A naive "any step size set in the spec" rule would misattribute
+// single-jump scale-ups as ramped when the spec also had a scaledown step
+// size set; this helper resolves that by consulting only the direction
+// implied by target vs current.
 func TestManualScalingActiveRamp(t *testing.T) {
 	stepUp := intstrPtr(intstr.FromInt(1000))
 	stepDown := intstrPtr(intstr.FromInt(1000))
@@ -412,33 +359,5 @@ func TestActiveManualScalingEqual(t *testing.T) {
 				t.Errorf("activeManualScalingEqual = %v, want %v", got, tc.want)
 			}
 		})
-	}
-}
-
-// TestIsTerminalManualScalingPhase locks down the set of phases the active-
-// candidate selector and the history GC both treat as done. Adding a new
-// terminal phase requires updating this test (and updating GC + selector
-// to match).
-func TestIsTerminalManualScalingPhase(t *testing.T) {
-	terminal := []spannerv1beta1.SpannerManualScalingPhase{
-		spannerv1beta1.SpannerManualScalingPhaseExpired,
-		spannerv1beta1.SpannerManualScalingPhaseSuperseded,
-		spannerv1beta1.SpannerManualScalingPhaseInvalid,
-	}
-	nonTerminal := []spannerv1beta1.SpannerManualScalingPhase{
-		spannerv1beta1.SpannerManualScalingPhasePending,
-		spannerv1beta1.SpannerManualScalingPhaseProgressing,
-		spannerv1beta1.SpannerManualScalingPhaseActive,
-		spannerv1beta1.SpannerManualScalingPhase(""), // empty = newly created, treat as non-terminal
-	}
-	for _, p := range terminal {
-		if !isTerminalManualScalingPhase(p) {
-			t.Errorf("phase %q should be terminal", p)
-		}
-	}
-	for _, p := range nonTerminal {
-		if isTerminalManualScalingPhase(p) {
-			t.Errorf("phase %q should not be terminal", p)
-		}
 	}
 }
