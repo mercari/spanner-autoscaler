@@ -114,7 +114,7 @@ For complex time requirements involving specific minutes, consider using multipl
 
 ### Manual scaling override
 
-For incident response or planned ramps, you can pin processing units to an explicit target via the `SpannerManualScaling` CRD. Manual scaling takes precedence over CPU- and schedule-driven autoscaling for as long as the override is active.
+For incident response or planned ramps, you can pin processing units to an explicit target via the `SpannerManualScaling` CRD. Manual scaling takes precedence over CPU- and schedule-driven autoscaling for as long as the override is active. Single-jump and stepped-ramp variants are both supported; the operational surface is intentionally just `kubectl create` / `kubectl delete` (spec is immutable, and the newest-`creationTimestamp` rule atomically supersedes older overrides).
 
 ```yaml
 # Single-jump: target reached in one reconcile (no step size set).
@@ -129,29 +129,7 @@ spec:
   expiresAt: "2026-05-29T10:00:00Z"   # or "2026-05-29T19:00:00+09:00" — same instant
 ```
 
-```yaml
-# Stepped ramp: scaleupStepSize set → walk toward the target.
-# scaleupInterval omitted falls back to the controller's --scale-up-interval flag default.
-apiVersion: spanner.mercari.com/v1beta1
-kind: SpannerManualScaling
-metadata:
-  name: event-ramp-2026-05-28
-  namespace: production
-spec:
-  targetResource: spannerautoscaler-sample
-  processingUnits: 7000
-  scaleupStepSize: 1000   # at most +1000 PU per step
-  scaleupInterval: 5m     # wait at least 5 minutes between steps
-  expiresAt: "2026-05-28T20:00:00Z"
-```
-
-Key properties:
-
-- **Spec is immutable** after creation. To change the target PU, ramp parameters, or extend `expiresAt`, create a new `SpannerManualScaling` — the newest `creationTimestamp` becomes Active and atomically supersedes the older resource (no autoscaling gap). To force expiration, `kubectl delete` the resource.
-- **Pacing is inferred** from the presence of the step-size field for the active direction (`scaleupStepSize` when target > current; `scaledownStepSize` when target < current). Interval-only configuration (e.g. `scaleupInterval` without `scaleupStepSize`) is treated as single-jump; the validating webhook emits a warning for that pattern.
-- **Cluster operators** can restrict scaledown via the `--reject-manual-scaledown` controller flag. When enabled, both the webhook and the reconciler reject any `SpannerManualScaling` whose `spec.processingUnits` would reduce the current PU. This makes it safe to grant `SpannerManualScaling` create/delete permissions to a wider operator audience: holders of those verbs can only ever increase PU.
-- **History GC** is opt-in via `--manual-scaling-history-per-namespace=N`. When set, the controller keeps the N most-recent finished (Expired/Superseded/Invalid) resources per namespace and deletes the older ones, preventing accumulation. Active/Progressing/Pending resources are never deleted by this GC.
-
+See [`docs/manual-scaling.md`](./docs/manual-scaling.md) for the full lifecycle, stepped-ramp configuration, modify-via-newest-wins examples, the `--reject-manual-scaledown` cluster policy, history-GC flag, RBAC, and a local kind + emulator end-to-end walkthrough.
 
 ## Installation
 
