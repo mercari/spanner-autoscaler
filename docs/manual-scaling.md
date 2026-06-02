@@ -198,6 +198,41 @@ kubectl delete spannermanualscaling \
   -l app.kubernetes.io/instance=event-ramp-2026-06-01
 ```
 
+## Interaction with SpannerAutoscaleSchedule
+
+When a `SpannerManualScaling` is active at the same time as one or more
+`SpannerAutoscaleSchedule` resources are in their time window, the
+manual override **fully preempts** the schedules — its target PU
+replaces the schedule-bumped range that would otherwise be computed
+on the CPU path:
+
+- The actual instance PU follows `SpannerManualScaling.spec.processingUnits`
+  (with step / interval pacing). The schedule's `additionalPU`
+  contribution is **not added on top** of the manual target.
+- `status.activeManualScaling` is populated with the manual snapshot;
+  `status.currentlyActiveSchedules` is **retained as-is** (the schedule
+  is still in its window — we only suppress its PU contribution, not
+  its visibility).
+- `status.desiredMinPUs` / `status.desiredMaxPUs` are zeroed while the
+  manual override is active.
+- Each reconcile that suppresses an in-window schedule logs at INFO
+  level (`manual scaling preempting active schedule(s)`, naming the
+  schedules) and increments the
+  `scale_skipped_total{reason="schedule_suppressed_by_manual"}`
+  counter so operators can distinguish this case from other not-applied
+  reasons in dashboards.
+
+When the manual override ends (`expiresAt` elapses, the resource is
+deleted, or a newer `SpannerManualScaling` supersedes it), the next
+reconcile recomputes `desiredMinPUs` / `desiredMaxPUs` from
+`currentlyActiveSchedules`, and the schedule's `additionalPU`
+contribution is re-applied automatically. **Be aware that PU may move
+sharply at that moment** if the manual target and the
+schedule-derived target diverged — for example, a manual pin at 4000
+PU expiring into a schedule window with `additionalPU=5000` while the
+CPU baseline has grown to 6000 will cause a scale-up toward
+11000 across the next few reconciles.
+
 ## Cluster operator features
 
 ### `--reject-manual-scaledown=true`

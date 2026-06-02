@@ -51,12 +51,13 @@ const (
 	DriverManualRamp = "manual_ramp"
 
 	// Skip reasons for scale_skipped_total.
-	SkipReasonSame              = "same"
-	SkipReasonScaleUpInterval   = "scale_up_interval"
-	SkipReasonScaleDownInterval = "scale_down_interval"
-	SkipReasonScaleDownWindow   = "scale_down_window"
-	SkipReasonInstanceNotReady  = "instance_not_ready"
-	SkipReasonCPUNotReady       = "cpu_not_ready"
+	SkipReasonSame                       = "same"
+	SkipReasonScaleUpInterval            = "scale_up_interval"
+	SkipReasonScaleDownInterval          = "scale_down_interval"
+	SkipReasonScaleDownWindow            = "scale_down_window"
+	SkipReasonInstanceNotReady           = "instance_not_ready"
+	SkipReasonCPUNotReady                = "cpu_not_ready"
+	SkipReasonScheduleSuppressedByManual = "schedule_suppressed_by_manual"
 
 	// Schedule deactivation reasons for schedule_deactivations_total.
 	ScheduleDeactivationExpired      = "expired"

@@ -179,6 +179,23 @@ func (r *SpannerAutoscalerReconciler) reconcileManualScaling(
 		*statusChanged = true
 	}
 
+	// When schedules are in their time window at the same time as this
+	// override, the override wins (its target replaces the schedule-bumped
+	// range computed on the CPU path). Surface the preempt to operators so
+	// that "schedule is configured but PU does not reflect its
+	// additionalPU" is not mistaken for a bug, and so it shows up in the
+	// scale_skipped metric like other not-applied reasons.
+	if names := scheduleNamesPreemptedBy(active, sa); len(names) > 0 {
+		log.Info("manual scaling preempting active schedule(s)",
+			"source", active.Name,
+			"schedules", names,
+		)
+		observability.RecordScaleSkipped(
+			observability.LabelsForAutoscaler(sa),
+			observability.SkipReasonScheduleSuppressedByManual,
+		)
+	}
+
 	// ramp reflects what this reconcile will actually do (stepped vs
 	// single-jump for the direction being driven), not just whether any step
 	// size is set in the spec. See manualScalingActiveRamp's docstring.
@@ -636,6 +653,24 @@ func (r *SpannerAutoscalerReconciler) rejectScaledownPolicy(
 	r.recorder.Eventf(sa, corev1.EventTypeWarning, "ManualScalingRejected",
 		"manual scaling rejected (source=%s): %s", active.Name, msg)
 	r.clearActiveManualScalingState(sa, statusChanged)
+}
+
+// scheduleNamesPreemptedBy returns the names of schedules currently in their
+// time window that this active manual override is about to suppress. When
+// the active manual override exists, the CPU+schedule path is skipped and
+// the schedule-derived min/max contribution is zeroed in
+// reconcileManualScaling, so listing those names here lets the caller
+// surface the preempt to operators (log + scale_skipped metric). Empty
+// when no schedule is in its window.
+func scheduleNamesPreemptedBy(active *spannerv1beta1.SpannerManualScaling, sa *spannerv1beta1.SpannerAutoscaler) []string {
+	if active == nil || len(sa.Status.CurrentlyActiveSchedules) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(sa.Status.CurrentlyActiveSchedules))
+	for _, as := range sa.Status.CurrentlyActiveSchedules {
+		names = append(names, as.ScheduleName)
+	}
+	return names
 }
 
 // activeManualScalingEqual compares two *ActiveManualScaling for status-write

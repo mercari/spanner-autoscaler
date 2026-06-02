@@ -598,6 +598,88 @@ func TestReconcileManualScaling_RejectScaledownPolicy(t *testing.T) {
 	eventLooksLike(t, rec, "ManualScalingRejected")
 }
 
+// TestReconcileManualScaling_PreemptsActiveSchedule ensures that when a
+// SpannerManualScaling becomes the active override while schedules are
+// currently in their time window, the schedule-derived DesiredMin/MaxPUs
+// are zeroed (suppressed) and the preempt is surfaced to operators via
+// the SkipReasonScheduleSuppressedByManual metric. The schedule entries
+// themselves are not pruned from CurrentlyActiveSchedules — they are
+// still in their window and will re-take effect once the manual override
+// ends. This pins down the documented overlap policy: manual scaling
+// fully preempts schedules; the actual instance PU follows manual scaling
+// only.
+func TestReconcileManualScaling_PreemptsActiveSchedule(t *testing.T) {
+	scheme := manualScalingTestScheme(t)
+	now := time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
+	ms := activeMS("ms-up", 8000, now.Add(-time.Minute))
+	sa := &spannerv1beta1.SpannerAutoscaler{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ns1", Name: "sa-target"},
+		Status: spannerv1beta1.SpannerAutoscalerStatus{
+			CurrentProcessingUnits: 4000,
+			DesiredMinPUs:          7000, // populated by a previous CPU+schedule reconcile
+			DesiredMaxPUs:          9000,
+			CurrentlyActiveSchedules: []spannerv1beta1.ActiveSchedule{
+				{ScheduleName: "peak-hours", AdditionalPU: 5000, EndTime: metav1.Time{Time: now.Add(time.Hour)}},
+			},
+		},
+	}
+	cl := fakeclient.NewClientBuilder().WithScheme(scheme).WithObjects(sa, ms).
+		WithStatusSubresource(&spannerv1beta1.SpannerManualScaling{}).Build()
+	r, _ := newReconcilerForApply(t, cl, now, false)
+	syncer := &stubSyncer{}
+
+	statusChanged := false
+	if _, _, err := r.reconcileManualScaling(context.Background(), logr.Discard(), sa, syncer, now, &statusChanged); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if sa.Status.DesiredMinPUs != 0 || sa.Status.DesiredMaxPUs != 0 {
+		t.Errorf("DesiredMin/MaxPUs should be zeroed when manual preempts schedule; got min=%d max=%d",
+			sa.Status.DesiredMinPUs, sa.Status.DesiredMaxPUs)
+	}
+	if len(sa.Status.CurrentlyActiveSchedules) != 1 || sa.Status.CurrentlyActiveSchedules[0].ScheduleName != "peak-hours" {
+		t.Errorf("CurrentlyActiveSchedules should be retained as-is (still in window); got %+v",
+			sa.Status.CurrentlyActiveSchedules)
+	}
+	// PU is set to the manual target (8000), not baseline+additional (9000).
+	if len(syncer.calls) != 1 || syncer.calls[0] != 8000 {
+		t.Errorf("syncer should apply the manual target only; got calls=%v", syncer.calls)
+	}
+}
+
+// TestScheduleNamesPreemptedBy covers the helper that decides whether the
+// preempt log/metric should fire: empty when no manual override is active
+// or no schedule is in its window, otherwise the schedule name list.
+func TestScheduleNamesPreemptedBy(t *testing.T) {
+	now := time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
+	ms := activeMS("ms-up", 8000, now.Add(-time.Minute))
+	saWithSchedules := &spannerv1beta1.SpannerAutoscaler{
+		Status: spannerv1beta1.SpannerAutoscalerStatus{
+			CurrentlyActiveSchedules: []spannerv1beta1.ActiveSchedule{
+				{ScheduleName: "peak-hours"},
+				{ScheduleName: "evening-rush"},
+			},
+		},
+	}
+	saNoSchedules := &spannerv1beta1.SpannerAutoscaler{}
+
+	if got := scheduleNamesPreemptedBy(nil, saWithSchedules); got != nil {
+		t.Errorf("nil active → want nil, got %v", got)
+	}
+	if got := scheduleNamesPreemptedBy(ms, saNoSchedules); got != nil {
+		t.Errorf("no active schedule → want nil, got %v", got)
+	}
+	got := scheduleNamesPreemptedBy(ms, saWithSchedules)
+	want := []string{"peak-hours", "evening-rush"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("[%d] got %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 // TestReconcileManualScaling_CooldownHoldEmitsSkip covers the case where
 // LastScaleTime is recent enough that the per-direction cooldown has not
 // elapsed: nextManualPU returns currentPU + remaining-cooldown duration,
