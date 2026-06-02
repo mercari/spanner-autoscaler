@@ -646,40 +646,6 @@ func TestReconcileManualScaling_PreemptsActiveSchedule(t *testing.T) {
 	}
 }
 
-// TestScheduleNamesPreemptedBy covers the helper that decides whether the
-// preempt log/metric should fire: empty when no manual override is active
-// or no schedule is in its window, otherwise the schedule name list.
-func TestScheduleNamesPreemptedBy(t *testing.T) {
-	now := time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
-	ms := activeMS("ms-up", 8000, now.Add(-time.Minute))
-	saWithSchedules := &spannerv1beta1.SpannerAutoscaler{
-		Status: spannerv1beta1.SpannerAutoscalerStatus{
-			CurrentlyActiveSchedules: []spannerv1beta1.ActiveSchedule{
-				{ScheduleName: "peak-hours"},
-				{ScheduleName: "evening-rush"},
-			},
-		},
-	}
-	saNoSchedules := &spannerv1beta1.SpannerAutoscaler{}
-
-	if got := scheduleNamesPreemptedBy(nil, saWithSchedules); got != nil {
-		t.Errorf("nil active → want nil, got %v", got)
-	}
-	if got := scheduleNamesPreemptedBy(ms, saNoSchedules); got != nil {
-		t.Errorf("no active schedule → want nil, got %v", got)
-	}
-	got := scheduleNamesPreemptedBy(ms, saWithSchedules)
-	want := []string{"peak-hours", "evening-rush"}
-	if len(got) != len(want) {
-		t.Fatalf("got %v, want %v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("[%d] got %q, want %q", i, got[i], want[i])
-		}
-	}
-}
-
 // TestReconcileManualScaling_CooldownHoldEmitsSkip covers the case where
 // LastScaleTime is recent enough that the per-direction cooldown has not
 // elapsed: nextManualPU returns currentPU + remaining-cooldown duration,

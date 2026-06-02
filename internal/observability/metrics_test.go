@@ -90,6 +90,7 @@ func TestRecordScaleSkipped(t *testing.T) {
 	RecordScaleSkipped(l, SkipReasonScaleUpInterval)
 	RecordScaleSkipped(l, SkipReasonScaleUpInterval)
 	RecordScaleSkipped(l, SkipReasonSame)
+	RecordScaleSkipped(l, SkipReasonScheduleSuppressedByManual)
 
 	if got := testutil.ToFloat64(scaleSkippedTotal.WithLabelValues(
 		l.Namespace, l.Name, l.ProjectID, l.InstanceID, SkipReasonScaleUpInterval,
@@ -100,6 +101,11 @@ func TestRecordScaleSkipped(t *testing.T) {
 		l.Namespace, l.Name, l.ProjectID, l.InstanceID, SkipReasonSame,
 	)); got != 1 {
 		t.Errorf("same count = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(scaleSkippedTotal.WithLabelValues(
+		l.Namespace, l.Name, l.ProjectID, l.InstanceID, SkipReasonScheduleSuppressedByManual,
+	)); got != 1 {
+		t.Errorf("schedule_suppressed_by_manual count = %v, want 1", got)
 	}
 }
 
