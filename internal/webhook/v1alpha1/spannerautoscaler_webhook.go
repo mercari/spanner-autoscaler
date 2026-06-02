@@ -18,14 +18,11 @@ package v1alpha1
 
 import (
 	ctrl "sigs.k8s.io/controller-runtime"
+
+	spannerv1alpha1 "github.com/mercari/spanner-autoscaler/api/v1alpha1"
 )
 
-// log is for logging in this package.
-// var spannerautoscalerlog = logf.Log.WithName("spannerautoscaler-resource")
-
-func (r *SpannerAutoscaler) SetupWebhookWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewWebhookManagedBy(mgr, r).
+func SetupSpannerAutoscalerWebhookWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewWebhookManagedBy(mgr, &spannerv1alpha1.SpannerAutoscaler{}).
 		Complete()
 }
-
-// TODO(user): EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!

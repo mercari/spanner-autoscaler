@@ -40,6 +40,7 @@ import (
 	spannerv1alpha1 "github.com/mercari/spanner-autoscaler/api/v1alpha1"
 	"github.com/mercari/spanner-autoscaler/internal/controller"
 	"github.com/mercari/spanner-autoscaler/internal/observability"
+	webhookv1beta1 "github.com/mercari/spanner-autoscaler/internal/webhook/v1beta1"
 )
 
 var (
@@ -171,11 +172,11 @@ func main() {
 	}
 
 	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
-		if err = (&spannerv1beta1.SpannerAutoscaler{}).SetupWebhookWithManager(mgr); err != nil {
+		if err = webhookv1beta1.SetupSpannerAutoscalerWebhookWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to create webhook", "webhook", "SpannerAutoscaler")
 			os.Exit(exitCode)
 		}
-		if err = (&spannerv1beta1.SpannerAutoscaleSchedule{}).SetupWebhookWithManager(mgr); err != nil {
+		if err = webhookv1beta1.SetupSpannerAutoscaleScheduleWebhookWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to create webhook", "webhook", "SpannerAutoscaleSchedule")
 			os.Exit(exitCode)
 		}
