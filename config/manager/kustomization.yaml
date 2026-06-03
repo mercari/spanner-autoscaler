@@ -5,4 +5,4 @@ kind: Kustomization
 images:
 - name: controller
   newName: mercari/spanner-autoscaler
-  newTag: local
+  newTag: latest
