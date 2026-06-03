@@ -6,7 +6,7 @@ require (
 	github.com/elastic/crd-ref-docs v0.3.0
 	github.com/golangci/golangci-lint/v2 v2.12.2
 	sigs.k8s.io/controller-tools v0.21.0
-	sigs.k8s.io/kind v0.31.0
+	sigs.k8s.io/kind v0.32.0
 )
 
 require (
