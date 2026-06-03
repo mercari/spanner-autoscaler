@@ -73,12 +73,10 @@ var (
 	metricsCertKey       = flag.String("metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	scaleDownInterval    = flag.Duration("scale-down-interval", 55*time.Minute, "The scale down interval.")
 	scaleUpInterval      = flag.Duration("scale-up-interval", 60*time.Second, "The scale up interval.")
-	certDir              = flag.String("cert-dir", "", "Directory containing TLS certificates for the webhook server. Used for local development with webhook forwarding (see docs/development.md).")
 	spannerEndpoint      = flag.String("spanner-endpoint", "", "Override the Spanner API endpoint (e.g. localhost:9010 for the emulator).")
 	metricsEndpoint      = flag.String("metrics-endpoint", "", "Override the Cloud Monitoring API endpoint (e.g. localhost:9090 for the emulator).")
 )
 
-// nolint:gocyclo
 func main() {
 	var tlsOpts []func(*tls.Config)
 
@@ -120,7 +118,7 @@ func main() {
 		TLSOpts: webhookTLSOpts,
 	}
 
-	if len(*webhookCertPath) > 0 {
+	if *webhookCertPath != "" {
 		setupLog.Info("Initializing webhook certificate watcher using provided certificates",
 			"webhook-cert-path", *webhookCertPath, "webhook-cert-name", *webhookCertName, "webhook-cert-key", *webhookCertKey)
 
@@ -141,7 +139,7 @@ func main() {
 		metricsServerOptions.FilterProvider = filters.WithAuthenticationAndAuthorization
 	}
 
-	if len(*metricsCertPath) > 0 {
+	if *metricsCertPath != "" {
 		setupLog.Info("Initializing metrics certificate watcher using provided certificates",
 			"metrics-cert-path", *metricsCertPath, "metrics-cert-name", *metricsCertName, "metrics-cert-key", *metricsCertKey)
 
@@ -213,7 +211,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// nolint:goconst
+	//nolint:goconst
 	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
 		if err := webhookv1beta1.SetupSpannerAutoscalerWebhookWithManager(mgr); err != nil {
 			setupLog.Error(err, "Failed to create webhook", "webhook", "SpannerAutoscaler")
