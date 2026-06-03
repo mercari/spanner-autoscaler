@@ -1,13 +1,8 @@
-
 apiVersion: v1
 kind: Service
 metadata:
   labels:
-    app.kubernetes.io/name: service
-    app.kubernetes.io/instance: webhook-service
-    app.kubernetes.io/component: webhook
-    app.kubernetes.io/created-by: spanner-autoscaler
-    app.kubernetes.io/part-of: spanner-autoscaler
+    app.kubernetes.io/name: spanner-autoscaler
     app.kubernetes.io/managed-by: kustomize
   name: webhook-service
   namespace: system
@@ -18,3 +13,4 @@ spec:
       targetPort: 9443
   selector:
     control-plane: controller-manager
+    app.kubernetes.io/name: spanner-autoscaler
