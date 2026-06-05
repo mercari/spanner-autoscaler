@@ -30,56 +30,52 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
+	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
 	"github.com/mercari/spanner-autoscaler/internal/cron"
 )
 
-// log is for logging in this package.
 var log = logf.Log.WithName("spannerautoscaler-resource.webhook")
 
-func (r *SpannerAutoscaler) SetupWebhookWithManager(mgr ctrl.Manager) error {
-	w := &spannerAutoscalerWebhook{}
-	return ctrl.NewWebhookManagedBy(mgr, r).
-		WithDefaulter(w).
-		WithValidator(w).
+func SetupSpannerAutoscalerWebhookWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewWebhookManagedBy(mgr, &spannerv1beta1.SpannerAutoscaler{}).
+		WithDefaulter(&SpannerAutoscalerCustomDefaulter{}).
+		WithValidator(&SpannerAutoscalerCustomValidator{}).
 		Complete()
 }
 
 //+kubebuilder:webhook:path=/mutate-spanner-mercari-com-v1beta1-spannerautoscaler,mutating=true,failurePolicy=fail,sideEffects=None,groups=spanner.mercari.com,resources=spannerautoscalers,verbs=create;update,versions=v1beta1,name=mspannerautoscaler.kb.io,admissionReviewVersions=v1
-//+kubebuilder:webhook:path=/validate-spanner-mercari-com-v1beta1-spannerautoscaler,mutating=false,failurePolicy=fail,sideEffects=None,groups=spanner.mercari.com,resources=spannerautoscalers,verbs=create;update,versions=v1beta1,name=vspannerautoscaler.kb.io,admissionReviewVersions=v1
 
-// spannerAutoscalerWebhook implements admission.Defaulter and admission.Validator
-// for the SpannerAutoscaler resource.
-type spannerAutoscalerWebhook struct{}
+type SpannerAutoscalerCustomDefaulter struct{}
 
-// Default implements admission.Defaulter so a webhook will be registered for the type.
-func (*spannerAutoscalerWebhook) Default(_ context.Context, obj *SpannerAutoscaler) error {
+// Default implements admission.CustomDefaulter so a webhook will be registered for the type.
+func (*SpannerAutoscalerCustomDefaulter) Default(_ context.Context, obj *spannerv1beta1.SpannerAutoscaler) error {
 	log.Info("default", "name", obj.Name)
 	log.V(1).Info("received spannerautoscaler resource for setting defaults", "name", obj.Name, "resource", obj)
 
 	// set the correct AuthType in Spec
 	switch {
 	case obj.Spec.Authentication.IAMKeySecret != nil:
-		obj.Spec.Authentication.Type = AuthTypeSA
+		obj.Spec.Authentication.Type = spannerv1beta1.AuthTypeSA
 	case obj.Spec.Authentication.ImpersonateConfig != nil:
-		obj.Spec.Authentication.Type = AuthTypeImpersonation
+		obj.Spec.Authentication.Type = spannerv1beta1.AuthTypeImpersonation
 	default:
-		obj.Spec.Authentication.Type = AuthTypeADC
+		obj.Spec.Authentication.Type = spannerv1beta1.AuthTypeADC
 	}
 
 	// set appropriate namespace for secret
-	if obj.Spec.Authentication.Type == AuthTypeSA && obj.Spec.Authentication.IAMKeySecret.Namespace == "" {
+	if obj.Spec.Authentication.Type == spannerv1beta1.AuthTypeSA && obj.Spec.Authentication.IAMKeySecret.Namespace == "" {
 		obj.Spec.Authentication.IAMKeySecret.Namespace = obj.ObjectMeta.Namespace
 	}
 
 	// set default ComputeType
-	if obj.Spec.ScaleConfig.ProcessingUnits != (ScaleConfigPUs{}) {
-		obj.Spec.ScaleConfig.ComputeType = ComputeTypePU
+	if obj.Spec.ScaleConfig.ProcessingUnits != (spannerv1beta1.ScaleConfigPUs{}) {
+		obj.Spec.ScaleConfig.ComputeType = spannerv1beta1.ComputeTypePU
 	}
 
 	// convert the nodes to processing units
-	if obj.Spec.ScaleConfig.Nodes != (ScaleConfigNodes{}) {
-		obj.Spec.ScaleConfig.ComputeType = ComputeTypeNode
-		obj.Spec.ScaleConfig.ProcessingUnits = ScaleConfigPUs{
+	if obj.Spec.ScaleConfig.Nodes != (spannerv1beta1.ScaleConfigNodes{}) {
+		obj.Spec.ScaleConfig.ComputeType = spannerv1beta1.ComputeTypeNode
+		obj.Spec.ScaleConfig.ProcessingUnits = spannerv1beta1.ScaleConfigPUs{
 			Min: obj.Spec.ScaleConfig.Nodes.Min * 1000,
 			Max: obj.Spec.ScaleConfig.Nodes.Max * 1000,
 		}
@@ -94,8 +90,12 @@ func (*spannerAutoscalerWebhook) Default(_ context.Context, obj *SpannerAutoscal
 	return nil
 }
 
-// ValidateCreate implements admission.Validator so a webhook will be registered for the type.
-func (*spannerAutoscalerWebhook) ValidateCreate(_ context.Context, obj *SpannerAutoscaler) (admission.Warnings, error) {
+//+kubebuilder:webhook:path=/validate-spanner-mercari-com-v1beta1-spannerautoscaler,mutating=false,failurePolicy=fail,sideEffects=None,groups=spanner.mercari.com,resources=spannerautoscalers,verbs=create;update,versions=v1beta1,name=vspannerautoscaler.kb.io,admissionReviewVersions=v1
+
+type SpannerAutoscalerCustomValidator struct{}
+
+// ValidateCreate implements admission.CustomValidator so a webhook will be registered for the type.
+func (*SpannerAutoscalerCustomValidator) ValidateCreate(_ context.Context, obj *spannerv1beta1.SpannerAutoscaler) (admission.Warnings, error) {
 	log.Info("validate create", "name", obj.Name)
 	log.V(1).Info("validating creation of SpannerAutoscaler resource", "name", obj.Name, "resource", obj)
 
@@ -110,8 +110,8 @@ func (*spannerAutoscalerWebhook) ValidateCreate(_ context.Context, obj *SpannerA
 		obj.Name, allErrs)
 }
 
-// ValidateUpdate implements admission.Validator so a webhook will be registered for the type.
-func (*spannerAutoscalerWebhook) ValidateUpdate(_ context.Context, oldObj, newObj *SpannerAutoscaler) (admission.Warnings, error) {
+// ValidateUpdate implements admission.CustomValidator so a webhook will be registered for the type.
+func (*SpannerAutoscalerCustomValidator) ValidateUpdate(_ context.Context, oldObj, newObj *spannerv1beta1.SpannerAutoscaler) (admission.Warnings, error) {
 	log.Info("validate update", "name", newObj.Name)
 	log.V(1).Info("validating updates to SpannerAutoscaler resource", "name", newObj.Name, "resource", newObj)
 
@@ -140,14 +140,14 @@ func (*spannerAutoscalerWebhook) ValidateUpdate(_ context.Context, oldObj, newOb
 		newObj.Name, allErrs)
 }
 
-// ValidateDelete implements admission.Validator so a webhook will be registered for the type.
-func (*spannerAutoscalerWebhook) ValidateDelete(_ context.Context, obj *SpannerAutoscaler) (admission.Warnings, error) {
+// ValidateDelete implements admission.CustomValidator so a webhook will be registered for the type.
+func (*SpannerAutoscalerCustomValidator) ValidateDelete(_ context.Context, obj *spannerv1beta1.SpannerAutoscaler) (admission.Warnings, error) {
 	log.Info("validate delete", "name", obj.Name)
 
 	return nil, nil
 }
 
-func validateSpec(r *SpannerAutoscaler) (allErrs field.ErrorList) {
+func validateSpec(r *spannerv1beta1.SpannerAutoscaler) (allErrs field.ErrorList) {
 	if err := validateAuthentication(r); err != nil {
 		allErrs = append(allErrs, err)
 	}
@@ -158,7 +158,7 @@ func validateSpec(r *SpannerAutoscaler) (allErrs field.ErrorList) {
 	return allErrs
 }
 
-func validateAuthentication(r *SpannerAutoscaler) *field.Error {
+func validateAuthentication(r *spannerv1beta1.SpannerAutoscaler) *field.Error {
 	if r.Spec.Authentication.ImpersonateConfig != nil && r.Spec.Authentication.IAMKeySecret != nil {
 		return field.Invalid(
 			field.NewPath("spec").Child("authentication"),
@@ -168,7 +168,7 @@ func validateAuthentication(r *SpannerAutoscaler) *field.Error {
 	return nil
 }
 
-func validateTargetCPUUtilization(cpu TargetCPUUtilization) *field.Error {
+func validateTargetCPUUtilization(cpu spannerv1beta1.TargetCPUUtilization) *field.Error {
 	if cpu.HighPriority == nil && cpu.Total == nil {
 		return field.Required(
 			field.NewPath("spec", "scaleConfig", "targetCPUUtilization"),
@@ -178,14 +178,14 @@ func validateTargetCPUUtilization(cpu TargetCPUUtilization) *field.Error {
 	return nil
 }
 
-func validateScaleConfig(r *SpannerAutoscaler) *field.Error {
+func validateScaleConfig(r *spannerv1beta1.SpannerAutoscaler) *field.Error {
 	sc := r.Spec.ScaleConfig
 
 	if err := validateTargetCPUUtilization(sc.TargetCPUUtilization); err != nil {
 		return err
 	}
 
-	if sc.Nodes != (ScaleConfigNodes{}) {
+	if sc.Nodes != (spannerv1beta1.ScaleConfigNodes{}) {
 		if sc.Nodes.Max < sc.Nodes.Min {
 			return field.Invalid(
 				field.NewPath("spec").Child("scaleConfig").Child("nodes").Child("max"),
@@ -194,7 +194,7 @@ func validateScaleConfig(r *SpannerAutoscaler) *field.Error {
 		}
 	}
 
-	if sc.ProcessingUnits != (ScaleConfigPUs{}) {
+	if sc.ProcessingUnits != (spannerv1beta1.ScaleConfigPUs{}) {
 		if sc.ProcessingUnits.Max < sc.ProcessingUnits.Min {
 			return field.Invalid(
 				field.NewPath("spec").Child("scaleConfig").Child("processingUnits").Child("max"),

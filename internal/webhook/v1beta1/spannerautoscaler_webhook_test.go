@@ -8,11 +8,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+
+	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
 )
 
 var _ = Describe("SpannerAutoscaler validation", func() {
 	var (
-		testResource *SpannerAutoscaler
+		testResource *spannerv1beta1.SpannerAutoscaler
 		namespace    string
 		name         string
 	)
@@ -27,7 +29,7 @@ var _ = Describe("SpannerAutoscaler validation", func() {
 		})
 		Expect(err).NotTo(HaveOccurred())
 
-		testResource = &SpannerAutoscaler{
+		testResource = &spannerv1beta1.SpannerAutoscaler{
 			TypeMeta: metav1.TypeMeta{
 				Kind:       "SpannerAutoscaler",
 				APIVersion: "spanner.mercari.com/v1beta1",
@@ -36,13 +38,13 @@ var _ = Describe("SpannerAutoscaler validation", func() {
 				Name:      name,
 				Namespace: namespace,
 			},
-			Spec: SpannerAutoscalerSpec{
-				TargetInstance: TargetInstance{
+			Spec: spannerv1beta1.SpannerAutoscalerSpec{
+				TargetInstance: spannerv1beta1.TargetInstance{
 					ProjectID:  "test-project-id",
 					InstanceID: "test-instance-id",
 				},
-				ScaleConfig: ScaleConfig{
-					TargetCPUUtilization: TargetCPUUtilization{
+				ScaleConfig: spannerv1beta1.ScaleConfig{
+					TargetCPUUtilization: spannerv1beta1.TargetCPUUtilization{
 						HighPriority: intPtr(30),
 					},
 				},
@@ -53,7 +55,7 @@ var _ = Describe("SpannerAutoscaler validation", func() {
 	Describe("Check default settings", func() {
 		Describe("Authentication", func() {
 			BeforeEach(func() {
-				testResource.Spec.ScaleConfig.ProcessingUnits = ScaleConfigPUs{
+				testResource.Spec.ScaleConfig.ProcessingUnits = spannerv1beta1.ScaleConfigPUs{
 					Min: 1000,
 					Max: 10000,
 				}
@@ -61,8 +63,8 @@ var _ = Describe("SpannerAutoscaler validation", func() {
 
 			Context("IAM key secret is set", func() {
 				BeforeEach(func() {
-					testResource.Spec.Authentication = Authentication{
-						IAMKeySecret: &IAMKeySecret{
+					testResource.Spec.Authentication = spannerv1beta1.Authentication{
+						IAMKeySecret: &spannerv1beta1.IAMKeySecret{
 							Name: "test-service-account-secret",
 							Key:  "secret",
 						},
@@ -77,7 +79,7 @@ var _ = Describe("SpannerAutoscaler validation", func() {
 					It("should set authentication type 'gcp-sa-key' automatically", func() {
 						result, err := createResource(testResource)
 						Expect(err).ToNot(HaveOccurred())
-						Expect(result.Spec.Authentication.Type).To(Equal(AuthTypeSA))
+						Expect(result.Spec.Authentication.Type).To(Equal(spannerv1beta1.AuthTypeSA))
 						Expect(result.Spec.Authentication.IAMKeySecret.Namespace).To(Equal("default"))
 					})
 				})
@@ -86,7 +88,7 @@ var _ = Describe("SpannerAutoscaler validation", func() {
 					It("should set authentication type 'gcp-sa-key' and namespace automatically", func() {
 						result, err := createResource(testResource)
 						Expect(err).ToNot(HaveOccurred())
-						Expect(result.Spec.Authentication.Type).To(Equal(AuthTypeSA))
+						Expect(result.Spec.Authentication.Type).To(Equal(spannerv1beta1.AuthTypeSA))
 						Expect(result.Spec.Authentication.IAMKeySecret.Namespace).To(Equal(namespace))
 					})
 				})
@@ -94,8 +96,8 @@ var _ = Describe("SpannerAutoscaler validation", func() {
 
 			Context("impersonate config is set", func() {
 				BeforeEach(func() {
-					testResource.Spec.Authentication = Authentication{
-						ImpersonateConfig: &ImpersonateConfig{
+					testResource.Spec.Authentication = spannerv1beta1.Authentication{
+						ImpersonateConfig: &spannerv1beta1.ImpersonateConfig{
 							TargetServiceAccount: "test-service-account",
 							Delegates:            []string{"test-delegate"},
 						},
@@ -105,7 +107,7 @@ var _ = Describe("SpannerAutoscaler validation", func() {
 				It("should set authentication type 'impersonation' automatically", func() {
 					result, err := createResource(testResource)
 					Expect(err).ToNot(HaveOccurred())
-					Expect(result.Spec.Authentication.Type).To(Equal(AuthTypeImpersonation))
+					Expect(result.Spec.Authentication.Type).To(Equal(spannerv1beta1.AuthTypeImpersonation))
 				})
 			})
 
@@ -113,7 +115,7 @@ var _ = Describe("SpannerAutoscaler validation", func() {
 				It("should set authentication type 'adc' automatically", func() {
 					result, err := createResource(testResource)
 					Expect(err).ToNot(HaveOccurred())
-					Expect(result.Spec.Authentication.Type).To(Equal(AuthTypeADC))
+					Expect(result.Spec.Authentication.Type).To(Equal(spannerv1beta1.AuthTypeADC))
 				})
 			})
 		})
@@ -121,7 +123,7 @@ var _ = Describe("SpannerAutoscaler validation", func() {
 		Describe("ScaleConfig", func() {
 			Context("processing unit configuration is set", func() {
 				BeforeEach(func() {
-					testResource.Spec.ScaleConfig.ProcessingUnits = ScaleConfigPUs{
+					testResource.Spec.ScaleConfig.ProcessingUnits = spannerv1beta1.ScaleConfigPUs{
 						Min: 1000,
 						Max: 10000,
 					}
@@ -135,7 +137,7 @@ var _ = Describe("SpannerAutoscaler validation", func() {
 					It("should set compute type 'processing-units' automatically", func() {
 						result, err := createResource(testResource)
 						Expect(err).ToNot(HaveOccurred())
-						Expect(result.Spec.ScaleConfig.ComputeType).To(Equal(ComputeTypePU))
+						Expect(result.Spec.ScaleConfig.ComputeType).To(Equal(spannerv1beta1.ComputeTypePU))
 						Expect(result.Spec.ScaleConfig.ScaledownStepSize.IntVal).To(Equal(int32(1000)))
 					})
 				})
@@ -144,7 +146,7 @@ var _ = Describe("SpannerAutoscaler validation", func() {
 					It("should set compute type 'processing-units' and scale down step size automatically", func() {
 						result, err := createResource(testResource)
 						Expect(err).ToNot(HaveOccurred())
-						Expect(result.Spec.ScaleConfig.ComputeType).To(Equal(ComputeTypePU))
+						Expect(result.Spec.ScaleConfig.ComputeType).To(Equal(spannerv1beta1.ComputeTypePU))
 						Expect(result.Spec.ScaleConfig.ScaledownStepSize.IntVal).To(Equal(int32(2000)))
 					})
 				})
@@ -152,7 +154,7 @@ var _ = Describe("SpannerAutoscaler validation", func() {
 
 			Context("processing unit node is set", func() {
 				BeforeEach(func() {
-					testResource.Spec.ScaleConfig.Nodes = ScaleConfigNodes{
+					testResource.Spec.ScaleConfig.Nodes = spannerv1beta1.ScaleConfigNodes{
 						Min: 1,
 						Max: 10,
 					}
@@ -166,7 +168,7 @@ var _ = Describe("SpannerAutoscaler validation", func() {
 					It("should set compute type and processing unit configuration automatically", func() {
 						result, err := createResource(testResource)
 						Expect(err).ToNot(HaveOccurred())
-						Expect(result.Spec.ScaleConfig.ComputeType).To(Equal(ComputeTypeNode))
+						Expect(result.Spec.ScaleConfig.ComputeType).To(Equal(spannerv1beta1.ComputeTypeNode))
 						Expect(result.Spec.ScaleConfig.ProcessingUnits.Min).To(Equal(1000))
 						Expect(result.Spec.ScaleConfig.ProcessingUnits.Max).To(Equal(10000))
 						Expect(result.Spec.ScaleConfig.ScaledownStepSize.IntVal).To(Equal(int32(1000)))
@@ -177,7 +179,7 @@ var _ = Describe("SpannerAutoscaler validation", func() {
 					It("should set compute type, processing unit configuration, and scale down step size automatically", func() {
 						result, err := createResource(testResource)
 						Expect(err).ToNot(HaveOccurred())
-						Expect(result.Spec.ScaleConfig.ComputeType).To(Equal(ComputeTypeNode))
+						Expect(result.Spec.ScaleConfig.ComputeType).To(Equal(spannerv1beta1.ComputeTypeNode))
 						Expect(result.Spec.ScaleConfig.ProcessingUnits.Min).To(Equal(1000))
 						Expect(result.Spec.ScaleConfig.ProcessingUnits.Max).To(Equal(10000))
 						Expect(result.Spec.ScaleConfig.ScaledownStepSize.IntVal).To(Equal(int32(2000)))
@@ -190,7 +192,7 @@ var _ = Describe("SpannerAutoscaler validation", func() {
 	Describe("Check validation settings", func() {
 		Describe("Authentication", func() {
 			BeforeEach(func() {
-				testResource.Spec.ScaleConfig.ProcessingUnits = ScaleConfigPUs{
+				testResource.Spec.ScaleConfig.ProcessingUnits = spannerv1beta1.ScaleConfigPUs{
 					Min: 1000,
 					Max: 10000,
 				}
@@ -198,12 +200,12 @@ var _ = Describe("SpannerAutoscaler validation", func() {
 
 			Context("both ImpersonateConfig and IAMKeySecret are set", func() {
 				BeforeEach(func() {
-					testResource.Spec.Authentication = Authentication{
-						ImpersonateConfig: &ImpersonateConfig{
+					testResource.Spec.Authentication = spannerv1beta1.Authentication{
+						ImpersonateConfig: &spannerv1beta1.ImpersonateConfig{
 							TargetServiceAccount: "test-service-account",
 							Delegates:            []string{"test-delegate"},
 						},
-						IAMKeySecret: &IAMKeySecret{
+						IAMKeySecret: &spannerv1beta1.IAMKeySecret{
 							Name: "test-service-account-secret",
 							Key:  "secret",
 						},
@@ -220,7 +222,7 @@ var _ = Describe("SpannerAutoscaler validation", func() {
 
 		Describe("TargetCPUUtilization", func() {
 			BeforeEach(func() {
-				testResource.Spec.ScaleConfig.ProcessingUnits = ScaleConfigPUs{
+				testResource.Spec.ScaleConfig.ProcessingUnits = spannerv1beta1.ScaleConfigPUs{
 					Min: 1000,
 					Max: 10000,
 				}
@@ -228,7 +230,7 @@ var _ = Describe("SpannerAutoscaler validation", func() {
 
 			Context("only total is set", func() {
 				BeforeEach(func() {
-					testResource.Spec.ScaleConfig.TargetCPUUtilization = TargetCPUUtilization{
+					testResource.Spec.ScaleConfig.TargetCPUUtilization = spannerv1beta1.TargetCPUUtilization{
 						Total: intPtr(60),
 					}
 				})
@@ -241,7 +243,7 @@ var _ = Describe("SpannerAutoscaler validation", func() {
 
 			Context("both highPriority and total are set", func() {
 				BeforeEach(func() {
-					testResource.Spec.ScaleConfig.TargetCPUUtilization = TargetCPUUtilization{
+					testResource.Spec.ScaleConfig.TargetCPUUtilization = spannerv1beta1.TargetCPUUtilization{
 						HighPriority: intPtr(30),
 						Total:        intPtr(60),
 					}
@@ -255,7 +257,7 @@ var _ = Describe("SpannerAutoscaler validation", func() {
 
 			Context("neither highPriority nor total is set", func() {
 				BeforeEach(func() {
-					testResource.Spec.ScaleConfig.TargetCPUUtilization = TargetCPUUtilization{}
+					testResource.Spec.ScaleConfig.TargetCPUUtilization = spannerv1beta1.TargetCPUUtilization{}
 				})
 
 				It("should return validation error", func() {
@@ -268,8 +270,8 @@ var _ = Describe("SpannerAutoscaler validation", func() {
 
 		Describe("ScaleConfig", func() {
 			BeforeEach(func() {
-				testResource.Spec.Authentication = Authentication{
-					ImpersonateConfig: &ImpersonateConfig{
+				testResource.Spec.Authentication = spannerv1beta1.Authentication{
+					ImpersonateConfig: &spannerv1beta1.ImpersonateConfig{
 						TargetServiceAccount: "test-service-account",
 						Delegates:            []string{"test-delegate"},
 					},
@@ -278,7 +280,7 @@ var _ = Describe("SpannerAutoscaler validation", func() {
 
 			Context("max nodes are smaller than min nodes", func() {
 				BeforeEach(func() {
-					testResource.Spec.ScaleConfig.Nodes = ScaleConfigNodes{
+					testResource.Spec.ScaleConfig.Nodes = spannerv1beta1.ScaleConfigNodes{
 						Max: 1,
 						Min: 2,
 					}
@@ -293,7 +295,7 @@ var _ = Describe("SpannerAutoscaler validation", func() {
 
 			Context("max processing units are smaller than min processing units", func() {
 				BeforeEach(func() {
-					testResource.Spec.ScaleConfig.ProcessingUnits = ScaleConfigPUs{
+					testResource.Spec.ScaleConfig.ProcessingUnits = spannerv1beta1.ScaleConfigPUs{
 						Max: 1000,
 						Min: 2000,
 					}
@@ -308,7 +310,7 @@ var _ = Describe("SpannerAutoscaler validation", func() {
 
 			Context("processing units are greater than 1000 but not multiples of 1000", func() {
 				BeforeEach(func() {
-					testResource.Spec.ScaleConfig.ProcessingUnits = ScaleConfigPUs{
+					testResource.Spec.ScaleConfig.ProcessingUnits = spannerv1beta1.ScaleConfigPUs{
 						Max: 2000,
 						Min: 1500,
 					}
@@ -326,8 +328,8 @@ var _ = Describe("SpannerAutoscaler validation", func() {
 
 func intPtr(i int) *int { return &i }
 
-func createResource(r *SpannerAutoscaler) (finalResource *SpannerAutoscaler, err error) {
-	finalResource = &SpannerAutoscaler{}
+func createResource(r *spannerv1beta1.SpannerAutoscaler) (finalResource *spannerv1beta1.SpannerAutoscaler, err error) {
+	finalResource = &spannerv1beta1.SpannerAutoscaler{}
 	if err := k8sClient.Create(ctx, r); err != nil {
 		return finalResource, err
 	}

@@ -6,7 +6,7 @@
 
 ## spanner.mercari.com/v1beta1
 
-Package v1beta1 contains API Schema definitions for the spanner v1beta1 API group
+Package v1beta1 contains API Schema definitions for the spanner v1beta1 API group.
 
 ### Resource Types
 - [SpannerAutoscaleSchedule](#spannerautoscaleschedule)
