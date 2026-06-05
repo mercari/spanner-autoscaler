@@ -102,7 +102,7 @@ dev-certs: ## Extract webhook TLS certs from cluster into $(WEBHOOK_CERT_DIR) fo
 
 .PHONY: run-dev
 run-dev: manifests generate fmt vet dev-certs ## Run controller locally with webhook forwarding (requires kind cluster with deploy-dev or tilt-up).
-	go run ./cmd/main.go -zap-devel --cert-dir=$(WEBHOOK_CERT_DIR)
+	go run ./cmd/main.go -zap-devel --webhook-cert-path=$(WEBHOOK_CERT_DIR)
 
 .PHONY: test-integration
 test-integration: manifests generate envtest ## Run integration tests (starts emulators automatically if not running).
@@ -210,13 +210,11 @@ endif
 
 .PHONY: install
 install: manifests kustomize ## Install CRDs into the K8s cluster specified in ~/.kube/config.
-	@out="$$( "$(KUSTOMIZE)" build config/crd 2>/dev/null || true )"; \
-		if [ -n "$$out" ]; then echo "$$out" | "$(KUBECTL)" apply -f -; else echo "No CRDs to install; skipping."; fi
+	$(KUSTOMIZE) build config/crd | kubectl apply -f -
 
 .PHONY: uninstall
 uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
-	@out="$$( "$(KUSTOMIZE)" build config/crd 2>/dev/null || true )"; \
-		if [ -n "$$out" ]; then echo "$$out" | "$(KUBECTL)" delete --ignore-not-found=$(ignore-not-found) -f -; else echo "No CRDs to delete; skipping."; fi
+	$(KUSTOMIZE) build config/crd | kubectl delete --ignore-not-found=$(ignore-not-found) -f -
 
 .PHONY: deploy
 deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in ~/.kube/config.

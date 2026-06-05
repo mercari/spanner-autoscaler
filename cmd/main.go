@@ -162,7 +162,7 @@ func main() {
 		LeaderElectionID:       *leaderElectionID,
 	})
 	if err != nil {
-		setupLog.Error(err, "Failed to start manager")
+		setupLog.Error(err, "Failed to create manager")
 		os.Exit(1)
 	}
 

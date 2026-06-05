@@ -1,4 +1,4 @@
-# spanner-autoscaler-new - AI Agent Guide
+# spanner-autoscaler - AI Agent Guide
 
 ## Project Structure
 
