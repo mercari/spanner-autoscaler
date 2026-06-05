@@ -28,26 +28,24 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
+	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
 	"github.com/mercari/spanner-autoscaler/internal/cron"
 )
 
-// log is for logging in this package.
 var spannerautoscaleschedulelog = logf.Log.WithName("spannerautoscaleschedule-resource.webhook")
 
-func (r *SpannerAutoscaleSchedule) SetupWebhookWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewWebhookManagedBy(mgr, r).
-		WithValidator(&spannerAutoscaleScheduleWebhook{}).
+func SetupSpannerAutoscaleScheduleWebhookWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewWebhookManagedBy(mgr, &spannerv1beta1.SpannerAutoscaleSchedule{}).
+		WithValidator(&SpannerAutoscaleScheduleCustomValidator{}).
 		Complete()
 }
 
 //+kubebuilder:webhook:path=/validate-spanner-mercari-com-v1beta1-spannerautoscaleschedule,mutating=false,failurePolicy=fail,sideEffects=None,groups=spanner.mercari.com,resources=spannerautoscaleschedules,verbs=create;update,versions=v1beta1,name=vspannerautoscaleschedule.kb.io,admissionReviewVersions=v1
 
-// spannerAutoscaleScheduleWebhook implements admission.Validator for the
-// SpannerAutoscaleSchedule resource.
-type spannerAutoscaleScheduleWebhook struct{}
+type SpannerAutoscaleScheduleCustomValidator struct{}
 
-// ValidateCreate implements admission.Validator so a webhook will be registered for the type.
-func (*spannerAutoscaleScheduleWebhook) ValidateCreate(_ context.Context, obj *SpannerAutoscaleSchedule) (admission.Warnings, error) {
+// ValidateCreate implements admission.CustomValidator so a webhook will be registered for the type.
+func (*SpannerAutoscaleScheduleCustomValidator) ValidateCreate(_ context.Context, obj *spannerv1beta1.SpannerAutoscaleSchedule) (admission.Warnings, error) {
 	spannerautoscaleschedulelog.Info("validate create", "name", obj.Name)
 	spannerautoscaleschedulelog.V(1).Info("validating creation of SpannerAutoscaleSchedule resource", "name", obj.Name, "resource", obj)
 
@@ -62,8 +60,8 @@ func (*spannerAutoscaleScheduleWebhook) ValidateCreate(_ context.Context, obj *S
 		obj.Name, allErrs)
 }
 
-// ValidateUpdate implements admission.Validator so a webhook will be registered for the type.
-func (*spannerAutoscaleScheduleWebhook) ValidateUpdate(_ context.Context, oldObj, newObj *SpannerAutoscaleSchedule) (admission.Warnings, error) {
+// ValidateUpdate implements admission.CustomValidator so a webhook will be registered for the type.
+func (*SpannerAutoscaleScheduleCustomValidator) ValidateUpdate(_ context.Context, oldObj, newObj *spannerv1beta1.SpannerAutoscaleSchedule) (admission.Warnings, error) {
 	spannerautoscaleschedulelog.Info("validate update", "name", newObj.Name)
 	spannerautoscaleschedulelog.V(1).Info("validating updates to SpannerAutoscaleSchedule resource", "name", newObj.Name, "resource", newObj)
 
@@ -93,14 +91,14 @@ func (*spannerAutoscaleScheduleWebhook) ValidateUpdate(_ context.Context, oldObj
 		newObj.Name, allErrs)
 }
 
-// ValidateDelete implements admission.Validator so a webhook will be registered for the type.
-func (*spannerAutoscaleScheduleWebhook) ValidateDelete(_ context.Context, obj *SpannerAutoscaleSchedule) (admission.Warnings, error) {
+// ValidateDelete implements admission.CustomValidator so a webhook will be registered for the type.
+func (*SpannerAutoscaleScheduleCustomValidator) ValidateDelete(_ context.Context, obj *spannerv1beta1.SpannerAutoscaleSchedule) (admission.Warnings, error) {
 	spannerautoscaleschedulelog.Info("validate delete", "name", obj.Name)
 
 	return nil, nil
 }
 
-func validateSchedule(r *SpannerAutoscaleSchedule) field.ErrorList {
+func validateSchedule(r *spannerv1beta1.SpannerAutoscaleSchedule) field.ErrorList {
 	var allErrs field.ErrorList
 
 	if _, err := cron.Parse(r.Spec.Schedule.Cron); err != nil {

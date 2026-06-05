@@ -5,24 +5,26 @@ import (
 	. "github.com/onsi/gomega"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+
+	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
 )
 
 var _ = Describe("SpannerAutoscaleSchedule validation", func() {
 	var (
-		schedule  *SpannerAutoscaleSchedule
+		schedule  *spannerv1beta1.SpannerAutoscaleSchedule
 		namespace string
 	)
 
 	BeforeEach(func() {
 		namespace = "default"
-		schedule = &SpannerAutoscaleSchedule{
+		schedule = &spannerv1beta1.SpannerAutoscaleSchedule{
 			ObjectMeta: metav1.ObjectMeta{
 				GenerateName: "test-schedule-",
 				Namespace:    namespace,
 			},
-			Spec: SpannerAutoscaleScheduleSpec{
+			Spec: spannerv1beta1.SpannerAutoscaleScheduleSpec{
 				TargetResource: "spannerautoscaler-sample",
-				Schedule: Schedule{
+				Schedule: spannerv1beta1.Schedule{
 					Cron:     "0 9 * * 1-5",
 					Duration: "1h",
 				},
@@ -65,13 +67,13 @@ var _ = Describe("SpannerAutoscaleSchedule validation", func() {
 	})
 
 	Describe("ValidateUpdate", func() {
-		var created *SpannerAutoscaleSchedule
+		var created *spannerv1beta1.SpannerAutoscaleSchedule
 
 		BeforeEach(func() {
 			created = schedule.DeepCopy()
 			Expect(k8sClient.Create(ctx, created)).To(Succeed())
 
-			var got SpannerAutoscaleSchedule
+			var got spannerv1beta1.SpannerAutoscaleSchedule
 			Expect(k8sClient.Get(ctx, types.NamespacedName{
 				Namespace: created.Namespace,
 				Name:      created.Name,

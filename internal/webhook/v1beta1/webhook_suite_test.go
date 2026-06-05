@@ -40,6 +40,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	ctrlwebhook "sigs.k8s.io/controller-runtime/pkg/webhook"
+
+	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
 )
 
 // These tests use Ginkgo (BDD-style Go testing framework). Refer to
@@ -66,10 +68,10 @@ var _ = BeforeSuite(func() {
 
 	By("bootstrapping test environment")
 	testEnv = &envtest.Environment{
-		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "config", "crd", "bases")},
+		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "..", "config", "crd", "bases")},
 		ErrorIfCRDPathMissing: false,
 		WebhookInstallOptions: envtest.WebhookInstallOptions{
-			Paths: []string{filepath.Join("..", "..", "config", "webhook")},
+			Paths: []string{filepath.Join("..", "..", "..", "config", "webhook")},
 		},
 	}
 
@@ -78,7 +80,7 @@ var _ = BeforeSuite(func() {
 	Expect(cfg).NotTo(BeNil())
 
 	scheme := runtime.NewScheme()
-	err = AddToScheme(scheme)
+	err = spannerv1beta1.AddToScheme(scheme)
 	Expect(err).NotTo(HaveOccurred())
 
 	// required for creating new namespace
@@ -108,10 +110,10 @@ var _ = BeforeSuite(func() {
 	})
 	Expect(err).NotTo(HaveOccurred())
 
-	err = (&SpannerAutoscaler{}).SetupWebhookWithManager(mgr)
+	err = SetupSpannerAutoscalerWebhookWithManager(mgr)
 	Expect(err).NotTo(HaveOccurred())
 
-	err = (&SpannerAutoscaleSchedule{}).SetupWebhookWithManager(mgr)
+	err = SetupSpannerAutoscaleScheduleWebhookWithManager(mgr)
 	Expect(err).NotTo(HaveOccurred())
 
 	//+kubebuilder:scaffold:webhook
