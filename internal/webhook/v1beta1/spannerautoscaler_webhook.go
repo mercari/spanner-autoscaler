@@ -194,23 +194,8 @@ func validateScaleConfig(r *spannerv1beta1.SpannerAutoscaler) *field.Error {
 		}
 	}
 
-	if sc.ProcessingUnits != (spannerv1beta1.ScaleConfigPUs{}) {
-		if sc.ProcessingUnits.Max < sc.ProcessingUnits.Min {
-			return field.Invalid(
-				field.NewPath("spec").Child("scaleConfig").Child("processingUnits").Child("max"),
-				sc.Nodes.Max,
-				"'max' value must be less than 'min' value")
-		}
-		if err := validateProcessingUnits(
-			sc.ProcessingUnits.Min,
-			field.NewPath("spec").Child("scaleConfig").Child("processingUnits").Child("min")); err != nil {
-			return err
-		}
-		if err := validateProcessingUnits(
-			sc.ProcessingUnits.Max,
-			field.NewPath("spec").Child("scaleConfig").Child("processingUnits").Child("max")); err != nil {
-			return err
-		}
+	if err := validateProcessingUnitRange(sc); err != nil {
+		return err
 	}
 
 	switch sc.ScaledownStepSize.Type {
@@ -299,7 +284,45 @@ func validateScaleConfig(r *spannerv1beta1.SpannerAutoscaler) *field.Error {
 	return nil
 }
 
+func validateProcessingUnitRange(sc spannerv1beta1.ScaleConfig) *field.Error {
+	if sc.ProcessingUnits == (spannerv1beta1.ScaleConfigPUs{}) {
+		return nil
+	}
+
+	if sc.ProcessingUnits.Max < sc.ProcessingUnits.Min {
+		return field.Invalid(
+			field.NewPath("spec").Child("scaleConfig").Child("processingUnits").Child("max"),
+			sc.ProcessingUnits.Max,
+			"'max' value must be less than 'min' value")
+	}
+	if err := validateProcessingUnits(
+		sc.ProcessingUnits.Min,
+		field.NewPath("spec").Child("scaleConfig").Child("processingUnits").Child("min")); err != nil {
+		return err
+	}
+	if err := validateProcessingUnits(
+		sc.ProcessingUnits.Max,
+		field.NewPath("spec").Child("scaleConfig").Child("processingUnits").Child("max")); err != nil {
+		return err
+	}
+	return nil
+}
+
 func validateProcessingUnits(pu int, fldPath *field.Path) *field.Error {
+	if pu < 100 {
+		return field.Invalid(
+			fldPath,
+			pu,
+			"processing units must be at least 100")
+	}
+
+	if pu < 1000 && pu%100 != 0 {
+		return field.Invalid(
+			fldPath,
+			pu,
+			"processing units which are less than 1000, should be multiples of 100")
+	}
+
 	if pu >= 1000 && pu%1000 != 0 {
 		return field.Invalid(
 			fldPath,

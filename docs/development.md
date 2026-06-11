@@ -97,6 +97,17 @@ Spanner instances must be created via the admin HTTP API before the controller c
 $ curl -X PUT http://localhost:9011/instances/beta-project/beta-instance \
     -H 'Content-Type: application/json' \
     -d '{"processing_units": 1000}'
+
+# Create an instance with an explicit Spanner instance config
+$ curl -X PUT http://localhost:9011/instances/beta-project/beta-instance \
+    -H 'Content-Type: application/json' \
+    -d '{"processing_units": 1000, "config": "projects/beta-project/instanceConfigs/regional-asia-northeast1"}'
+
+# Make UpdateInstance return ResourceExhausted when aggregate PU for this
+# project/config exceeds the configured quota.
+$ curl -X PUT http://localhost:9011/quota/beta-project/regional-asia-northeast1 \
+    -H 'Content-Type: application/json' \
+    -d '{"processing_units": 100000}'
 ```
 
 #### Monitoring emulator
@@ -113,6 +124,7 @@ spanner-autoscaler calls only one RPC method from the [MetricService API](https:
 | RPC | Used in | Purpose |
 |---|---|---|
 | `MetricService.ListTimeSeries` | `metrics.Client.GetInstanceMetrics` | Fetch `spanner.googleapis.com/instance/cpu/utilization_by_priority` (priority=`high`) or `spanner.googleapis.com/instance/cpu/utilization` (total) for the target instance |
+| `MetricService.ListTimeSeries` | `metrics.Client.GetQuota` | Fetch `serviceruntime.googleapis.com/quota/limit` and `serviceruntime.googleapis.com/quota/allocation/usage` after Spanner `UpdateInstance` returns `ResourceExhausted` |
 
 All other `MetricService` methods (`CreateTimeSeries`, `ListMetricDescriptors`, etc.) are **not implemented** and return `Unimplemented`.
 
@@ -202,6 +214,27 @@ $ curl -X DELETE http://localhost:9091/metrics/beta-project/beta-instance
 
 If no mode is configured for an instance, the controller logs `no such spanner instance metrics` and skips scaling for that cycle.
 
+**Quota metrics**
+
+The Monitoring emulator can also return the quota time series used by the ResourceExhausted fallback. These quota metrics are independent from the CPU modes above. Configure a `consumer_quota` entry per project/location:
+
+```console
+# Regional instance config: regional-asia-northeast1
+$ curl -X PUT http://localhost:9091/quota/beta-project/asia-northeast1 \
+    -H 'Content-Type: application/json' \
+    -d '{"quotaMetric": "spanner.googleapis.com/nodes", "limitName": "SpannerNodesPerProject", "limitNodes": 100, "usageNodes": 1}'
+
+# Multi-region or dual-region instance config, for example nam6:
+$ curl -X PUT http://localhost:9091/quota/beta-project/global \
+    -H 'Content-Type: application/json' \
+    -d '{"quotaMetric": "spanner.googleapis.com/nodes_nam6", "limitName": "NodesNam6PerProject", "limitNodes": 25, "usageNodes": 0}'
+
+# Remove
+$ curl -X DELETE http://localhost:9091/quota/beta-project/asia-northeast1
+```
+
+To verify quota fallback end to end, configure the Spanner emulator instance with the target `config`, set a Spanner emulator quota low enough to make `UpdateInstance` return `ResourceExhausted`, and set the matching Monitoring emulator quota metrics. The controller then uses the config returned by `GetInstance` to select the Monitoring quota series, emits `spanner_autoscaler_instance_update_errors_total{grpc_code="resource_exhausted"}`, emits `spanner_autoscaler_quota_lookup_total`, and retries once with the largest PU value that fits the observed quota.
+
 ### Webhook mode (default)
 
 Webhooks are **enabled by default** because CRD field additions — which also require webhook changes — happen frequently in this project. cert-manager is installed automatically on the first `tilt up` (takes ~1–2 minutes). Subsequent runs skip the install and start in seconds.
@@ -257,7 +290,7 @@ If you prefer not to use Tilt, you can run the full webhook development loop man
    ```console
    $ make run-dev
    ```
-   `run-dev` automatically extracts the webhook TLS certificate from the cluster into `bin/webhook-certs/` and starts the controller with `--cert-dir` pointing to that directory.
+   `run-dev` automatically extracts the webhook TLS certificate from the cluster into `bin/webhook-certs/` and starts the controller with `--webhook-cert-path` pointing to that directory.
 
 1. Apply sample resources:
    ```console

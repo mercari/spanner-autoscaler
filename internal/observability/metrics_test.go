@@ -16,6 +16,8 @@ import (
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
 	"github.com/prometheus/common/model"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
@@ -134,7 +136,9 @@ func TestRecordInstanceUpdate_ResultMapping(t *testing.T) {
 	teardown(t, l)
 
 	RecordInstanceUpdate(l, 50*time.Millisecond, nil)
-	RecordInstanceUpdate(l, 2*time.Second, errors.New("boom"))
+	RecordInstanceUpdate(l, 2*time.Second, status.Error(codes.ResourceExhausted, "quota exceeded"))
+	// Plain non-gRPC error: status.Code reports codes.Unknown → "unknown" label.
+	RecordInstanceUpdate(l, 100*time.Millisecond, errors.New("boom"))
 
 	if got := testutil.ToFloat64(instanceUpdateTotal.WithLabelValues(
 		l.Namespace, l.Name, l.ProjectID, l.InstanceID, resultSuccess,
@@ -143,8 +147,57 @@ func TestRecordInstanceUpdate_ResultMapping(t *testing.T) {
 	}
 	if got := testutil.ToFloat64(instanceUpdateTotal.WithLabelValues(
 		l.Namespace, l.Name, l.ProjectID, l.InstanceID, resultError,
+	)); got != 2 {
+		t.Errorf("error count = %v, want 2", got)
+	}
+	if got := testutil.ToFloat64(instanceUpdateErrorsTotal.WithLabelValues(
+		l.Namespace, l.Name, l.ProjectID, l.InstanceID, "resource_exhausted",
 	)); got != 1 {
-		t.Errorf("error count = %v, want 1", got)
+		t.Errorf("resource_exhausted error count = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(instanceUpdateErrorsTotal.WithLabelValues(
+		l.Namespace, l.Name, l.ProjectID, l.InstanceID, "unknown",
+	)); got != 1 {
+		t.Errorf("unknown error count = %v, want 1", got)
+	}
+}
+
+func TestGrpcCodeSnake(t *testing.T) {
+	tests := []struct {
+		in, want string
+	}{
+		{"ResourceExhausted", "resource_exhausted"},
+		{"PermissionDenied", "permission_denied"},
+		{"Unavailable", "unavailable"},
+		{"OK", "o_k"}, // not used in practice (grpcCodeFor short-circuits), but documents the conversion rule
+		{"", ""},
+		{"already_snake", "already_snake"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			if got := grpcCodeSnake(tt.in); got != tt.want {
+				t.Errorf("grpcCodeSnake(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRecordQuotaLookup_ResultMapping(t *testing.T) {
+	l := labelsFor("quota")
+	teardown(t, l)
+
+	RecordQuotaLookup(l, QuotaLookupResultSuccess, QuotaLookupReasonOK)
+	RecordQuotaLookup(l, QuotaLookupResultSkipped, QuotaLookupReasonUnsupportedInstanceConfig)
+
+	if got := testutil.ToFloat64(quotaLookupTotal.WithLabelValues(
+		l.Namespace, l.Name, l.ProjectID, l.InstanceID, QuotaLookupResultSuccess, QuotaLookupReasonOK,
+	)); got != 1 {
+		t.Errorf("quota lookup success count = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(quotaLookupTotal.WithLabelValues(
+		l.Namespace, l.Name, l.ProjectID, l.InstanceID, QuotaLookupResultSkipped, QuotaLookupReasonUnsupportedInstanceConfig,
+	)); got != 1 {
+		t.Errorf("quota lookup skipped count = %v, want 1", got)
 	}
 }
 
@@ -356,6 +409,8 @@ func TestMetricsHTTPExposition(t *testing.T) {
 	RecordScheduleActivation(l)
 	RecordScheduleDeactivation(l, ScheduleDeactivationExpired)
 	RecordInstanceUpdate(l, 250*time.Millisecond, nil)
+	RecordInstanceUpdate(l, 260*time.Millisecond, status.Error(codes.ResourceExhausted, "quota exceeded"))
+	RecordQuotaLookup(l, QuotaLookupResultSkipped, QuotaLookupReasonUnsupportedInstanceConfig)
 	RecordMetricsFetch(l, 80*time.Millisecond, nil)
 
 	srv := httptest.NewServer(promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))

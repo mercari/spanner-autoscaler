@@ -11,6 +11,10 @@ var (
 		`metric\.type\s*=\s*"spanner\.googleapis\.com/instance/cpu/utilization_by_priority"`)
 	metricTypeTotalPattern = regexp.MustCompile(
 		`metric\.type\s*=\s*"spanner\.googleapis\.com/instance/cpu/utilization"`)
+	metricTypeQuotaLimitPattern = regexp.MustCompile(
+		`metric\.type\s*=\s*"serviceruntime\.googleapis\.com/quota/limit"`)
+	metricTypeQuotaUsagePattern = regexp.MustCompile(
+		`metric\.type\s*=\s*"serviceruntime\.googleapis\.com/quota/allocation/usage"`)
 )
 
 // MetricKind represents the kind of Cloud Monitoring metric in a filter string.
@@ -19,6 +23,8 @@ type MetricKind int
 const (
 	MetricKindHighPriority MetricKind = iota
 	MetricKindTotal
+	MetricKindQuotaLimit
+	MetricKindQuotaUsage
 	MetricKindUnknown
 )
 
@@ -29,6 +35,10 @@ func extractMetricKind(filter string) MetricKind {
 		return MetricKindHighPriority
 	case metricTypeTotalPattern.MatchString(filter):
 		return MetricKindTotal
+	case metricTypeQuotaLimitPattern.MatchString(filter):
+		return MetricKindQuotaLimit
+	case metricTypeQuotaUsagePattern.MatchString(filter):
+		return MetricKindQuotaUsage
 	default:
 		return MetricKindUnknown
 	}

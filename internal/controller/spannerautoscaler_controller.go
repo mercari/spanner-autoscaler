@@ -461,23 +461,21 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 		)
 
 		labels := observability.LabelsForAutoscaler(&sa)
-		updateStart := r.clock.Now()
-		updateErr := syncer.UpdateInstance(ctx, desiredProcessingUnits)
-		observability.RecordInstanceUpdate(labels, r.clock.Now().Sub(updateStart), updateErr)
+		appliedProcessingUnits, updateErr := syncer.UpdateInstance(ctx, desiredProcessingUnits)
 		if updateErr != nil {
 			r.recorder.Event(&sa, corev1.EventTypeWarning, "FailedUpdateInstance", updateErr.Error())
 			log.Error(updateErr, "failed to update spanner instance")
 			return ctrlreconcile.Result{}, updateErr
 		}
 		observability.RecordScaleEvent(labels,
-			sa.Status.CurrentProcessingUnits, desiredProcessingUnits,
-			scaleDriver(&sa, desiredProcessingUnits),
+			sa.Status.CurrentProcessingUnits, appliedProcessingUnits,
+			scaleDriver(&sa, appliedProcessingUnits),
 		)
 
 		r.recorder.Eventf(&sa, corev1.EventTypeNormal, "Updated",
 			"Updated processing units of %s/%s from %d to %d (currentCPUMetricType=%s, currentHighPriorityCPUUtilization=%d%%, currentTotalCPUUtilization=%d%%, highPriorityTarget=%d%%, totalTarget=%d%%)",
 			sa.Spec.TargetInstance.ProjectID, sa.Spec.TargetInstance.InstanceID,
-			sa.Status.CurrentProcessingUnits, desiredProcessingUnits,
+			sa.Status.CurrentProcessingUnits, appliedProcessingUnits,
 			sa.Status.CurrentCPUMetricType,
 			sa.Status.CurrentHighPriorityCPUUtilization, sa.Status.CurrentTotalCPUUtilization,
 			highPriorityTarget, totalTarget,
@@ -485,7 +483,8 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 
 		log.Info("updated processing units via google cloud api",
 			"before", sa.Status.CurrentProcessingUnits,
-			"after", desiredProcessingUnits,
+			"after", appliedProcessingUnits,
+			"calculatedDesiredPU", desiredProcessingUnits,
 			"currentCPUMetricType", sa.Status.CurrentCPUMetricType,
 			"currentHighPriorityCPUUtilization", sa.Status.CurrentHighPriorityCPUUtilization,
 			"currentTotalCPUUtilization", sa.Status.CurrentTotalCPUUtilization,

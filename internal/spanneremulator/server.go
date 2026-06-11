@@ -17,6 +17,7 @@ package spanneremulator
 
 import (
 	"context"
+	"strings"
 	"sync"
 
 	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
@@ -32,12 +33,14 @@ type Server struct {
 
 	mu        sync.RWMutex
 	instances map[string]*instancepb.Instance // key: "projects/{p}/instances/{i}"
+	quotas    map[string]int32                // key: "projects/{p}/instanceConfigs/{config_id}"
 }
 
 // NewServer returns a new Server with an empty instance store.
 func NewServer() *Server {
 	return &Server{
 		instances: make(map[string]*instancepb.Instance),
+		quotas:    make(map[string]int32),
 	}
 }
 
@@ -69,36 +72,97 @@ func (s *Server) UpdateInstance(_ context.Context, req *instancepb.UpdateInstanc
 		return nil, status.Errorf(codes.NotFound, "instance %q not found", patch.GetName())
 	}
 
-	if mask := req.GetFieldMask(); mask != nil {
-		for _, path := range mask.GetPaths() {
-			switch path {
-			case "processing_units":
-				existing.ProcessingUnits = patch.ProcessingUnits
-			case "node_count":
-				existing.NodeCount = patch.NodeCount
-			case "display_name":
-				existing.DisplayName = patch.DisplayName
+	// A nil/empty field mask means "update every supported field" (mirrors the
+	// real Spanner Admin API). Otherwise apply only the named paths.
+	paths := req.GetFieldMask().GetPaths()
+	willUpdate := func(field string) bool {
+		if len(paths) == 0 {
+			return true
+		}
+		for _, p := range paths {
+			if p == field {
+				return true
 			}
 		}
-	} else {
+		return false
+	}
+
+	updatedProcessingUnits := existing.ProcessingUnits
+	if willUpdate("processing_units") {
+		updatedProcessingUnits = patch.ProcessingUnits
+	}
+	if err := s.checkQuotaLocked(existing, updatedProcessingUnits); err != nil {
+		return nil, err
+	}
+
+	if willUpdate("processing_units") {
 		existing.ProcessingUnits = patch.ProcessingUnits
+	}
+	if willUpdate("node_count") {
 		existing.NodeCount = patch.NodeCount
+	}
+	if willUpdate("display_name") {
 		existing.DisplayName = patch.DisplayName
 	}
 
 	return completedOperation(existing)
 }
 
+func (s *Server) checkQuotaLocked(target *instancepb.Instance, updatedProcessingUnits int32) error {
+	projectID := projectIDFromInstanceName(target.GetName())
+	configID := configIDFromConfigName(target.GetConfig())
+	if projectID == "" || configID == "" {
+		return nil
+	}
+
+	quotaKey := quotaStoreKey(projectID, configID)
+	quota, ok := s.quotas[quotaKey]
+	if !ok {
+		return nil
+	}
+
+	var total int32
+	for _, inst := range s.instances {
+		if projectIDFromInstanceName(inst.GetName()) != projectID || configIDFromConfigName(inst.GetConfig()) != configID {
+			continue
+		}
+		if inst.GetName() == target.GetName() {
+			total += updatedProcessingUnits
+			continue
+		}
+		total += inst.GetProcessingUnits()
+	}
+	if total > quota {
+		return status.Errorf(codes.ResourceExhausted, "Project cannot add nodes for instance config %s", configID)
+	}
+	return nil
+}
+
 // AdminUpsertInstance creates or replaces an instance. Used by the HTTP admin API.
-func (s *Server) AdminUpsertInstance(name string, processingUnits int32) {
+func (s *Server) AdminUpsertInstance(name string, processingUnits int32, config string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.instances[name] = &instancepb.Instance{
 		Name:            name,
 		DisplayName:     name,
 		ProcessingUnits: processingUnits,
+		Config:          config,
 		State:           instancepb.Instance_READY,
 	}
+}
+
+// AdminSetQuota sets a processing-units quota for a project/config pair.
+func (s *Server) AdminSetQuota(projectID, configID string, processingUnits int32) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.quotas[quotaStoreKey(projectID, configID)] = processingUnits
+}
+
+// AdminDeleteQuota removes a processing-units quota for a project/config pair.
+func (s *Server) AdminDeleteQuota(projectID, configID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.quotas, quotaStoreKey(projectID, configID))
 }
 
 // AdminDeleteInstance removes an instance. Used by the HTTP admin API.
@@ -106,6 +170,31 @@ func (s *Server) AdminDeleteInstance(name string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.instances, name)
+}
+
+func quotaStoreKey(projectID, configID string) string {
+	return projectID + "/" + configID
+}
+
+func projectIDFromInstanceName(name string) string {
+	const prefix = "projects/"
+	if !strings.HasPrefix(name, prefix) {
+		return ""
+	}
+	rest := strings.TrimPrefix(name, prefix)
+	parts := strings.SplitN(rest, "/", 2)
+	if len(parts) != 2 {
+		return ""
+	}
+	return parts[0]
+}
+
+func configIDFromConfigName(config string) string {
+	i := strings.LastIndex(config, "/")
+	if i < 0 {
+		return config
+	}
+	return config[i+1:]
 }
 
 // completedOperation wraps inst in an already-Done LRO response.

@@ -496,7 +496,9 @@ The endpoint can be scraped by Prometheus (`ServiceMonitor` / `PodMonitor`), the
 | Name | Type | Extra labels | Description |
 |---|---|---|---|
 | `spanner_autoscaler_instance_update_total` | Counter | `result=success\|error` | Spanner `UpdateInstance` API call count. |
+| `spanner_autoscaler_instance_update_errors_total` | Counter | `grpc_code` | Failed Spanner `UpdateInstance` API calls by gRPC code, e.g. `resource_exhausted`, `permission_denied`, `unknown`. |
 | `spanner_autoscaler_instance_update_duration_seconds` | Histogram | — | Latency of `UpdateInstance` calls. Buckets: 0.1, 0.5, 1, 2, 5, 10, 30, 60. |
+| `spanner_autoscaler_quota_lookup_total` | Counter | `result=success\|error\|skipped`, `reason` | Cloud Monitoring quota lookup count after `RESOURCE_EXHAUSTED`, e.g. `ok`, `permission_denied`, `unsupported_instance_config`, `no_data`. |
 | `spanner_autoscaler_metrics_fetch_total` | Counter | `result=success\|error` | Cloud Monitoring `GetInstanceMetrics` call count. |
 | `spanner_autoscaler_metrics_fetch_duration_seconds` | Histogram | — | Latency of Cloud Monitoring fetches. Buckets: 0.05, 0.1, 0.25, 0.5, 1, 2, 5. |
 
