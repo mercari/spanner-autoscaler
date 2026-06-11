@@ -2,6 +2,8 @@ package monitoringemulator
 
 import (
 	"testing"
+
+	"google.golang.org/grpc/codes"
 )
 
 func floatPtr(f float64) *float64 { return &f }
@@ -75,6 +77,95 @@ func TestWorkloadStore_NotFound(t *testing.T) {
 	s := NewWorkloadStore()
 	if _, ok := s.Get("proj", "inst", MetricKindHighPriority); ok {
 		t.Error("expected not found")
+	}
+}
+
+// ---- QuotaStore ----
+
+func TestQuotaStore_ListByProject(t *testing.T) {
+	s := NewQuotaStore()
+	s.Set("proj", "asia-northeast1", QuotaEntry{
+		QuotaMetric: "spanner.googleapis.com/nodes",
+		LimitName:   "SpannerNodesPerProject",
+		LimitNodes:  100,
+		UsageNodes:  1,
+	})
+	s.Set("other", "asia-northeast1", QuotaEntry{
+		QuotaMetric: "spanner.googleapis.com/nodes",
+		LimitName:   "SpannerNodesPerProject",
+		LimitNodes:  40,
+	})
+
+	got := s.List("proj")
+	entry, ok := got["asia-northeast1"]
+	if !ok {
+		t.Fatal("expected quota entry for proj/asia-northeast1")
+	}
+	if entry.LimitNodes != 100 || entry.UsageNodes != 1 {
+		t.Errorf("quota entry = %+v, want limit=100 usage=1", entry)
+	}
+	if _, ok := got["other"]; ok {
+		t.Error("unexpected quota entry from another project")
+	}
+}
+
+func TestQuotaStore_Delete(t *testing.T) {
+	s := NewQuotaStore()
+	s.Set("proj", "asia-northeast1", QuotaEntry{QuotaMetric: "spanner.googleapis.com/nodes", LimitNodes: 100})
+	s.Delete("proj", "asia-northeast1")
+	if got := s.List("proj"); len(got) != 0 {
+		t.Errorf("expected no quota entries after delete, got %v", got)
+	}
+}
+
+// ---- QuotaModeStore ----
+
+func TestQuotaModeStore_SetGetClear(t *testing.T) {
+	s := NewQuotaModeStore()
+
+	if _, ok := s.Get(); ok {
+		t.Fatal("expected no mode set initially")
+	}
+
+	s.Set(codes.PermissionDenied, "permission denied")
+	mode, ok := s.Get()
+	if !ok {
+		t.Fatal("expected mode to be set")
+	}
+	if mode.Code != codes.PermissionDenied || mode.Message != "permission denied" {
+		t.Errorf("mode = %+v", mode)
+	}
+
+	s.Clear()
+	if _, ok := s.Get(); ok {
+		t.Error("expected mode to be cleared")
+	}
+}
+
+func TestParseGrpcCode(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    codes.Code
+		wantErr bool
+	}{
+		{name: "PermissionDenied", input: "PermissionDenied", want: codes.PermissionDenied},
+		{name: "case insensitive", input: "permissiondenied", want: codes.PermissionDenied},
+		{name: "Unavailable", input: "Unavailable", want: codes.Unavailable},
+		{name: "ResourceExhausted", input: "ResourceExhausted", want: codes.ResourceExhausted},
+		{name: "Unauthenticated", input: "Unauthenticated", want: codes.Unauthenticated},
+		{name: "unknown", input: "NotARealCode", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParseGrpcCode(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err = %v, wantErr = %v", err, tt.wantErr)
+			}
+			if !tt.wantErr && got != tt.want {
+				t.Errorf("got %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
