@@ -257,7 +257,7 @@ If you prefer not to use Tilt, you can run the full webhook development loop man
    ```console
    $ make run-dev
    ```
-   `run-dev` automatically extracts the webhook TLS certificate from the cluster into `bin/webhook-certs/` and starts the controller with `--cert-dir` pointing to that directory.
+   `run-dev` automatically extracts the webhook TLS certificate from the cluster into `bin/webhook-certs/` and starts the controller with `--webhook-cert-path` pointing to that directory.
 
 1. Apply sample resources:
    ```console
