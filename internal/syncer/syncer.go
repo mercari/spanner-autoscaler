@@ -2,6 +2,7 @@ package syncer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"sync"
@@ -12,6 +13,8 @@ import (
 	"golang.org/x/oauth2/google"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/api/option"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -36,7 +39,7 @@ type Syncer interface {
 
 	// HasCredentials checks whether the existing credentials of the syncer, match the provided one or not
 	HasCredentials(credentials *Credentials) bool
-	UpdateInstance(ctx context.Context, desiredProcessingUnits int) error
+	UpdateInstance(ctx context.Context, desiredProcessingUnits int) (int, error)
 }
 
 type CredentialsType int
@@ -246,16 +249,149 @@ func (s *syncer) labels() observability.Labels {
 	return observability.LabelsFor(s.namespacedName, s.projectID, s.instanceID)
 }
 
-// UpdateInstance updates the target Spanner instance withe the desired number of processing units
-func (s *syncer) UpdateInstance(ctx context.Context, desiredProcessingUnits int) error {
+// UpdateInstance updates the target Spanner instance with the desired number of processing units.
+func (s *syncer) UpdateInstance(ctx context.Context, desiredProcessingUnits int) (int, error) {
+	err := s.updateInstanceAttempt(ctx, desiredProcessingUnits)
+	if err == nil {
+		return desiredProcessingUnits, nil
+	}
+	if status.Code(err) != codes.ResourceExhausted {
+		return 0, err
+	}
+
+	originalErr := err
+	fallbackPU, ok := s.quotaFallbackProcessingUnits(ctx, desiredProcessingUnits)
+	if !ok {
+		return 0, originalErr
+	}
+
+	err = s.updateInstanceAttempt(ctx, fallbackPU)
+	if err != nil {
+		return 0, err
+	}
+
+	return fallbackPU, nil
+}
+
+func (s *syncer) updateInstanceAttempt(ctx context.Context, desiredProcessingUnits int) error {
+	start := s.clock.Now()
 	err := s.spannerClient.UpdateInstance(ctx, &spanner.Instance{
 		ProcessingUnits: desiredProcessingUnits,
 	})
+	observability.RecordInstanceUpdate(s.labels(), s.clock.Now().Sub(start), err)
+	return err
+}
+
+func (s *syncer) quotaFallbackProcessingUnits(ctx context.Context, desiredProcessingUnits int) (int, bool) {
+	log := s.log.WithValues("desiredProcessingUnits", desiredProcessingUnits)
+
+	instance, err := s.spannerClient.GetInstance(ctx)
 	if err != nil {
-		return err
+		s.skipQuotaFallback(log, "Skipped quota fallback because Spanner instance lookup failed",
+			err, observability.QuotaLookupResultError)
+		return 0, false
 	}
 
-	return nil
+	quota, err := s.metricsClient.GetQuota(ctx, instance.Config, s.clock.Now())
+	if err != nil {
+		// Unsupported instance configurations are recorded as "skipped" rather
+		// than "error" because the lookup never actually attempted Monitoring.
+		result := observability.QuotaLookupResultError
+		msg := "Skipped quota fallback because Spanner quota lookup failed"
+		if errors.Is(err, metrics.ErrUnsupportedInstanceConfig) {
+			result = observability.QuotaLookupResultSkipped
+			msg = "Skipped quota fallback because Spanner instance configuration is unsupported"
+		}
+		s.skipQuotaFallback(log, msg, err, result,
+			"instanceConfig", instance.Config,
+			"currentProcessingUnits", instance.ProcessingUnits,
+		)
+		return 0, false
+	}
+	observability.RecordQuotaLookup(s.labels(), observability.QuotaLookupResultSuccess, observability.QuotaLookupReasonOK)
+
+	// quotaLog binds the instance + quota context so the two trailing log
+	// calls stay aligned on which fields they expose.
+	quotaLog := log.WithValues(
+		"instanceConfig", instance.Config,
+		"currentProcessingUnits", instance.ProcessingUnits,
+		"quotaLimitNodes", quota.LimitNodes,
+		"quotaUsageNodes", quota.UsageNodes,
+		"quotaMetric", quota.QuotaMetric,
+		"quotaLocation", quota.Location,
+	)
+
+	fallbackPU, ok := fallbackProcessingUnits(desiredProcessingUnits, instance.ProcessingUnits, quota)
+	if !ok {
+		quotaLog.Info("Skipped quota fallback retry")
+		return 0, false
+	}
+
+	quotaLog.Info("Retrying Spanner instance update with quota fallback",
+		"fallbackProcessingUnits", fallbackPU)
+	return fallbackPU, true
+}
+
+// skipQuotaFallback records a quota_lookup_total{result, reason} sample and
+// emits a single Info log with the error and any caller-supplied key/value
+// pairs. Centralized so the three skip branches in quotaFallbackProcessingUnits
+// stay aligned on which fields they expose.
+func (s *syncer) skipQuotaFallback(log logr.Logger, msg string, err error, result string, extra ...any) {
+	reason := quotaLookupReason(err)
+	kvs := append([]any{"error", err, "reason", reason}, extra...)
+	log.Info(msg, kvs...)
+	observability.RecordQuotaLookup(s.labels(), result, reason)
+}
+
+func fallbackProcessingUnits(desiredProcessingUnits, currentProcessingUnits int, quota *metrics.Quota) (int, bool) {
+	if quota == nil || quota.LimitNodes <= 0 || quota.UsageNodes < 0 || currentProcessingUnits <= 0 {
+		return 0, false
+	}
+
+	// Convert PU → nodes with ceil so a 100 PU target is still counted as 1 node.
+	currentTargetQuotaNodes := int64((currentProcessingUnits + 999) / 1000)
+	availableNodesForTarget := quota.LimitNodes - (quota.UsageNodes - currentTargetQuotaNodes)
+	if availableNodesForTarget <= 0 {
+		return 0, false
+	}
+
+	availablePUForTarget := int(availableNodesForTarget) * 1000
+	fallbackPU := desiredProcessingUnits
+	if fallbackPU > availablePUForTarget {
+		fallbackPU = availablePUForTarget
+	}
+	if fallbackPU <= currentProcessingUnits || fallbackPU >= desiredProcessingUnits {
+		return 0, false
+	}
+	return fallbackPU, true
+}
+
+func quotaLookupReason(err error) string {
+	switch {
+	case errors.Is(err, metrics.ErrUnsupportedInstanceConfig):
+		return observability.QuotaLookupReasonUnsupportedInstanceConfig
+	case errors.Is(err, metrics.ErrQuotaNoData):
+		return observability.QuotaLookupReasonNoData
+	case errors.Is(err, metrics.ErrQuotaMalformedResponse):
+		return observability.QuotaLookupReasonMalformedResponse
+	case errors.Is(err, context.DeadlineExceeded):
+		return observability.QuotaLookupReasonTimeout
+	}
+
+	switch status.Code(err) {
+	case codes.PermissionDenied:
+		return observability.QuotaLookupReasonPermissionDenied
+	case codes.Unauthenticated:
+		return observability.QuotaLookupReasonUnauthenticated
+	case codes.Unavailable:
+		return observability.QuotaLookupReasonUnavailable
+	case codes.ResourceExhausted:
+		return observability.QuotaLookupReasonResourceExhausted
+	case codes.DeadlineExceeded:
+		return observability.QuotaLookupReasonTimeout
+	default:
+		return observability.QuotaLookupReasonUnknown
+	}
 }
 
 func (s *syncer) syncResource(ctx context.Context) error {
