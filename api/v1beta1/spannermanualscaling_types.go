@@ -27,14 +27,25 @@ import (
 // scaledownAllowedTimes / scaledownNotAllowedTimes windows for as long as it
 // is active.
 //
-// Pacing is inferred from the presence of the step-size field for the required
-// direction:
+// The target may be above or below the current processing units. The
+// controller picks the direction from the sign of
+// (ProcessingUnits - CurrentProcessingUnits) and reads only the step-size /
+// interval fields for that direction. Pacing is inferred from the presence
+// of the step-size field:
 //
-//   - ScaleupStepSize unset (when target > current)  → single-jump scale-up.
-//   - ScaleupStepSize set    (when target > current) → stepped ramp; the
-//     cadence comes from ScaleupInterval when set, otherwise from the
+//   - target > current, ScaleupStepSize unset      → single-jump scale-up.
+//   - target > current, ScaleupStepSize set        → stepped scale-up ramp;
+//     the cadence comes from ScaleupInterval when set, otherwise from the
 //     controller's --scale-up-interval flag default.
-//   - ScaledownStepSize / ScaledownInterval behave symmetrically.
+//   - target < current, ScaledownStepSize unset    → single-jump scale-down.
+//   - target < current, ScaledownStepSize set      → stepped scale-down ramp;
+//     the cadence comes from ScaledownInterval when set, otherwise from the
+//     controller's --scale-down-interval flag default.
+//
+// Manual scale-down is accepted by default. Cluster operators who want to
+// forbid it can run the controller with --reject-manual-scaledown=true; in
+// that mode an override whose target is below the current PU lands in the
+// Invalid phase rather than scaling the instance down.
 //
 // Interval-only specification (e.g. ScaleupInterval set but ScaleupStepSize
 // unset) has no effect; the validating webhook emits an admission warning to
@@ -51,8 +62,11 @@ type SpannerManualScalingSpec struct {
 	TargetResource string `json:"targetResource"`
 
 	// ProcessingUnits is the target value that this override drives toward
-	// while active. Must be a multiple of 100 (for values < 1000) or a
-	// multiple of 1000.
+	// while active. May be above or below the autoscaler's current PU; the
+	// controller derives the scaling direction from the sign of
+	// (ProcessingUnits - CurrentProcessingUnits) and consults the matching
+	// step-size / interval fields below. Must be a multiple of 100 (for
+	// values < 1000) or a multiple of 1000.
 	// +kubebuilder:validation:Minimum=100
 	ProcessingUnits int `json:"processingUnits"`
 
