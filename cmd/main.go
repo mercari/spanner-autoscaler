@@ -75,6 +75,29 @@ var (
 	scaleUpInterval      = flag.Duration("scale-up-interval", 60*time.Second, "The scale up interval.")
 	spannerEndpoint      = flag.String("spanner-endpoint", "", "Override the Spanner API endpoint (e.g. localhost:9010 for the emulator).")
 	metricsEndpoint      = flag.String("metrics-endpoint", "", "Override the Cloud Monitoring API endpoint (e.g. localhost:9090 for the emulator).")
+
+	rejectManualScaledown = flag.Bool(
+		"reject-manual-scaledown",
+		false,
+		"If true, the validating webhook and the controller reject any "+
+			"SpannerManualScaling whose spec.processingUnits would reduce "+
+			"the target SpannerAutoscaler's currentProcessingUnits. Use this "+
+			"to make SpannerManualScaling a scale-up-only mechanism so its "+
+			"create/delete RBAC can be granted to a wider operator audience "+
+			"at lower operational risk (spec is immutable, so create/delete "+
+			"is the full operational surface). Defaults to false (both "+
+			"directions allowed) for backwards compatibility.",
+	)
+	manualScalingHistoryPerNamespace = flag.Int(
+		"manual-scaling-history-per-namespace",
+		0,
+		"If > 0, the controller deletes finished SpannerManualScaling resources "+
+			"(phase=Expired/Superseded/Invalid) in each namespace beyond this "+
+			"count, keeping only the N most recent by status.finishedAt. Active, "+
+			"Progressing, and Pending resources are never deleted. Only affects "+
+			"SpannerManualScaling — SpannerAutoscaler and SpannerAutoscaleSchedule "+
+			"are out of scope. Default 0 = unlimited (backwards compatible).",
+	)
 )
 
 func main() {
@@ -96,6 +119,8 @@ func main() {
 		"probeAddr", probeAddr,
 		"scaleDownInterval", scaleDownInterval,
 		"scaleUpInterval", scaleUpInterval,
+		"rejectManualScaledown", *rejectManualScaledown,
+		"manualScalingHistoryPerNamespace", *manualScalingHistoryPerNamespace,
 	)
 
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
@@ -179,6 +204,8 @@ func main() {
 		controller.WithLog(logger),
 		controller.WithScaleDownInterval(*scaleDownInterval),
 		controller.WithScaleUpInterval(*scaleUpInterval),
+		controller.WithRejectManualScaledown(*rejectManualScaledown),
+		controller.WithManualScalingHistoryPerNamespace(*manualScalingHistoryPerNamespace),
 	}
 	if *spannerEndpoint != "" {
 		reconcilerOpts = append(reconcilerOpts, controller.WithSpannerEndpoint(*spannerEndpoint))
@@ -206,6 +233,18 @@ func main() {
 		mgr.GetEventRecorderFor("spannerautoscaleschedule-controller"), //nolint:staticcheck // Migrating to the new events.EventRecorder API requires a wholesale refactor of event call sites; tracked separately.
 		controller.WithLog(logger),
 	)
+
+	smsr := controller.NewSpannerManualScalingReconciler(
+		mgr.GetClient(),
+		mgr.GetScheme(),
+		mgr.GetEventRecorderFor("spannermanualscaling-controller"), //nolint:staticcheck // Migrating to the new events.EventRecorder API requires a wholesale refactor of event call sites; tracked separately.
+		controller.WithLog(logger),
+	)
+	if err := smsr.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to create controller", "controller", "spannermanualscaling")
+		os.Exit(1)
+	}
+
 	if err := sasr.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "spannerautoscaleschedule")
 		os.Exit(1)
@@ -219,6 +258,13 @@ func main() {
 		}
 		if err := webhookv1beta1.SetupSpannerAutoscaleScheduleWebhookWithManager(mgr); err != nil {
 			setupLog.Error(err, "Failed to create webhook", "webhook", "SpannerAutoscaleSchedule")
+			os.Exit(1)
+		}
+		if err = (&spannerv1beta1.SpannerManualScaling{}).SetupWebhookWithManager(
+			mgr,
+			spannerv1beta1.WithRejectManualScaledown(*rejectManualScaledown),
+		); err != nil {
+			setupLog.Error(err, "Failed to create webhook", "webhook", "SpannerManualScaling")
 			os.Exit(1)
 		}
 	} else {

@@ -11,7 +11,31 @@ Package v1beta1 contains API Schema definitions for the spanner v1beta1 API grou
 ### Resource Types
 - [SpannerAutoscaleSchedule](#spannerautoscaleschedule)
 - [SpannerAutoscaler](#spannerautoscaler)
+- [SpannerManualScaling](#spannermanualscaling)
+- [SpannerManualScalingList](#spannermanualscalinglist)
 
+
+
+#### ActiveManualScaling
+
+
+
+A `SpannerManualScaling` which is currently overriding this autoscaler's
+processing units, if any. Used as a convenience field on
+`SpannerAutoscaler.status` so that the active override is visible without
+listing SpannerManualScaling resources separately.
+
+
+
+_Appears in:_
+- [SpannerAutoscalerStatus](#spannerautoscalerstatus)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `name` _string_ | Name of the `SpannerManualScaling` resource in the same namespace. |  |  |
+| `processingUnits` _integer_ | ProcessingUnits being targeted. When a step size is set on the source,<br />this is the final target — not the value currently applied to the<br />Spanner instance (use SpannerAutoscaler.status.currentProcessingUnits<br />for that). |  |  |
+| `ramp` _boolean_ | Ramp is true when the source has either `scaleupStepSize` or<br />`scaledownStepSize` set, indicating step-bounded pacing rather than a<br />single-jump override. Derived from the source spec for convenience in<br />printer columns and dashboards. (Interval-only specification is<br />treated as single-jump.) |  |  |
+| `expiresAt` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.22/#time-v1-meta)_ | ExpiresAt, if specified on the source resource. |  | Optional: \{\} <br /> |
 
 
 #### ActiveSchedule
@@ -160,6 +184,8 @@ _Appears in:_
 | `unspecified` |  |
 | `creating` | The instance is still being created. Resources may not be<br />available yet, and operations such as database creation may not<br />work.<br /> |
 | `ready` | The instance is fully created and ready to do work such as<br />creating databases.<br /> |
+
+
 
 
 #### ScaleConfig
@@ -350,6 +376,145 @@ _Appears in:_
 | `currentHighPriorityCPUUtilization` _integer_ | Current average CPU utilization for high priority task, represented as a percentage.<br />In dual CPU scaling mode (both highPriority and total configured), this value is<br />fetched concurrently with currentTotalCPUUtilization. Because Cloud Monitoring<br />ingests the underlying metrics (utilization_by_priority and utilization) independently,<br />the two fields may briefly reflect different alignment windows and the relation<br />currentTotalCPUUtilization >= currentHighPriorityCPUUtilization is not guaranteed<br />on every sync. The autoscaling decision uses both values independently and takes<br />the larger required processing units, so the transient inconsistency does not cause<br />over-scaling down. |  |  |
 | `currentTotalCPUUtilization` _integer_ | Current total CPU utilization (all priorities), represented as a percentage.<br />This field is populated only when spec.scaleConfig.targetCPUUtilization.total is specified.<br />See the note on currentHighPriorityCPUUtilization for the consistency caveat in dual mode. |  |  |
 | `currentCPUMetricType` _[CPUMetricType](#cpumetrictype)_ | CurrentCPUMetricType is the CPU metric type that was used in the last sync cycle.<br />The controller uses this to detect metric-type switches and skip scaling until<br />the status reflects the newly configured metric type. |  | Enum: [HighPriority Total Both] <br /> |
+| `activeManualScaling` _[ActiveManualScaling](#activemanualscaling)_ | ActiveManualScaling references the `SpannerManualScaling` resource that<br />is currently overriding this autoscaler's processing units. Empty when<br />normal (CPU- and schedule-driven) autoscaling is in effect. |  | Optional: \{\} <br /> |
+
+
+#### SpannerManualScaling
+
+
+
+SpannerManualScaling is the Schema for the spannermanualscalings API.
+
+
+
+_Appears in:_
+- [SpannerManualScalingList](#spannermanualscalinglist)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiVersion` _string_ | `spanner.mercari.com/v1beta1` | | |
+| `kind` _string_ | `SpannerManualScaling` | | |
+| `metadata` _[ObjectMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.22/#objectmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
+| `spec` _[SpannerManualScalingSpec](#spannermanualscalingspec)_ |  |  |  |
+| `status` _[SpannerManualScalingStatus](#spannermanualscalingstatus)_ |  |  |  |
+
+
+#### SpannerManualScalingList
+
+
+
+SpannerManualScalingList contains a list of SpannerManualScaling.
+
+
+
+
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiVersion` _string_ | `spanner.mercari.com/v1beta1` | | |
+| `kind` _string_ | `SpannerManualScalingList` | | |
+| `metadata` _[ListMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.22/#listmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
+| `items` _[SpannerManualScaling](#spannermanualscaling) array_ |  |  |  |
+
+
+#### SpannerManualScalingPhase
+
+_Underlying type:_ _string_
+
+SpannerManualScalingPhase indicates the lifecycle stage of a manual
+override.
+
+
+
+_Appears in:_
+- [SpannerManualScalingStatus](#spannermanualscalingstatus)
+
+| Field | Description |
+| --- | --- |
+| `Pending` | SpannerManualScalingPhasePending: created but not yet picked up by the<br />controller. Transient (typically resolved on the first reconcile).<br /> |
+| `Progressing` | SpannerManualScalingPhaseProgressing: the step-size field for the<br />required direction is set and CurrentProcessingUnits has not yet<br />reached spec.processingUnits. The controller is taking step-bounded,<br />interval-gated updates toward the target. A single-jump override<br />(step size unset) skips this phase and goes Pending -> Active.<br /> |
+| `Active` | SpannerManualScalingPhaseActive: CurrentProcessingUnits equals<br />spec.processingUnits and the override is holding the target on the<br />parent SpannerAutoscaler.<br /> |
+| `Expired` | SpannerManualScalingPhaseExpired: ExpiresAt has elapsed; no longer<br />pinning PU. With a step size set, this can occur mid-ramp; in that<br />case the target may not have been reached.<br /> |
+| `Superseded` | SpannerManualScalingPhaseSuperseded: a newer SpannerManualScaling for<br />the same targetResource was created and is now active.<br /> |
+| `Invalid` | SpannerManualScalingPhaseInvalid: the targetResource does not exist<br />(in the same namespace) or the override otherwise cannot be applied.<br />Terminal: the resource is retained for operator inspection until the<br />history-limit GC reclaims it. To retry after fixing the cause, create<br />a new SpannerManualScaling — the controller will not transition this<br />resource back to a non-terminal phase.<br /> |
+
+
+#### SpannerManualScalingSpec
+
+
+
+SpannerManualScalingSpec defines a one-shot operation that drives the parent
+SpannerAutoscaler's processing units toward a target value, bypassing
+CPU-based autoscaling, SpannerAutoscaleSchedule additions, and the
+scaledownAllowedTimes / scaledownNotAllowedTimes windows for as long as it
+is active.
+
+The target may be above or below the current processing units. The
+controller picks the direction from the sign of
+(ProcessingUnits - CurrentProcessingUnits) and reads only the step-size /
+interval fields for that direction. Pacing is inferred from the presence
+of the step-size field:
+
+  - target > current, ScaleupStepSize unset      → single-jump scale-up.
+  - target > current, ScaleupStepSize set        → stepped scale-up ramp;
+    the cadence comes from ScaleupInterval when set, otherwise from the
+    controller's --scale-up-interval flag default.
+  - target < current, ScaledownStepSize unset    → single-jump scale-down.
+  - target < current, ScaledownStepSize set      → stepped scale-down ramp;
+    the cadence comes from ScaledownInterval when set, otherwise from the
+    controller's --scale-down-interval flag default.
+
+Manual scale-down is accepted by default. Cluster operators who want to
+forbid it can run the controller with --reject-manual-scaledown=true; in
+that mode an override whose target is below the current PU lands in the
+Invalid phase rather than scaling the instance down.
+
+Interval-only specification (e.g. ScaleupInterval set but ScaleupStepSize
+unset) has no effect; the validating webhook emits an admission warning to
+flag the likely typo.
+
+Spec is IMMUTABLE after creation: the validating webhook rejects any spec
+mutation. To change the target PU, ramp parameters, or extend ExpiresAt,
+create a new SpannerManualScaling — the newest-creationTimestamp rule
+atomically supersedes the older resource with no autoscaling gap. To
+shorten / force expiration, kubectl delete the resource.
+
+
+
+_Appears in:_
+- [SpannerManualScaling](#spannermanualscaling)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `targetResource` _string_ | The `SpannerAutoscaler` resource name (in the same namespace) this<br />override applies to. Immutable after creation. |  |  |
+| `processingUnits` _integer_ | ProcessingUnits is the target value that this override drives toward<br />while active. May be above or below the autoscaler's current PU; the<br />controller derives the scaling direction from the sign of<br />(ProcessingUnits - CurrentProcessingUnits) and consults the matching<br />step-size / interval fields below. Must be a multiple of 100 (for<br />values < 1000) or a multiple of 1000. |  | Minimum: 100 <br /> |
+| `scaleupStepSize` _[IntOrString](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.22/#intorstring-intstr-util)_ | ScaleupStepSize, when set, activates stepped scale-up: each reconcile<br />applies at most this delta until ProcessingUnits is reached. Accepts the<br />same int-or-percent format as the parent SpannerAutoscaler's<br />scaleConfig.scaleupStepSize. Unset means single-jump scale-up — the<br />override jumps the full upward delta in one reconcile.<br />Presence of this field (when target > current) is the sole signal that<br />gates stepped vs single-jump scale-up. |  | Optional: \{\} <br /> |
+| `scaleupInterval` _[Duration](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.22/#duration-v1-meta)_ | ScaleupInterval is the minimum wall-clock time the controller waits<br />between successive upward steps. Only consulted when ScaleupStepSize is<br />set. Unset falls back to the controller's --scale-up-interval flag<br />value.<br />Setting ScaleupInterval without ScaleupStepSize has no effect; the<br />validating webhook emits an admission warning for that combination. |  | Optional: \{\} <br /> |
+| `scaledownStepSize` _[IntOrString](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.22/#intorstring-intstr-util)_ | ScaledownStepSize mirrors ScaleupStepSize for the downward direction<br />(ProcessingUnits < CurrentProcessingUnits). |  | Optional: \{\} <br /> |
+| `scaledownInterval` _[Duration](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.22/#duration-v1-meta)_ | ScaledownInterval mirrors ScaleupInterval for the downward direction.<br />Unset falls back to the controller's --scale-down-interval flag value. |  | Optional: \{\} <br /> |
+| `expiresAt` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.22/#time-v1-meta)_ | ExpiresAt is the time after which this override is automatically<br />deactivated. When omitted, the override remains active until the<br />resource is deleted.<br />Accepts any RFC 3339 timestamp with a timezone designator (Z, +09:00,<br />-08:00, etc.). Per Kubernetes convention (metav1.Time), the value is<br />normalized to UTC for storage in etcd and for kubectl get/describe<br />output; the absolute instant in time is preserved.<br />When a step size is set, the controller does not guarantee that<br />ProcessingUnits is reached before ExpiresAt — it is the user's<br />responsibility to size ExpiresAt against ScaleupStepSize /<br />ScaleupInterval (or the scaledown counterparts) so the ramp fits in the<br />window. If ExpiresAt elapses mid-ramp, the override is deactivated<br />wherever CurrentProcessingUnits happens to be and normal autoscaling<br />resumes from there. |  | Optional: \{\} <br /> |
+
+
+#### SpannerManualScalingStatus
+
+
+
+SpannerManualScalingStatus defines the observed state of
+SpannerManualScaling.
+
+
+
+_Appears in:_
+- [SpannerManualScaling](#spannermanualscaling)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `phase` _[SpannerManualScalingPhase](#spannermanualscalingphase)_ | Phase reflects the lifecycle stage of this override. |  | Optional: \{\} <br /> |
+| `appliedAt` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.22/#time-v1-meta)_ | AppliedAt is the time the controller first applied this override to<br />the target. |  | Optional: \{\} <br /> |
+| `reachedAt` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.22/#time-v1-meta)_ | ReachedAt is the time CurrentProcessingUnits first matched<br />spec.processingUnits while this override was active. Set only when the<br />target has been reached; remains nil for stepped ramps still in<br />progress. |  | Optional: \{\} <br /> |
+| `currentProcessingUnits` _integer_ | CurrentProcessingUnits is the parent SpannerAutoscaler's PU as last<br />observed by this controller. Useful for stepped ramps to see progress<br />toward spec.processingUnits without a cross-resource lookup. |  | Optional: \{\} <br /> |
+| `finishedAt` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.22/#time-v1-meta)_ | FinishedAt is the time this resource first transitioned to a terminal<br />phase (Expired, Superseded, or Invalid). Used as the sort key by the<br />controller's history-limit GC. Set once and not updated thereafter<br />(terminal phases do not transition back). |  | Optional: \{\} <br /> |
+| `message` _string_ | Message is a human-readable explanation, especially when Phase is<br />Invalid or when Expired occurred mid-ramp (target not reached). |  | Optional: \{\} <br /> |
 
 
 #### TargetCPUUtilization

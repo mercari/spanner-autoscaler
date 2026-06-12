@@ -241,6 +241,12 @@ spec:
     - jsonPath: .status.currentTotalCPUUtilization
       name: Current CPU Total
       type: integer
+    - jsonPath: .status.activeManualScaling.processingUnits
+      name: Manual PU
+      type: integer
+    - jsonPath: .status.activeManualScaling.ramp
+      name: Manual Ramp
+      type: boolean
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -466,6 +472,40 @@ spec:
           status:
             description: SpannerAutoscalerStatus defines the observed state of SpannerAutoscaler
             properties:
+              activeManualScaling:
+                description: |-
+                  ActiveManualScaling references the `SpannerManualScaling` resource that
+                  is currently overriding this autoscaler's processing units. Empty when
+                  normal (CPU- and schedule-driven) autoscaling is in effect.
+                properties:
+                  expiresAt:
+                    description: ExpiresAt, if specified on the source resource.
+                    format: date-time
+                    type: string
+                  name:
+                    description: Name of the `SpannerManualScaling` resource in the
+                      same namespace.
+                    type: string
+                  processingUnits:
+                    description: |-
+                      ProcessingUnits being targeted. When a step size is set on the source,
+                      this is the final target — not the value currently applied to the
+                      Spanner instance (use SpannerAutoscaler.status.currentProcessingUnits
+                      for that).
+                    type: integer
+                  ramp:
+                    description: |-
+                      Ramp is true when the source has either `scaleupStepSize` or
+                      `scaledownStepSize` set, indicating step-bounded pacing rather than a
+                      single-jump override. Derived from the source spec for convenience in
+                      printer columns and dashboards. (Interval-only specification is
+                      treated as single-jump.)
+                    type: boolean
+                required:
+                - name
+                - processingUnits
+                - ramp
+                type: object
               currentCPUMetricType:
                 description: |-
                   CurrentCPUMetricType is the CPU metric type that was used in the last sync cycle.

@@ -25,6 +25,7 @@ rules:
   - spannerautoscaler/status
   - spannerautoscalers/status
   - spannerautoscaleschedules/status
+  - spannermanualscalings/status
   verbs:
   - get
   - patch
@@ -47,5 +48,16 @@ rules:
   resources:
   - spannerautoscalers/finalizers
   - spannerautoscaleschedules/finalizers
+  - spannermanualscalings/finalizers
   verbs:
   - update
+- apiGroups:
+  - spanner.mercari.com
+  resources:
+  - spannermanualscalings
+  verbs:
+  - delete
+  - get
+  - list
+  - update
+  - watch

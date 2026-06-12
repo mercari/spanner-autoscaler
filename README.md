@@ -112,6 +112,29 @@ The cron expressions use the standard 5-field format: `minute hour day-of-month 
 
 For complex time requirements involving specific minutes, consider using multiple separate cron expressions or adjusting your maintenance windows to align with hour boundaries.
 
+### Manual scaling override
+
+For incident response or planned ramps, you can pin processing units to an explicit target via the `SpannerManualScaling` CRD. Manual scaling takes precedence over CPU- and schedule-driven autoscaling for as long as the override is active.
+
+**The target can sit above or below the current processing units.** The controller picks the direction from the sign of `spec.processingUnits − status.currentProcessingUnits`, and the `scaleupStepSize` / `scaleupInterval` and `scaledownStepSize` / `scaledownInterval` fields pace each direction independently. By default both directions are accepted; cluster operators who want to forbid manual scale-down can run the controller with `--reject-manual-scaledown=true`, which lands those overrides in the `Invalid` phase.
+
+Single-jump and stepped-ramp variants are both supported; the operational surface is intentionally just `kubectl create` / `kubectl delete` (spec is immutable, and the newest-`creationTimestamp` rule atomically supersedes older overrides).
+
+```yaml
+# Single-jump: target reached in one reconcile (no step size set).
+apiVersion: spanner.mercari.com/v1beta1
+kind: SpannerManualScaling
+metadata:
+  name: incident-2026-05-28
+  namespace: production
+spec:
+  targetResource: spannerautoscaler-sample
+  processingUnits: 7000
+  expiresAt: "2026-05-29T10:00:00Z"   # or "2026-05-29T19:00:00+09:00" — same instant
+```
+
+See [`docs/manual-scaling.md`](./docs/manual-scaling.md) for the full lifecycle, stepped-ramp configuration (in either direction), modify-via-newest-wins examples, the `--reject-manual-scaledown` cluster policy, history-GC flag, RBAC, and a local kind + emulator end-to-end walkthrough.
+
 ## Installation
 
 Spanner Autoscaler can be installed using [KPT](https://kpt.dev/installation/) by following 2 steps:

@@ -64,3 +64,9 @@ patches:
     - op: add
       path: /webhooks/1/timeoutSeconds
       value: 30
+    - op: add
+      path: /webhooks/2/clientConfig/service/port
+      value: 9443
+    - op: add
+      path: /webhooks/2/timeoutSeconds
+      value: 30

@@ -30,7 +30,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/tools/record"
 	utilclock "k8s.io/utils/clock"
 	ctrlbuilder "sigs.k8s.io/controller-runtime/pkg/builder"
@@ -88,6 +87,17 @@ type SpannerAutoscalerReconciler struct {
 
 	// syncInterval overrides the default syncer polling interval (used in tests).
 	syncInterval time.Duration
+
+	// rejectManualScaledown mirrors the --reject-manual-scaledown flag. When
+	// true, the reconcile-time defense in depth refuses to apply a
+	// SpannerManualScaling whose target PU is below the current PU (the
+	// webhook is the primary enforcer; this catches webhook bypass).
+	rejectManualScaledown bool
+
+	// manualScalingHistoryPerNamespace mirrors the
+	// --manual-scaling-history-per-namespace flag. 0 (default) disables the
+	// GC; >0 keeps at most N finished SpannerManualScalings per namespace.
+	manualScalingHistoryPerNamespace int
 
 	clock utilclock.Clock
 	log   logr.Logger
@@ -239,6 +249,38 @@ func (o withSyncInterval) applySpannerAutoscalerReconciler(r *SpannerAutoscalerR
 	r.syncInterval = o.interval
 }
 
+// WithRejectManualScaledown enables the cluster-wide policy that refuses to
+// apply a SpannerManualScaling whose spec.processingUnits is below the
+// parent SpannerAutoscaler's current PU. Mirrors the --reject-manual-scaledown
+// CLI flag and the webhook option of the same name.
+func WithRejectManualScaledown(enabled bool) Option {
+	return withRejectManualScaledown{enabled: enabled}
+}
+
+type withRejectManualScaledown struct {
+	enabled bool
+}
+
+func (o withRejectManualScaledown) applySpannerAutoscalerReconciler(r *SpannerAutoscalerReconciler) {
+	r.rejectManualScaledown = o.enabled
+}
+
+// WithManualScalingHistoryPerNamespace caps the number of finished
+// (Expired/Superseded/Invalid) SpannerManualScaling resources retained per
+// namespace. 0 disables the GC. Mirrors the
+// --manual-scaling-history-per-namespace CLI flag.
+func WithManualScalingHistoryPerNamespace(n int) Option {
+	return withManualScalingHistoryPerNamespace{n: n}
+}
+
+type withManualScalingHistoryPerNamespace struct {
+	n int
+}
+
+func (o withManualScalingHistoryPerNamespace) applySpannerAutoscalerReconciler(r *SpannerAutoscalerReconciler) {
+	r.manualScalingHistoryPerNamespace = o.n
+}
+
 // NewSpannerAutoscalerReconciler returns a new SpannerAutoscalerReconciler.
 func NewSpannerAutoscalerReconciler(
 	ctrlClient ctrlclient.Client,
@@ -274,6 +316,9 @@ func NewSpannerAutoscalerReconciler(
 // +kubebuilder:rbac:groups=spanner.mercari.com,resources=spannerautoscalers,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=spanner.mercari.com,resources=spannerautoscalers/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=spanner.mercari.com,resources=spannerautoscalers/finalizers,verbs=update
+// +kubebuilder:rbac:groups=spanner.mercari.com,resources=spannermanualscalings,verbs=get;list;watch;update;delete
+// +kubebuilder:rbac:groups=spanner.mercari.com,resources=spannermanualscalings/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=spanner.mercari.com,resources=spannermanualscalings/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get,resourceNames=spanner-autoscaler-gcp-sa
 
@@ -418,6 +463,10 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 		return ctrlreconcile.Result{}, nil
 	}
 
+	if result, handled, err := r.dispatchManualScaling(ctx, log, &sa, syncer, &statusChanged, droppedActiveSchedules); handled || err != nil {
+		return result, err
+	}
+
 	if minPU, maxPU, updated := calcDesiredPURange(sa); updated {
 		sa.Status.DesiredMinPUs = minPU
 		sa.Status.DesiredMaxPUs = maxPU
@@ -512,18 +561,10 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 		// persisted. Doing so inside pruneActiveSchedules would re-fire on
 		// every reconcile until the status write eventually succeeds, since
 		// CurrentlyActiveSchedules still contains the orphan entries until
-		// then.
-		if len(droppedActiveSchedules) > 0 {
-			labels := observability.LabelsForAutoscaler(&sa)
-			for _, as := range droppedActiveSchedules {
-				log.Info("removed currently active schedule",
-					"schedule", as.ScheduleName,
-					"additionalPU", as.AdditionalPU,
-					"endTime", as.EndTime.Time,
-				)
-				observability.RecordScheduleDeactivation(labels, observability.ScheduleDeactivationUnregistered)
-			}
-		}
+		// then. The same emission also runs from the manual-scaling success
+		// path inside dispatchManualScaling, so schedules orphaned in the
+		// same reconcile as an active manual override are still reported.
+		emitScheduleDeactivations(log, &sa, droppedActiveSchedules)
 	}
 
 	return ctrlreconcile.Result{}, nil
@@ -561,6 +602,26 @@ func (r *SpannerAutoscalerReconciler) SetupWithManager(mgr ctrlmanager.Manager) 
 					NamespacedName: types.NamespacedName{
 						Namespace: sas.Namespace,
 						Name:      sas.Spec.TargetResource,
+					},
+				}}
+			}),
+		).
+		// Watch SpannerManualScaling so create / update / delete events on a
+		// SpannerManualScaling immediately requeue the parent SpannerAutoscaler.
+		// This is the single mechanism by which "manual override picked up",
+		// "deletion clears the active CR", and "phase transitions to terminal"
+		// all reach reconcileManualScaling without delay.
+		Watches(
+			&spannerv1beta1.SpannerManualScaling{},
+			ctrlhandler.EnqueueRequestsFromMapFunc(func(_ context.Context, obj ctrlclient.Object) []ctrlreconcile.Request {
+				sms, ok := obj.(*spannerv1beta1.SpannerManualScaling)
+				if !ok || sms.Spec.TargetResource == "" {
+					return nil
+				}
+				return []ctrlreconcile.Request{{
+					NamespacedName: types.NamespacedName{
+						Namespace: sms.Namespace,
+						Name:      sms.Spec.TargetResource,
 					},
 				}}
 			}),
@@ -877,49 +938,12 @@ func calcDesiredPUFromCPU(currentCPU, targetCPU int, sa spannerv1beta1.SpannerAu
 		desiredPU = ((requiredPU / 1000) + 1) * 1000
 	}
 
-	sdStepSize, sdStepSizeErr := intstr.GetScaledValueFromIntOrPercent(&sa.Spec.ScaleConfig.ScaledownStepSize, sa.Status.CurrentProcessingUnits, false)
-	if sdStepSizeErr != nil {
-		// unlikely, but revert to the default value if sdStepSize cannot be resolved
-		sdStepSize = 2000
-	}
-	suStepSize, suStepSizeErr := intstr.GetScaledValueFromIntOrPercent(&sa.Spec.ScaleConfig.ScaleupStepSize, sa.Status.CurrentProcessingUnits, false)
-	if suStepSizeErr != nil {
-		// unlikely, revert to the default value if suStepSize cannot be resolved
-		suStepSize = 0
-	}
-
-	// in case of percentages, round down to the scaledownStepSize to the nearest hundred or thousand
-	// to keep the scaledownStepSize within the percentage
-	if sdStepSize < 1000 {
-		sdStepSize = (sdStepSize / 100) * 100
-	} else {
-		sdStepSize = (sdStepSize / 1000) * 1000
-	}
-	// in case of percentages, round down to the scaleupStepSize to the nearest hundred or thousand
-	// to keep the scaleupStepSize within the percentage
-	if suStepSize < 1000 {
-		suStepSize = (suStepSize / 100) * 100
-	} else {
-		suStepSize = (suStepSize / 1000) * 1000
-	}
-
-	// round up the scaledownStepSize to avoid intermediate values
-	// for example: 8000 -> 7000 instead of 8000 -> 7400
-	//              800 -> 700 instead of 800 -> 740
-	if sdStepSize < 1000 && sa.Status.CurrentProcessingUnits > 1000 {
-		sdStepSize = 1000
-	} else if sdStepSize < 100 && sa.Status.CurrentProcessingUnits <= 1000 {
-		sdStepSize = 100
-	}
-	// round up the scaleupStepSize to avoid intermediate values
-	// for example: 7000 -> 8000 instead of 7000 -> 7600
-	//              700 -> 800 instead of 700 -> 760
-	// To keep compatibility, check if scaleupStepSize is not 0
-	if suStepSize != 0 && suStepSize < 1000 && sa.Status.CurrentProcessingUnits+suStepSize > 1000 {
-		suStepSize = 1000
-	} else if suStepSize != 0 && suStepSize < 100 && sa.Status.CurrentProcessingUnits+suStepSize <= 1000 {
-		suStepSize = 100
-	}
+	// Step size resolution is shared with the SpannerManualScaling path via
+	// resolveStepSize (see stepsize.go). The helper preserves the legacy
+	// rounding rules and the asymmetric "0 = no cap" semantics for scaleup;
+	// stepsize_test.go's differential test locks this equivalence down.
+	sdStepSize := resolveStepSize(&sa.Spec.ScaleConfig.ScaledownStepSize, sa.Status.CurrentProcessingUnits, stepDirectionScaledown)
+	suStepSize := resolveStepSize(&sa.Spec.ScaleConfig.ScaleupStepSize, sa.Status.CurrentProcessingUnits, stepDirectionScaleup)
 
 	// in case of scaling down, check that we don't scale down beyond the ScaledownStepSize
 	if scaledDownPU := sa.Status.CurrentProcessingUnits - sdStepSize; desiredPU < scaledDownPU {

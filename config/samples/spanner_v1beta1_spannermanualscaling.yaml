@@ -1,0 +1,44 @@
+# Example: single-jump override (incident response).
+# No step size set → applied in one reconcile.
+apiVersion: spanner.mercari.com/v1beta1
+kind: SpannerManualScaling
+metadata:
+  labels:
+    app.kubernetes.io/name: spannermanualscaling
+    app.kubernetes.io/instance: incident-sample
+    app.kubernetes.io/part-of: spanner-autoscaler
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/created-by: spanner-autoscaler
+  name: incident-sample
+  namespace: test
+spec:
+  targetResource: spannerautoscaler-sample-beta
+  processingUnits: 7000
+  # expiresAt accepts any RFC 3339 timestamp; the value is normalized to UTC
+  # for storage but the absolute instant is preserved. Examples (same instant):
+  #   expiresAt: "2026-05-29T10:00:00Z"
+  #   expiresAt: "2026-05-29T19:00:00+09:00"
+  expiresAt: "2026-05-29T10:00:00Z"
+
+---
+# Example: stepped ramp (planned scale-up for an event).
+# scaleupStepSize set → stepped scale-up.
+# scaleupInterval omitted → falls back to the controller's --scale-up-interval
+# flag default (60s by default).
+apiVersion: spanner.mercari.com/v1beta1
+kind: SpannerManualScaling
+metadata:
+  labels:
+    app.kubernetes.io/name: spannermanualscaling
+    app.kubernetes.io/instance: event-ramp-sample
+    app.kubernetes.io/part-of: spanner-autoscaler
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/created-by: spanner-autoscaler
+  name: event-ramp-sample
+  namespace: test
+spec:
+  targetResource: spannerautoscaler-sample-beta
+  processingUnits: 7000
+  scaleupStepSize: 1000   # at most +1000 PU per step
+  scaleupInterval: 5m     # wait at least 5 minutes between steps
+  expiresAt: "2026-05-28T20:00:00Z"

@@ -1,0 +1,53 @@
+# Permissions for end users to manage SpannerManualScaling resources.
+#
+# Note: SpannerManualScaling.spec is immutable (the validating webhook rejects
+# any spec mutation), so the effective operational surface is create/delete.
+# update and patch are still granted here because (a) Kubernetes RBAC has no
+# create-only verb and (b) update/patch on metadata (labels/annotations) is
+# still useful. Any spec change attempted via update/patch is rejected by the
+# webhook with "spec is immutable; create a new SpannerManualScaling instead".
+#
+# When the cluster operator runs the controller with
+# --reject-manual-scaledown=true, holders of this role can only ever increase
+# processing units. This makes it safe to grant the role to a wider audience
+# (on-call engineers, application developers) at lower operational risk.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/name: clusterrole
+    app.kubernetes.io/instance: spannermanualscaling-editor-role
+    app.kubernetes.io/component: rbac
+    app.kubernetes.io/created-by: spanner-autoscaler
+    app.kubernetes.io/part-of: spanner-autoscaler
+    app.kubernetes.io/managed-by: kustomize
+  name: spannermanualscaling-editor-role
+rules:
+- apiGroups:
+  - spanner.mercari.com
+  resources:
+  - spannermanualscalings
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - spanner.mercari.com
+  resources:
+  - spannermanualscalings/status
+  verbs:
+  - get
+# Read-only access to the parent SpannerAutoscaler so operators can see what
+# they are targeting without granting any write permission on it.
+- apiGroups:
+  - spanner.mercari.com
+  resources:
+  - spannerautoscalers
+  verbs:
+  - get
+  - list
+  - watch

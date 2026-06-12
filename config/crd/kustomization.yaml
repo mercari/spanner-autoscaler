@@ -4,6 +4,7 @@
 resources:
 - bases/spanner.mercari.com_spannerautoscalers.yaml
 - bases/spanner.mercari.com_spannerautoscaleschedules.yaml
+- bases/spanner.mercari.com_spannermanualscalings.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:
