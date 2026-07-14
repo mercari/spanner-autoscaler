@@ -38,6 +38,9 @@ type SpannerAutoscaleScheduleSpec struct {
 	TargetResource string `json:"targetResource"`
 
 	// The extra compute capacity which will be added when this schedule is active.
+	// While active, this value is added to both the minimum and maximum of the target
+	// SpannerAutoscaler's autoscaling range, so the instance can be scaled beyond
+	// `spec.scaleConfig.processingUnits.max` by this amount.
 	AdditionalProcessingUnits int `json:"additionalProcessingUnits"`
 
 	// The details of when and for how long this schedule will be active.
