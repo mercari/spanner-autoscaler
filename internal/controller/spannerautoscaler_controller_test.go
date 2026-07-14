@@ -649,10 +649,11 @@ var _ = Describe("Calculate Desired PU Range", func() {
 		sa := baseSpec(1000, 10000)
 		sa.Status.DesiredMinPUs = 1000
 		sa.Status.DesiredMaxPUs = 10000
-		gotMin, gotMax, changed := calcDesiredPURange(sa)
+		gotMin, gotMax, changed, capped := calcDesiredPURange(sa)
 		Expect(gotMin).To(Equal(1000))
 		Expect(gotMax).To(Equal(10000))
 		Expect(changed).To(BeFalse())
+		Expect(capped).To(BeFalse())
 	})
 
 	It("adds AdditionalPU to spec min/max for a single active schedule", func() {
@@ -660,10 +661,11 @@ var _ = Describe("Calculate Desired PU Range", func() {
 		sa.Status.CurrentlyActiveSchedules = []spannerv1beta1.ActiveSchedule{
 			{AdditionalPU: 2000},
 		}
-		gotMin, gotMax, changed := calcDesiredPURange(sa)
+		gotMin, gotMax, changed, capped := calcDesiredPURange(sa)
 		Expect(gotMin).To(Equal(3000))
 		Expect(gotMax).To(Equal(12000))
 		Expect(changed).To(BeTrue())
+		Expect(capped).To(BeFalse())
 	})
 
 	It("sums AdditionalPU from all active schedules for both min and max", func() {
@@ -672,7 +674,7 @@ var _ = Describe("Calculate Desired PU Range", func() {
 			{AdditionalPU: 1000},
 			{AdditionalPU: 5000},
 		}
-		gotMin, gotMax, changed := calcDesiredPURange(sa)
+		gotMin, gotMax, changed, _ := calcDesiredPURange(sa)
 		// desiredMin = 1000 + (1000 + 5000) = 7000
 		// desiredMax = 10000 + (1000 + 5000) = 16000
 		Expect(gotMin).To(Equal(7000))
@@ -685,7 +687,7 @@ var _ = Describe("Calculate Desired PU Range", func() {
 		sa.Status.CurrentlyActiveSchedules = []spannerv1beta1.ActiveSchedule{
 			{AdditionalPU: 1500},
 		}
-		gotMin, gotMax, changed := calcDesiredPURange(sa)
+		gotMin, gotMax, changed, _ := calcDesiredPURange(sa)
 		// desiredMin = 1000 + 1500 = 2500 → rounded up to 3000
 		// desiredMax = 10000 + 1500 = 11500 → rounded up to 12000
 		Expect(gotMin).To(Equal(3000))
@@ -698,7 +700,7 @@ var _ = Describe("Calculate Desired PU Range", func() {
 		sa.Status.CurrentlyActiveSchedules = []spannerv1beta1.ActiveSchedule{
 			{AdditionalPU: 3000},
 		}
-		gotMin, gotMax, changed := calcDesiredPURange(sa)
+		gotMin, gotMax, changed, _ := calcDesiredPURange(sa)
 		Expect(gotMin).To(Equal(4000))
 		Expect(gotMax).To(Equal(13000))
 		Expect(changed).To(BeTrue())
@@ -711,8 +713,74 @@ var _ = Describe("Calculate Desired PU Range", func() {
 		}
 		sa.Status.DesiredMinPUs = 3000
 		sa.Status.DesiredMaxPUs = 12000
-		_, _, changed := calcDesiredPURange(sa)
+		_, _, changed, _ := calcDesiredPURange(sa)
 		Expect(changed).To(BeFalse())
+	})
+
+	It("treats an explicit Exceed policy the same as an empty policy", func() {
+		sa := baseSpec(1000, 10000)
+		sa.Status.CurrentlyActiveSchedules = []spannerv1beta1.ActiveSchedule{
+			{AdditionalPU: 2000, MaxPUPolicy: spannerv1beta1.MaxPUPolicyExceed},
+		}
+		gotMin, gotMax, changed, capped := calcDesiredPURange(sa)
+		Expect(gotMin).To(Equal(3000))
+		Expect(gotMax).To(Equal(12000))
+		Expect(changed).To(BeTrue())
+		Expect(capped).To(BeFalse())
+	})
+
+	It("does not raise the max for a Cap schedule", func() {
+		sa := baseSpec(1000, 10000)
+		sa.Status.CurrentlyActiveSchedules = []spannerv1beta1.ActiveSchedule{
+			{AdditionalPU: 2000, MaxPUPolicy: spannerv1beta1.MaxPUPolicyCap},
+		}
+		gotMin, gotMax, changed, capped := calcDesiredPURange(sa)
+		// desiredMin = 1000 + 2000 = 3000; desiredMax stays at spec max.
+		Expect(gotMin).To(Equal(3000))
+		Expect(gotMax).To(Equal(10000))
+		Expect(changed).To(BeTrue())
+		Expect(capped).To(BeFalse())
+	})
+
+	It("clamps desiredMin to desiredMax when a Cap schedule raises min above max", func() {
+		sa := baseSpec(50000, 60000)
+		sa.Status.CurrentlyActiveSchedules = []spannerv1beta1.ActiveSchedule{
+			{AdditionalPU: 20000, MaxPUPolicy: spannerv1beta1.MaxPUPolicyCap},
+		}
+		gotMin, gotMax, changed, capped := calcDesiredPURange(sa)
+		// desiredMin = 50000 + 20000 = 70000 → clamped to max 60000.
+		Expect(gotMin).To(Equal(60000))
+		Expect(gotMax).To(Equal(60000))
+		Expect(changed).To(BeTrue())
+		Expect(capped).To(BeTrue())
+	})
+
+	It("clamps after rounding so the round-up cannot push min back above max", func() {
+		sa := baseSpec(1000, 10000)
+		sa.Status.CurrentlyActiveSchedules = []spannerv1beta1.ActiveSchedule{
+			{AdditionalPU: 9500, MaxPUPolicy: spannerv1beta1.MaxPUPolicyCap},
+		}
+		gotMin, gotMax, changed, capped := calcDesiredPURange(sa)
+		// desiredMin = 1000 + 9500 = 10500 → rounded up to 11000 → clamped to 10000.
+		Expect(gotMin).To(Equal(10000))
+		Expect(gotMax).To(Equal(10000))
+		Expect(changed).To(BeTrue())
+		Expect(capped).To(BeTrue())
+	})
+
+	It("mixes Exceed and Cap schedules: only Exceed extends the max", func() {
+		sa := baseSpec(1000, 10000)
+		sa.Status.CurrentlyActiveSchedules = []spannerv1beta1.ActiveSchedule{
+			{AdditionalPU: 20000, MaxPUPolicy: spannerv1beta1.MaxPUPolicyExceed},
+			{AdditionalPU: 10000, MaxPUPolicy: spannerv1beta1.MaxPUPolicyCap},
+		}
+		gotMin, gotMax, changed, capped := calcDesiredPURange(sa)
+		// desiredMin = 1000 + 30000 = 31000
+		// desiredMax = 10000 + 20000 = 30000 → min clamped to 30000.
+		Expect(gotMin).To(Equal(30000))
+		Expect(gotMax).To(Equal(30000))
+		Expect(changed).To(BeTrue())
+		Expect(capped).To(BeTrue())
 	})
 })
 

@@ -467,10 +467,27 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 		return result, err
 	}
 
-	if minPU, maxPU, updated := calcDesiredPURange(sa); updated {
+	if minPU, maxPU, updated, capped := calcDesiredPURange(sa); updated {
 		sa.Status.DesiredMinPUs = minPU
 		sa.Status.DesiredMaxPUs = maxPU
 		statusChanged = true
+
+		// Surface trimmed Cap contributions once per range transition
+		// (updated guards re-emission on every reconcile while the same
+		// capped range stays in effect). Without this, part of a Cap
+		// schedule's additionalProcessingUnits being silently dropped is
+		// indistinguishable from the schedule not firing at all.
+		if capped {
+			log.Info("scheduled scaling capped at max processing units",
+				"desiredMinPUs", minPU,
+				"desiredMaxPUs", maxPU,
+				"specMinPUs", sa.Spec.ScaleConfig.ProcessingUnits.Min,
+				"specMaxPUs", sa.Spec.ScaleConfig.ProcessingUnits.Max,
+			)
+			r.recorder.Eventf(&sa, corev1.EventTypeNormal, "ScheduleCappedAtMax",
+				"active schedule(s) with maxPUPolicy=Cap raised the lower bound above the upper bound; clamped range to [%d, %d]",
+				minPU, maxPU)
+		}
 	}
 
 	desiredProcessingUnits := calcDesiredProcessingUnits(sa)
@@ -490,11 +507,13 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 		// CurrentlyActiveSchedules contains only schedules whose cron has fired
 		// and whose EndTime has not yet passed (not every configured schedule).
 		// Overlapping active schedules stack additively — this mirrors how
-		// calcDesiredPURange folds AdditionalPU into the min/max PU range.
+		// calcDesiredPURange folds AdditionalPU into the min/max PU range
+		// (every schedule raises the min; only maxPUPolicy=Exceed raises the max).
 		activeScheduleNames := make([]string, 0, len(sa.Status.CurrentlyActiveSchedules))
 		var scheduleAdditionalPU int
 		for _, as := range sa.Status.CurrentlyActiveSchedules {
-			activeScheduleNames = append(activeScheduleNames, as.ScheduleName)
+			activeScheduleNames = append(activeScheduleNames,
+				fmt.Sprintf("%s (%s)", as.ScheduleName, as.MaxPUPolicy.Normalized()))
 			scheduleAdditionalPU += as.AdditionalPU
 		}
 		log.V(1).Info("processing units need to be changed",
@@ -1020,16 +1039,31 @@ func scaleDriver(sa *spannerv1beta1.SpannerAutoscaler, after int) string {
 	}
 }
 
-func calcDesiredPURange(sa spannerv1beta1.SpannerAutoscaler) (int, int, bool) {
-	changed := false
-	var desiredMin, desiredMax int
+// calcDesiredPURange computes the effective autoscaling range from the spec
+// range and the currently active schedules. Every active schedule raises the
+// lower bound by its AdditionalPU; whether it also raises the upper bound
+// depends on its MaxPUPolicy: Exceed extends the max beyond
+// spec.processingUnits.max, Cap keeps the spec max as the hard ceiling. An
+// empty policy is treated as Exceed for backward compatibility with entries
+// written by older controllers.
+//
+// The returned range always satisfies desiredMin <= desiredMax: the min is
+// clamped down to the max after rounding (rounding first, so the 1000-unit
+// round-up cannot push the min back above the max). capped reports whether
+// this clamp trimmed part of the Cap schedules' contribution, so the caller
+// can surface the reduction to operators.
+func calcDesiredPURange(sa spannerv1beta1.SpannerAutoscaler) (minPU, maxPU int, changed, capped bool) {
+	// Start from the spec range; active schedules only ever add to it.
+	// A Cap schedule skips the max addition, so the max never drops below
+	// spec.processingUnits.max.
+	desiredMin := sa.Spec.ScaleConfig.ProcessingUnits.Min
+	desiredMax := sa.Spec.ScaleConfig.ProcessingUnits.Max
 	for _, sched := range sa.Status.CurrentlyActiveSchedules {
 		desiredMin += sched.AdditionalPU
-		desiredMax += sched.AdditionalPU
+		if sched.MaxPUPolicy.Normalized() == spannerv1beta1.MaxPUPolicyExceed {
+			desiredMax += sched.AdditionalPU
+		}
 	}
-
-	desiredMin += sa.Spec.ScaleConfig.ProcessingUnits.Min
-	desiredMax += sa.Spec.ScaleConfig.ProcessingUnits.Max
 
 	// round up, in case any schedule adds small number of PUs
 	if remainder := desiredMin % 1000; desiredMin > 1000 && remainder != 0 {
@@ -1040,11 +1074,18 @@ func calcDesiredPURange(sa spannerv1beta1.SpannerAutoscaler) (int, int, bool) {
 		desiredMax = ((desiredMax / 1000) + 1) * 1000
 	}
 
+	// Cap schedules do not extend the max, so the summed min can exceed it.
+	// Never publish an inverted range: clamp the min down to the max.
+	if desiredMin > desiredMax {
+		desiredMin = desiredMax
+		capped = true
+	}
+
 	if desiredMin != sa.Status.DesiredMinPUs || desiredMax != sa.Status.DesiredMaxPUs {
 		changed = true
 	}
 
-	return desiredMin, desiredMax, changed
+	return desiredMin, desiredMax, changed, capped
 }
 
 func (r *SpannerAutoscalerReconciler) fetchCredentials(ctx context.Context, sa *spannerv1beta1.SpannerAutoscaler) (*syncerpkg.Credentials, error) {

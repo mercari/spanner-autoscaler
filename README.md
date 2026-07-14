@@ -45,9 +45,26 @@ spec:
 
 The `cron` field supports extended syntax (`L`, `L-n`, `nW`, `LW`, `DAY#n`, `DAY#L`) in addition to the standard 5-field format, powered by [go-cron](https://github.com/netresearch/go-cron). See the [Extended Syntax documentation](https://pkg.go.dev/github.com/netresearch/go-cron#hdr-Extended_Syntax__Optional_) for details and examples.
 
-> **Note:** While a schedule is active, `additionalProcessingUnits` is added to **both ends** of the autoscaling range: the effective range becomes `[spec.processingUnits.min + additionalProcessingUnits, spec.processingUnits.max + additionalProcessingUnits]` (exposed as `status.desiredMinPUs` / `status.desiredMaxPUs`). This means the instance can be scaled **beyond `spec.processingUnits.max`** — with `max: 1000` and the schedule above, the instance may reach 1,600 PU while the schedule is active. Because the lower bound is raised as well, the instance is scaled up to at least `min + additionalProcessingUnits` even when CPU utilization is low. Once the schedule's window (`duration`) ends, the range reverts to the values in `spec`, and the instance scales back down after the configured scale-down interval.
+#### Interaction with the autoscaling range (`maxPUPolicy`)
 
-> **Note:** When multiple schedules are active simultaneously (i.e. their windows overlap), the `additionalProcessingUnits` from all active schedules are **summed** and added to both `desiredMinPUs` and `desiredMaxPUs`. For example, if schedule A adds +1,000 PU and schedule B adds +5,000 PU and both are active at the same time, `desiredMinPUs = spec.processingUnits.min + 6,000`.
+While a schedule is active, `additionalProcessingUnits` is by default added to **both ends** of the autoscaling range: the effective range becomes `[spec.processingUnits.min + additionalProcessingUnits, spec.processingUnits.max + additionalProcessingUnits]` (exposed as `status.desiredMinPUs` / `status.desiredMaxPUs`). This means the instance can be scaled **beyond `spec.processingUnits.max`** — with `max: 1000` and the schedule above, the instance may reach 1,600 PU while the schedule is active. Because the lower bound is raised as well, the instance is scaled up to at least `min + additionalProcessingUnits` even when CPU utilization is low. Once the schedule's window (`duration`) ends, the range reverts to the values in `spec`, and the instance scales back down after the configured scale-down interval.
+
+The `maxPUPolicy` field controls whether the schedule may exceed the max:
+
+```yaml
+spec:
+  targetResource: spannerautoscaler-sample
+  additionalProcessingUnits: 600
+  maxPUPolicy: Cap   # Exceed (default) | Cap
+  schedule:
+    cron: "0 2 * * *"
+    duration: 3h
+```
+
+- `Exceed` (default): raises both ends of the range, so the instance may scale beyond `spec.processingUnits.max`. This is the original behavior and remains the default for backward compatibility. Schedules created before the field existed show an empty `MAX PU POLICY` column in `kubectl get spannerautoscaleschedules`, which is treated as `Exceed`.
+- `Cap`: raises only the lower bound; `spec.processingUnits.max` remains the hard ceiling. If `min + additionalProcessingUnits` exceeds `max`, the lower bound is clamped down to `max` (the effective range never inverts), the trimmed contribution is logged, and a `ScheduleCappedAtMax` event is emitted on the `SpannerAutoscaler`.
+
+> **Note:** When multiple schedules are active simultaneously (i.e. their windows overlap), the `additionalProcessingUnits` from all active schedules are **summed**: every active schedule contributes to `desiredMinPUs`, while only schedules with `maxPUPolicy: Exceed` (or unset) contribute to `desiredMaxPUs`. For example, if schedule A adds +1,000 PU and schedule B adds +5,000 PU and both are active at the same time, `desiredMinPUs = spec.processingUnits.min + 6,000`.
 
 ### Scale down time restrictions
 

@@ -24,6 +24,9 @@ spec:
     - jsonPath: .spec.additionalProcessingUnits
       name: Additional PU
       type: integer
+    - jsonPath: .spec.maxPUPolicy
+      name: Max PU Policy
+      type: string
     name: v1beta1
     schema:
       openAPIV3Schema:
@@ -54,10 +57,22 @@ spec:
               additionalProcessingUnits:
                 description: |-
                   The extra compute capacity which will be added when this schedule is active.
-                  While active, this value is added to both the minimum and maximum of the target
-                  SpannerAutoscaler's autoscaling range, so the instance can be scaled beyond
+                  While active, this value is added to the minimum — and, unless maxPUPolicy is
+                  `Cap`, also the maximum — of the target SpannerAutoscaler's autoscaling range,
+                  so by default the instance can be scaled beyond
                   `spec.scaleConfig.processingUnits.max` by this amount.
                 type: integer
+              maxPUPolicy:
+                default: Exceed
+                description: |-
+                  How additionalProcessingUnits interacts with the target SpannerAutoscaler's
+                  `spec.scaleConfig.processingUnits.max`. `Exceed` (default) raises both ends
+                  of the autoscaling range, so the instance may scale beyond max.
+                  `Cap` raises only the lower bound and never exceeds max.
+                enum:
+                - Exceed
+                - Cap
+                type: string
               schedule:
                 description: The details of when and for how long this schedule will
                   be active.

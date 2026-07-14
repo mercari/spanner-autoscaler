@@ -54,6 +54,7 @@ _Appears in:_
 | `name` _string_ | Name of the `SpannerAutoscaleSchedule` |  |  |
 | `endTime` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.22/#time-v1-meta)_ | The time until when this schedule will remain active |  |  |
 | `additionalPU` _integer_ | The extra compute capacity which will be added because of this schedule |  |  |
+| `maxPUPolicy` _[MaxPUPolicy](#maxpupolicy)_ | How this schedule interacts with the autoscaler's max processing units.<br />Empty is treated as `Exceed` (entries written by older controllers). |  | Enum: [Exceed Cap] <br />Optional: \{\} <br /> |
 
 
 #### AuthType
@@ -188,6 +189,26 @@ _Appears in:_
 
 
 
+#### MaxPUPolicy
+
+_Underlying type:_ _string_
+
+MaxPUPolicy defines how additionalProcessingUnits interacts with the
+target SpannerAutoscaler's max processing units.
+
+_Validation:_
+- Enum: [Exceed Cap]
+
+_Appears in:_
+- [ActiveSchedule](#activeschedule)
+- [SpannerAutoscaleScheduleSpec](#spannerautoscaleschedulespec)
+
+| Field | Description |
+| --- | --- |
+| `Exceed` | MaxPUPolicyExceed raises both ends of the autoscaling range, allowing<br />the instance to scale beyond `spec.scaleConfig.processingUnits.max`<br />(current behavior; default).<br /> |
+| `Cap` | MaxPUPolicyCap raises only the lower bound of the autoscaling range.<br />`spec.scaleConfig.processingUnits.max` remains the hard ceiling.<br /> |
+
+
 #### ScaleConfig
 
 
@@ -297,7 +318,8 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `targetResource` _string_ | The `SpannerAutoscaler` resource name with which this schedule will be registered.<br />Immutable after creation. |  |  |
-| `additionalProcessingUnits` _integer_ | The extra compute capacity which will be added when this schedule is active.<br />While active, this value is added to both the minimum and maximum of the target<br />SpannerAutoscaler's autoscaling range, so the instance can be scaled beyond<br />`spec.scaleConfig.processingUnits.max` by this amount. |  |  |
+| `additionalProcessingUnits` _integer_ | The extra compute capacity which will be added when this schedule is active.<br />While active, this value is added to the minimum — and, unless maxPUPolicy is<br />`Cap`, also the maximum — of the target SpannerAutoscaler's autoscaling range,<br />so by default the instance can be scaled beyond<br />`spec.scaleConfig.processingUnits.max` by this amount. |  |  |
+| `maxPUPolicy` _[MaxPUPolicy](#maxpupolicy)_ | How additionalProcessingUnits interacts with the target SpannerAutoscaler's<br />`spec.scaleConfig.processingUnits.max`. `Exceed` (default) raises both ends<br />of the autoscaling range, so the instance may scale beyond max.<br />`Cap` raises only the lower bound and never exceeds max. | Exceed | Enum: [Exceed Cap] <br />Optional: \{\} <br /> |
 | `schedule` _[Schedule](#schedule)_ | The details of when and for how long this schedule will be active. |  |  |
 
 

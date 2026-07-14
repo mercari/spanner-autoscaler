@@ -275,6 +275,11 @@ type ActiveSchedule struct {
 
 	// The extra compute capacity which will be added because of this schedule
 	AdditionalPU int `json:"additionalPU"`
+
+	// How this schedule interacts with the autoscaler's max processing units.
+	// Empty is treated as `Exceed` (entries written by older controllers).
+	// +optional
+	MaxPUPolicy MaxPUPolicy `json:"maxPUPolicy,omitempty"`
 }
 
 // A `SpannerManualScaling` which is currently overriding this autoscaler's

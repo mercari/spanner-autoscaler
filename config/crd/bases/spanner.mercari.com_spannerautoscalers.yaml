@@ -552,6 +552,14 @@ spec:
                       description: The time until when this schedule will remain active
                       format: date-time
                       type: string
+                    maxPUPolicy:
+                      description: |-
+                        How this schedule interacts with the autoscaler's max processing units.
+                        Empty is treated as `Exceed` (entries written by older controllers).
+                      enum:
+                      - Exceed
+                      - Cap
+                      type: string
                     name:
                       description: Name of the `SpannerAutoscaleSchedule`
                       type: string

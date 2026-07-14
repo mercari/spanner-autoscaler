@@ -176,6 +176,10 @@ func (j Job) Run() {
 			ScheduleName: j.ScheduleName.String(),
 			AdditionalPU: sas.Spec.AdditionalProcessingUnits,
 			EndTime:      metav1.Time{Time: metav1.Now().Add(duration)},
+			// Normalized so status entries are always explicit; readers
+			// still normalize on their side for entries written by older
+			// controllers.
+			MaxPUPolicy: sas.Spec.MaxPUPolicy.Normalized(),
 		}
 		j.Log.V(1).Info("updating active schedules", "now", metav1.Now(), "endtime", metav1.Now().Add(duration))
 
@@ -191,6 +195,7 @@ func (j Job) Run() {
 	} else {
 		j.Log.Info("scheduled scaling activated",
 			"additionalPU", cas.AdditionalPU,
+			"maxPUPolicy", cas.MaxPUPolicy,
 			"endTime", cas.EndTime.Time,
 			"duration", sas.Spec.Schedule.Duration,
 		)
