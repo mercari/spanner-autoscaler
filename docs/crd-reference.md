@@ -297,7 +297,7 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `targetResource` _string_ | The `SpannerAutoscaler` resource name with which this schedule will be registered.<br />Immutable after creation. |  |  |
-| `additionalProcessingUnits` _integer_ | The extra compute capacity which will be added when this schedule is active. |  |  |
+| `additionalProcessingUnits` _integer_ | The extra compute capacity which will be added when this schedule is active.<br />While active, this value is added to both the minimum and maximum of the target<br />SpannerAutoscaler's autoscaling range, so the instance can be scaled beyond<br />`spec.scaleConfig.processingUnits.max` by this amount. |  |  |
 | `schedule` _[Schedule](#schedule)_ | The details of when and for how long this schedule will be active. |  |  |
 
 
