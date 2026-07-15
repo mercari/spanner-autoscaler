@@ -61,7 +61,7 @@ spec:
     duration: 3h
 ```
 
-- `Exceed` (default): raises both ends of the range, so the instance may scale beyond `spec.processingUnits.max`. This is the original behavior and remains the default for backward compatibility. Schedules created before the field existed show an empty `MAX PU POLICY` column in `kubectl get spannerautoscaleschedules`, which is treated as `Exceed`.
+- `Exceed` (default): raises both ends of the range, so the instance may scale beyond `spec.processingUnits.max`. This is the original behavior and remains the default for backward compatibility. The CRD schema default is applied by the API server when objects are served, so schedules created before this field existed are also read and displayed as `Exceed`.
 - `Cap`: raises only the lower bound; `spec.processingUnits.max` remains the hard ceiling. If `min + additionalProcessingUnits` exceeds `max`, the lower bound is clamped down to `max` (the effective range never inverts), the trimmed contribution is logged, and a `ScheduleCappedAtMax` event is emitted on the `SpannerAutoscaler`.
 
 > **Note:** When multiple schedules are active simultaneously (i.e. their windows overlap), the `additionalProcessingUnits` from all active schedules are **summed**: every active schedule contributes to `desiredMinPUs`, while only schedules with `maxPUPolicy: Exceed` (or unset) contribute to `desiredMaxPUs`. For example, if schedule A adds +1,000 PU and schedule B adds +5,000 PU and both are active at the same time, `desiredMinPUs = spec.processingUnits.min + 6,000`.
