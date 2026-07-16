@@ -31,6 +31,33 @@ type Schedule struct {
 	Duration string `json:"duration"`
 }
 
+// MaxPUPolicy defines how additionalProcessingUnits interacts with the
+// target SpannerAutoscaler's max processing units.
+// +kubebuilder:validation:Enum=Exceed;Cap
+type MaxPUPolicy string
+
+const (
+	// MaxPUPolicyExceed raises both ends of the autoscaling range, allowing
+	// the instance to scale beyond `spec.scaleConfig.processingUnits.max`
+	// (current behavior; default).
+	MaxPUPolicyExceed MaxPUPolicy = "Exceed"
+
+	// MaxPUPolicyCap raises only the lower bound of the autoscaling range.
+	// `spec.scaleConfig.processingUnits.max` remains the hard ceiling.
+	MaxPUPolicyCap MaxPUPolicy = "Cap"
+)
+
+// Normalized resolves the empty value to the MaxPUPolicyExceed default.
+// Specs and status entries written before this field existed (or by older
+// controllers) carry an empty policy; every consumer must treat them as
+// Exceed, and this method is the single place that rule lives.
+func (p MaxPUPolicy) Normalized() MaxPUPolicy {
+	if p == "" {
+		return MaxPUPolicyExceed
+	}
+	return p
+}
+
 // SpannerAutoscaleScheduleSpec defines the desired state of SpannerAutoscaleSchedule
 type SpannerAutoscaleScheduleSpec struct {
 	// The `SpannerAutoscaler` resource name with which this schedule will be registered.
@@ -38,10 +65,19 @@ type SpannerAutoscaleScheduleSpec struct {
 	TargetResource string `json:"targetResource"`
 
 	// The extra compute capacity which will be added when this schedule is active.
-	// While active, this value is added to both the minimum and maximum of the target
-	// SpannerAutoscaler's autoscaling range, so the instance can be scaled beyond
+	// While active, this value is added to the minimum — and, unless maxPUPolicy is
+	// `Cap`, also the maximum — of the target SpannerAutoscaler's autoscaling range,
+	// so by default the instance can be scaled beyond
 	// `spec.scaleConfig.processingUnits.max` by this amount.
 	AdditionalProcessingUnits int `json:"additionalProcessingUnits"`
+
+	// How additionalProcessingUnits interacts with the target SpannerAutoscaler's
+	// `spec.scaleConfig.processingUnits.max`. `Exceed` (default) raises both ends
+	// of the autoscaling range, so the instance may scale beyond max.
+	// `Cap` raises only the lower bound and never exceeds max.
+	// +kubebuilder:default=Exceed
+	// +optional
+	MaxPUPolicy MaxPUPolicy `json:"maxPUPolicy,omitempty"`
 
 	// The details of when and for how long this schedule will be active.
 	Schedule Schedule `json:"schedule"`
@@ -56,6 +92,7 @@ type SpannerAutoscaleScheduleStatus struct{}
 // +kubebuilder:printcolumn:name="Cron",type="string",JSONPath=".spec.schedule.cron"
 // +kubebuilder:printcolumn:name="Duration",type="string",JSONPath=".spec.schedule.duration"
 // +kubebuilder:printcolumn:name="Additional PU",type="integer",JSONPath=".spec.additionalProcessingUnits"
+// +kubebuilder:printcolumn:name="Max PU Policy",type="string",JSONPath=".spec.maxPUPolicy"
 // SpannerAutoscaleSchedule is the Schema for the spannerautoscaleschedules API
 type SpannerAutoscaleSchedule struct {
 	metav1.TypeMeta   `json:",inline"`
