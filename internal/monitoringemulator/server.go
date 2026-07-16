@@ -9,6 +9,9 @@ import (
 	monitoringpb "cloud.google.com/go/monitoring/apiv3/v2/monitoringpb"
 	spanneradmin "cloud.google.com/go/spanner/admin/instance/apiv1"
 	instancepb "cloud.google.com/go/spanner/admin/instance/apiv1/instancepb"
+	metricpb "google.golang.org/genproto/googleapis/api/metric"
+	monitoredrespb "google.golang.org/genproto/googleapis/api/monitoredres"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -40,6 +43,8 @@ type MetricServiceServer struct {
 	staticStore        *StaticStore
 	workloadStore      *WorkloadStore
 	scenarioStore      *ScenarioStore
+	quotaStore         *QuotaStore
+	quotaModeStore     *QuotaModeStore
 	spannerAdminClient *spanneradmin.InstanceAdminClient // nil → dynamic mode unavailable
 }
 
@@ -47,12 +52,16 @@ func NewMetricServiceServer(
 	staticStore *StaticStore,
 	workloadStore *WorkloadStore,
 	scenarioStore *ScenarioStore,
+	quotaStore *QuotaStore,
+	quotaModeStore *QuotaModeStore,
 	spannerAdminClient *spanneradmin.InstanceAdminClient,
 ) *MetricServiceServer {
 	return &MetricServiceServer{
 		staticStore:        staticStore,
 		workloadStore:      workloadStore,
 		scenarioStore:      scenarioStore,
+		quotaStore:         quotaStore,
+		quotaModeStore:     quotaModeStore,
 		spannerAdminClient: spannerAdminClient,
 	}
 }
@@ -65,14 +74,23 @@ func (s *MetricServiceServer) ListTimeSeries(
 	if err != nil {
 		return nil, err
 	}
-	instanceID, err := extractInstanceID(req.GetFilter())
-	if err != nil {
-		return nil, err
-	}
 
 	kind := extractMetricKind(req.GetFilter())
 	if kind == MetricKindUnknown {
 		return nil, fmt.Errorf("unsupported metric type in filter: %s", req.GetFilter())
+	}
+	if kind == MetricKindQuotaLimit || kind == MetricKindQuotaUsage {
+		if s.quotaModeStore != nil {
+			if mode, ok := s.quotaModeStore.Get(); ok {
+				return nil, status.Error(mode.Code, mode.Message)
+			}
+		}
+		return buildQuotaResponse(projectID, kind, s.quotaStore), nil
+	}
+
+	instanceID, err := extractInstanceID(req.GetFilter())
+	if err != nil {
+		return nil, err
 	}
 
 	// Priority 1: ScenarioStore (time-based scenario mode)
@@ -155,4 +173,56 @@ func buildResponse(cpuUtilization float64) *monitoringpb.ListTimeSeriesResponse 
 			},
 		},
 	}
+}
+
+func buildQuotaResponse(projectID string, kind MetricKind, store *QuotaStore) *monitoringpb.ListTimeSeriesResponse {
+	if store == nil {
+		return &monitoringpb.ListTimeSeriesResponse{}
+	}
+
+	now := time.Now()
+	entries := store.List(projectID)
+	resp := &monitoringpb.ListTimeSeriesResponse{
+		TimeSeries: make([]*monitoringpb.TimeSeries, 0, len(entries)),
+	}
+	for location, entry := range entries {
+		metricLabels := map[string]string{
+			"quota_metric": entry.QuotaMetric,
+		}
+		value := entry.UsageNodes
+		metricType := "serviceruntime.googleapis.com/quota/allocation/usage"
+		if kind == MetricKindQuotaLimit {
+			metricType = "serviceruntime.googleapis.com/quota/limit"
+			metricLabels["limit_name"] = entry.LimitName
+			value = entry.LimitNodes
+		}
+		resp.TimeSeries = append(resp.TimeSeries, &monitoringpb.TimeSeries{
+			Metric: &metricpb.Metric{
+				Type:   metricType,
+				Labels: metricLabels,
+			},
+			Resource: &monitoredrespb.MonitoredResource{
+				Type: "consumer_quota",
+				Labels: map[string]string{
+					"project_id": projectID,
+					"service":    "spanner.googleapis.com",
+					"location":   location,
+				},
+			},
+			Points: []*monitoringpb.Point{
+				{
+					Interval: &monitoringpb.TimeInterval{
+						StartTime: timestamppb.New(now),
+						EndTime:   timestamppb.New(now),
+					},
+					Value: &monitoringpb.TypedValue{
+						Value: &monitoringpb.TypedValue_Int64Value{
+							Int64Value: value,
+						},
+					},
+				},
+			},
+		})
+	}
+	return resp
 }

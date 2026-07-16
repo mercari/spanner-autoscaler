@@ -73,6 +73,16 @@ func TestExtractMetricKind(t *testing.T) {
 			want:   MetricKindUnknown,
 		},
 		{
+			name:   "quota limit",
+			filter: `metric.type = "serviceruntime.googleapis.com/quota/limit" AND resource.type = "consumer_quota"`,
+			want:   MetricKindQuotaLimit,
+		},
+		{
+			name:   "quota allocation usage",
+			filter: `metric.type = "serviceruntime.googleapis.com/quota/allocation/usage" AND resource.type = "consumer_quota"`,
+			want:   MetricKindQuotaUsage,
+		},
+		{
 			name:   "empty filter",
 			filter: "",
 			want:   MetricKindUnknown,

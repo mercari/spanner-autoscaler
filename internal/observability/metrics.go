@@ -13,9 +13,13 @@
 package observability
 
 import (
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/types"
 
 	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
@@ -32,6 +36,7 @@ const (
 	driverLabel    = "driver"
 	reasonLabel    = "reason"
 	resultLabel    = "result"
+	grpcCodeLabel  = "grpc_code"
 
 	cpuTypeHighPriority = "high_priority"
 	cpuTypeTotal        = "total"
@@ -65,6 +70,21 @@ const (
 
 	resultSuccess = "success"
 	resultError   = "error"
+
+	QuotaLookupResultSuccess = resultSuccess
+	QuotaLookupResultError   = resultError
+	QuotaLookupResultSkipped = "skipped"
+
+	QuotaLookupReasonOK                        = "ok"
+	QuotaLookupReasonPermissionDenied          = "permission_denied"
+	QuotaLookupReasonUnauthenticated           = "unauthenticated"
+	QuotaLookupReasonUnavailable               = "unavailable"
+	QuotaLookupReasonResourceExhausted         = "resource_exhausted"
+	QuotaLookupReasonTimeout                   = "timeout"
+	QuotaLookupReasonUnsupportedInstanceConfig = "unsupported_instance_config"
+	QuotaLookupReasonNoData                    = "no_data"
+	QuotaLookupReasonMalformedResponse         = "malformed_response"
+	QuotaLookupReasonUnknown                   = "unknown"
 )
 
 // identityLabels is the ordered label set attached to every business metric.
@@ -235,11 +255,21 @@ var (
 		Help: "Spanner UpdateInstance API call count, labeled by result (success|error).",
 	}, append(identityLabels, resultLabel))
 
+	instanceUpdateErrorsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "spanner_autoscaler_instance_update_errors_total",
+		Help: "Spanner UpdateInstance API error count, labeled by gRPC code.",
+	}, append(identityLabels, grpcCodeLabel))
+
 	instanceUpdateDurationSeconds = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "spanner_autoscaler_instance_update_duration_seconds",
 		Help:    "Spanner UpdateInstance API call latency in seconds.",
 		Buckets: []float64{0.1, 0.5, 1, 2, 5, 10, 30, 60},
 	}, identityLabels)
+
+	quotaLookupTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "spanner_autoscaler_quota_lookup_total",
+		Help: "Cloud Monitoring quota lookup count after ResourceExhausted, labeled by result and reason.",
+	}, append(identityLabels, resultLabel, reasonLabel))
 
 	metricsFetchTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "spanner_autoscaler_metrics_fetch_total",
@@ -303,7 +333,9 @@ func allCollectors() []prometheus.Collector {
 		scaleSkippedTotal,
 		scalePUDelta,
 		instanceUpdateTotal,
+		instanceUpdateErrorsTotal,
 		instanceUpdateDurationSeconds,
+		quotaLookupTotal,
 		metricsFetchTotal,
 		metricsFetchDurationSeconds,
 		manualScalingActive,
@@ -340,7 +372,9 @@ func allVectors() []partialDeleter {
 		scaleSkippedTotal,
 		scalePUDelta,
 		instanceUpdateTotal,
+		instanceUpdateErrorsTotal,
 		instanceUpdateDurationSeconds,
+		quotaLookupTotal,
 		metricsFetchTotal,
 		metricsFetchDurationSeconds,
 		manualScalingActive,
@@ -452,6 +486,14 @@ func RecordScheduleDeactivation(l Labels, reason string) {
 func RecordInstanceUpdate(l Labels, duration time.Duration, err error) {
 	instanceUpdateDurationSeconds.WithLabelValues(l.values()...).Observe(duration.Seconds())
 	instanceUpdateTotal.WithLabelValues(l.withExtra(resultFor(err))...).Inc()
+	if err != nil {
+		instanceUpdateErrorsTotal.WithLabelValues(l.withExtra(grpcCodeFor(err))...).Inc()
+	}
+}
+
+// RecordQuotaLookup records a ResourceExhausted-triggered quota lookup result.
+func RecordQuotaLookup(l Labels, result, reason string) {
+	quotaLookupTotal.WithLabelValues(l.withExtra(result, reason)...).Inc()
 }
 
 // RecordMetricsFetch records the latency and result of a Cloud Monitoring
@@ -528,4 +570,29 @@ func resultFor(err error) string {
 		return resultSuccess
 	}
 	return resultError
+}
+
+func grpcCodeFor(err error) string {
+	code := status.Code(err)
+	if code == codes.OK {
+		return "unknown"
+	}
+	return grpcCodeSnake(code.String())
+}
+
+// grpcCodeSnake converts a gRPC code's CamelCase String() (e.g. "ResourceExhausted")
+// to snake_case ("resource_exhausted") for use as a Prometheus label value.
+func grpcCodeSnake(s string) string {
+	var b strings.Builder
+	for i, r := range s {
+		if unicode.IsUpper(r) {
+			if i > 0 {
+				b.WriteByte('_')
+			}
+			b.WriteRune(unicode.ToLower(r))
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
