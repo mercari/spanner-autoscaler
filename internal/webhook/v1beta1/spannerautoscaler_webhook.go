@@ -81,8 +81,12 @@ func (*SpannerAutoscalerCustomDefaulter) Default(_ context.Context, obj *spanner
 		}
 	}
 
-	// set default ScaledownStepSize
-	if obj.Spec.ScaleConfig.ScaledownStepSize.IntValue() == 0 {
+	// set default ScaledownStepSize (only when truly unset).
+	// IntValue() returns 0 for percent strings such as "10%", so the previous
+	// `IntValue() == 0` check misclassified a percentage as "unset" and clobbered
+	// it with 2000. Compare against the zero value instead so percent and integer
+	// values are both preserved.
+	if obj.Spec.ScaleConfig.ScaledownStepSize == (intstr.IntOrString{}) {
 		obj.Spec.ScaleConfig.ScaledownStepSize = intstr.FromInt(2000)
 	}
 

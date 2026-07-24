@@ -150,6 +150,20 @@ var _ = Describe("SpannerAutoscaler validation", func() {
 						Expect(result.Spec.ScaleConfig.ScaledownStepSize.IntVal).To(Equal(int32(2000)))
 					})
 				})
+
+				Context("scale down step size is set as a percentage", func() {
+					BeforeEach(func() {
+						testResource.Spec.ScaleConfig.ScaledownStepSize = intstr.FromString("10%")
+					})
+
+					It("should preserve the percentage and not overwrite it with the default", func() {
+						result, err := createResource(testResource)
+						Expect(err).ToNot(HaveOccurred())
+						Expect(result.Spec.ScaleConfig.ComputeType).To(Equal(spannerv1beta1.ComputeTypePU))
+						Expect(result.Spec.ScaleConfig.ScaledownStepSize.Type).To(Equal(intstr.String))
+						Expect(result.Spec.ScaleConfig.ScaledownStepSize.StrVal).To(Equal("10%"))
+					})
+				})
 			})
 
 			Context("processing unit node is set", func() {
