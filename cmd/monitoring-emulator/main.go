@@ -29,6 +29,8 @@ func main() {
 	staticStore := monitoringemulator.NewStaticStore()
 	workloadStore := monitoringemulator.NewWorkloadStore()
 	scenarioStore := monitoringemulator.NewScenarioStore()
+	quotaStore := monitoringemulator.NewQuotaStore()
+	quotaModeStore := monitoringemulator.NewQuotaModeStore()
 
 	if scenarioFile != "" {
 		if err := scenarioStore.LoadFile(scenarioFile); err != nil {
@@ -59,7 +61,7 @@ func main() {
 		logger.Info("dynamic mode disabled: SPANNER_EMULATOR_HOST not set")
 	}
 
-	srv := monitoringemulator.NewMetricServiceServer(staticStore, workloadStore, scenarioStore, spannerAdminClient)
+	srv := monitoringemulator.NewMetricServiceServer(staticStore, workloadStore, scenarioStore, quotaStore, quotaModeStore, spannerAdminClient)
 
 	// Start gRPC server.
 	grpcLis, err := net.Listen("tcp", ":"+grpcPort)
@@ -78,7 +80,7 @@ func main() {
 	}()
 
 	// Start HTTP admin server.
-	adminHandler := monitoringemulator.NewAdminHandler(staticStore, workloadStore, scenarioStore)
+	adminHandler := monitoringemulator.NewAdminHandler(staticStore, workloadStore, scenarioStore, quotaStore, quotaModeStore)
 	adminSrv := &http.Server{ //nolint:gosec
 		Addr:    ":" + adminPort,
 		Handler: adminHandler,

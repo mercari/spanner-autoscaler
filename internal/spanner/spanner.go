@@ -30,6 +30,7 @@ const (
 type Instance struct {
 	ProcessingUnits int
 	InstanceState   State
+	Config          string
 }
 
 // Client is a client for manipulation of Instance.
@@ -125,30 +126,29 @@ func (c *client) GetInstance(ctx context.Context) (*Instance, error) {
 	return &Instance{
 		ProcessingUnits: int(i.ProcessingUnits),
 		InstanceState:   instanceState(i.State),
+		Config:          i.GetConfig(),
 	}, nil
 }
 
 // UpdateInstance implements Client.
+//
+// Only processing_units is mutated, so the request carries a minimal Instance
+// (Name + ProcessingUnits) with FieldMask=["processing_units"]. There is no
+// pre-flight GetInstance: the field mask makes a full instance round-trip
+// unnecessary, and on ResourceExhausted the syncer fetches the instance once
+// for fallback math instead of paying for it on every UpdateInstance attempt.
 func (c *client) UpdateInstance(ctx context.Context, instance *Instance) error {
 	log := c.log.WithValues("instance-id", c.instanceID, "project-id", c.projectID)
 
-	log.V(1).Info("getting spanner instance")
-	i, err := c.spannerInstanceAdminClient.GetInstance(ctx, &instancepb.GetInstanceRequest{
-		Name: fmt.Sprintf(instanceNameFormat, c.projectID, c.instanceID),
-	})
-	if err != nil {
-		log.Error(err, "unable to get spanner instance")
-		return err
-	}
+	name := fmt.Sprintf(instanceNameFormat, c.projectID, c.instanceID)
+	log.V(1).Info("updating spanner instance", "patch", instance)
 
-	log.V(1).Info("got spanner instance", "received instance", i, "patch", instance)
-
-	//nolint:gosec // G115
-	i.ProcessingUnits = int32(instance.ProcessingUnits)
-	log.V(1).Info("updating spanner instance", "desired instance", i, "patch", instance)
-
-	_, err = c.spannerInstanceAdminClient.UpdateInstance(ctx, &instancepb.UpdateInstanceRequest{
-		Instance: i,
+	_, err := c.spannerInstanceAdminClient.UpdateInstance(ctx, &instancepb.UpdateInstanceRequest{
+		Instance: &instancepb.Instance{
+			Name: name,
+			//nolint:gosec // G115
+			ProcessingUnits: int32(instance.ProcessingUnits),
+		},
 		FieldMask: &field_mask.FieldMask{
 			Paths: []string{"processing_units"},
 		},
@@ -157,7 +157,7 @@ func (c *client) UpdateInstance(ctx context.Context, instance *Instance) error {
 		log.Error(err, "unable to update spanner instance")
 		return err
 	}
-	log.V(1).Info("updated spanner instance", "desired instance", i, "applied patch", instance)
+	log.V(1).Info("updated spanner instance", "applied patch", instance)
 
 	return nil
 }

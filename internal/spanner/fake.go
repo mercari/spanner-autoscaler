@@ -28,13 +28,17 @@ func NewFakeClient(instance *Instance) *FakeClient {
 func (c *FakeClient) GetInstance(ctx context.Context) (*Instance, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.instance, nil
+	return &Instance{
+		ProcessingUnits: c.instance.ProcessingUnits,
+		InstanceState:   c.instance.InstanceState,
+		Config:          c.instance.Config,
+	}, nil
 }
 
 // UpdateInstance implements Client.
 func (c *FakeClient) UpdateInstance(ctx context.Context, instance *Instance) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.instance = instance
+	c.instance.ProcessingUnits = instance.ProcessingUnits
 	return nil
 }

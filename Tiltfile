@@ -146,7 +146,7 @@ else:
 if ENABLE_WEBHOOKS:
     local_resource(
         'controller',
-        serve_cmd='go run ./cmd/main.go -zap-devel --cert-dir={} {}'.format(WEBHOOK_CERT_DIR, EMULATOR_FLAGS),
+        serve_cmd='go run ./cmd/main.go -zap-devel --webhook-cert-path={} {}'.format(WEBHOOK_CERT_DIR, EMULATOR_FLAGS),
         deps=['cmd/', 'api/', 'internal/'],
         resource_deps=['dev-certs'],
         labels=['controller'],

@@ -14,17 +14,21 @@ type Syncer struct {
 var _ syncer.Syncer = (*Syncer)(nil)
 
 func (s *Syncer) Start() {
-	s.FakeStart()
+	if s.FakeStart != nil {
+		s.FakeStart()
+	}
 }
 
 func (s *Syncer) Stop() {
-	s.FakeStop()
+	if s.FakeStop != nil {
+		s.FakeStop()
+	}
 }
 
 func (s *Syncer) HasCredentials(credentials *syncer.Credentials) bool {
 	return true
 }
 
-func (s *Syncer) UpdateInstance(context.Context, int) error {
-	return nil
+func (s *Syncer) UpdateInstance(_ context.Context, desiredProcessingUnits int) (int, error) {
+	return desiredProcessingUnits, nil
 }

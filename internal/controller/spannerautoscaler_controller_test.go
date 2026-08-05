@@ -1068,21 +1068,14 @@ var _ = Describe("Cron mutability", func() {
 			spReconciler.syncers[saNN] = &fakesyncer.Syncer{}
 			spReconciler.mu.Unlock()
 
-			By("creating the SpannerAutoscaleSchedule with initial cron '0 * * * *'")
-			sched := &spannerv1beta1.SpannerAutoscaleSchedule{
-				ObjectMeta: metav1.ObjectMeta{Name: schedName, Namespace: namespace},
-				Spec: spannerv1beta1.SpannerAutoscaleScheduleSpec{
-					TargetResource:            saName,
-					AdditionalProcessingUnits: 1000,
-					Schedule: spannerv1beta1.Schedule{
-						Cron:     "0 * * * *",
-						Duration: "1h",
-					},
-				},
-			}
-			Expect(k8sClient.Create(ctx, sched)).To(Succeed())
-
-			By("creating the SpannerAutoscaler")
+			By("creating the SpannerAutoscaler before the schedule")
+			// Order matters: SetupWithManager registers a watch that enqueues a
+			// SpannerAutoscaler reconcile for sched.Spec.TargetResource. If the
+			// schedule is created first, that reconcile fires before the SA
+			// exists, hits the NotFound branch, and deletes the fake syncer we
+			// just pre-seeded — the subsequent reconciles then try to spin up a
+			// real syncer and fail without GCP credentials. Create the SA first
+			// so the watcher's reconcile sees an existing resource.
 			sa := &spannerv1beta1.SpannerAutoscaler{
 				ObjectMeta: metav1.ObjectMeta{Name: saName, Namespace: namespace},
 				Spec: spannerv1beta1.SpannerAutoscalerSpec{
@@ -1108,7 +1101,22 @@ var _ = Describe("Cron mutability", func() {
 			}
 			Expect(k8sClient.Create(ctx, sa)).To(Succeed())
 
+			By("creating the SpannerAutoscaleSchedule with initial cron '0 * * * *'")
+			sched := &spannerv1beta1.SpannerAutoscaleSchedule{
+				ObjectMeta: metav1.ObjectMeta{Name: schedName, Namespace: namespace},
+				Spec: spannerv1beta1.SpannerAutoscaleScheduleSpec{
+					TargetResource:            saName,
+					AdditionalProcessingUnits: 1000,
+					Schedule: spannerv1beta1.Schedule{
+						Cron:     "0 * * * *",
+						Duration: "1h",
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, sched)).To(Succeed())
+
 			By("setting Status.Schedules to include the schedule")
+			Expect(k8sClient.Get(ctx, saNN, sa)).To(Succeed())
 			sa.Status.Schedules = []string{schedNN.String()}
 			Expect(k8sClient.Status().Update(ctx, sa)).To(Succeed())
 

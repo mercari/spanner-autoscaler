@@ -47,6 +47,15 @@ type InstanceMetrics struct {
 	CurrentTotalCPUUtilization int
 }
 
+// Quota represents Spanner node quota limit and allocation usage from Cloud Monitoring.
+type Quota struct {
+	LimitNodes  int64
+	UsageNodes  int64
+	QuotaMetric string
+	LimitName   string
+	Location    string
+}
+
 // Client is a client for manipulation of InstanceMetrics.
 type Client interface {
 	// GetInstanceMetrics gets the instance metrics for the given metric type.
@@ -56,6 +65,8 @@ type Client interface {
 	// same now to each call so the underlying Cloud Monitoring queries hit
 	// the same alignment window.
 	GetInstanceMetrics(ctx context.Context, metricType MetricType, now time.Time) (*InstanceMetrics, error)
+	// GetQuota gets Spanner node quota limit and allocation usage for the instance config.
+	GetQuota(ctx context.Context, instanceConfig string, now time.Time) (*Quota, error)
 }
 
 // client is a client for Stackdriver Monitoring.
@@ -65,6 +76,7 @@ type client struct {
 	projectID  string
 	instanceID string
 	term       time.Duration
+	quotaTerm  time.Duration
 
 	endpoint    string
 	tokenSource oauth2.TokenSource
@@ -106,6 +118,7 @@ func NewClient(ctx context.Context, projectID, instanceID string, opts ...Option
 		projectID:  projectID,
 		instanceID: instanceID,
 		term:       10 * time.Minute,
+		quotaTerm:  6 * time.Hour,
 		log:        logr.Discard(),
 	}
 

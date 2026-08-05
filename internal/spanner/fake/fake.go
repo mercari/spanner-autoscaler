@@ -14,6 +14,7 @@ type Client struct {
 	mu              sync.Mutex
 	processingUnits int
 	instanceState   spanner.State
+	config          string
 }
 
 var _ spanner.Client = (*Client)(nil)
@@ -22,6 +23,7 @@ func NewClient(processingUnits int) *Client {
 	return &Client{
 		processingUnits: processingUnits,
 		instanceState:   spanner.StateReady,
+		config:          "projects/fake-project/instanceConfigs/regional-asia-northeast1",
 	}
 }
 
@@ -31,6 +33,7 @@ func (c *Client) GetInstance(_ context.Context) (*spanner.Instance, error) {
 	return &spanner.Instance{
 		ProcessingUnits: c.processingUnits,
 		InstanceState:   c.instanceState,
+		Config:          c.config,
 	}, nil
 }
 

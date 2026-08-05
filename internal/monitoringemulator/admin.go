@@ -33,7 +33,19 @@ import (
 //	                    "total":         {"cpu_utilization": 0.50}}, ...]}
 //	  At least one of high_priority or total must be set per step.
 //	DELETE /scenario/{project_id}/{instance_id}
-func NewAdminHandler(staticStore *StaticStore, workloadStore *WorkloadStore, scenarioStore *ScenarioStore) http.Handler {
+//
+// Quota mode endpoints:
+//
+//	PUT    /quota/{project_id}/{location}
+//	  Body: {"quotaMetric": "spanner.googleapis.com/nodes", "limitName": "SpannerNodesPerProject", "limitNodes": 100, "usageNodes": 1}
+//	DELETE /quota/{project_id}/{location}
+//
+// Quota failure-injection endpoints (apply to all quota metric queries):
+//
+//	PUT    /quota-mode
+//	  Body: {"grpcCode": "PermissionDenied", "message": "permission denied"}
+//	DELETE /quota-mode
+func NewAdminHandler(staticStore *StaticStore, workloadStore *WorkloadStore, scenarioStore *ScenarioStore, quotaStore *QuotaStore, quotaModeStore *QuotaModeStore) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("PUT /metrics/{project_id}/{instance_id}", handleStaticSet(staticStore))
@@ -46,6 +58,12 @@ func NewAdminHandler(staticStore *StaticStore, workloadStore *WorkloadStore, sce
 
 	mux.HandleFunc("PUT /scenario/{project_id}/{instance_id}", handleScenarioSet(scenarioStore))
 	mux.HandleFunc("DELETE /scenario/{project_id}/{instance_id}", handleScenarioDelete(scenarioStore))
+
+	mux.HandleFunc("PUT /quota/{project_id}/{location}", handleQuotaSet(quotaStore))
+	mux.HandleFunc("DELETE /quota/{project_id}/{location}", handleQuotaDelete(quotaStore))
+
+	mux.HandleFunc("PUT /quota-mode", handleQuotaModeSet(quotaModeStore))
+	mux.HandleFunc("DELETE /quota-mode", handleQuotaModeDelete(quotaModeStore))
 
 	return mux
 }
@@ -130,6 +148,77 @@ func handleStaticGet(store *StaticStore) http.HandlerFunc {
 func handleStaticDelete(store *StaticStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		store.Delete(r.PathValue("project_id"), r.PathValue("instance_id"))
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// ---- quota mode ----
+
+func handleQuotaSet(store *QuotaStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		projectID := r.PathValue("project_id")
+		location := r.PathValue("location")
+
+		var req QuotaEntry
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if req.QuotaMetric == "" {
+			http.Error(w, "quotaMetric is required", http.StatusBadRequest)
+			return
+		}
+		if req.LimitNodes <= 0 {
+			http.Error(w, "limitNodes must be greater than 0", http.StatusBadRequest)
+			return
+		}
+		if req.UsageNodes < 0 {
+			http.Error(w, "usageNodes must be greater than or equal to 0", http.StatusBadRequest)
+			return
+		}
+
+		store.Set(projectID, location, req)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(req) //nolint:errcheck,gosec
+	}
+}
+
+func handleQuotaDelete(store *QuotaStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		store.Delete(r.PathValue("project_id"), r.PathValue("location"))
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+type quotaModeRequest struct {
+	GrpcCode string `json:"grpcCode"`
+	Message  string `json:"message"`
+}
+
+func handleQuotaModeSet(store *QuotaModeStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req quotaModeRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if req.GrpcCode == "" {
+			http.Error(w, "grpcCode is required", http.StatusBadRequest)
+			return
+		}
+		code, err := ParseGrpcCode(req.GrpcCode)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		store.Set(code, req.Message)
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func handleQuotaModeDelete(store *QuotaModeStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		store.Clear()
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
