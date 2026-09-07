@@ -33,6 +33,13 @@ import (
 	syncerpkg "github.com/mercari/spanner-autoscaler/internal/syncer"
 )
 
+// conflictRequeueDelay is how long to wait before re-reconciling after a
+// benign optimistic-concurrency conflict on a status or metadata write:
+// another writer updated the object first, so the next reconcile re-reads
+// the latest version and proceeds. Used in place of the deprecated
+// Result.Requeue, which requeued via the workqueue's error ratelimiter.
+const conflictRequeueDelay = time.Second
+
 // dispatchManualScaling runs the manual-scaling reconcile and converts its
 // (handled, requeueAfter, err) return into the ctrlreconcile.Result shape
 // the caller returns. On the success path it persists sa.Status, maps
@@ -67,7 +74,7 @@ func (r *SpannerAutoscalerReconciler) dispatchManualScaling(
 		if uerr := r.ctrlClient.Status().Update(ctx, sa); uerr != nil {
 			if apierrors.IsConflict(uerr) {
 				// Benign: another writer beat us; requeue with the latest version.
-				return ctrlreconcile.Result{Requeue: true}, true, nil
+				return ctrlreconcile.Result{RequeueAfter: conflictRequeueDelay}, true, nil
 			}
 			r.recorder.Event(sa, corev1.EventTypeWarning, "FailedUpdateStatus", uerr.Error())
 			log.Error(uerr, "manual scaling: failed to update spanner autoscaler status")
