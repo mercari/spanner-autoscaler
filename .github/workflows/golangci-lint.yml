@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Install golangci-lint
@@ -23,7 +23,7 @@ jobs:
         ## version as `make lint`.
         run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v9.2.1
+        uses: golangci/golangci-lint-action@v9.3.0
         with:
           install-mode: none ## use the go.mod-pinned binary installed above
           skip-cache: true ## caching leads to false positives even when lint errors are fixed in a subsequent commit on a PR
