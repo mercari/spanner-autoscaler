@@ -147,7 +147,7 @@ func (r *SpannerManualScalingReconciler) Reconcile(ctx context.Context, req ctrl
 		}
 		if err := r.ctrlClient.Update(ctx, &ms); err != nil {
 			if apierrors.IsConflict(err) {
-				return ctrl.Result{Requeue: true}, nil
+				return ctrl.Result{RequeueAfter: conflictRequeueDelay}, nil
 			}
 			log.Error(err, "failed to persist owner reference",
 				"target", ms.Spec.TargetResource)
@@ -182,7 +182,7 @@ func (r *SpannerManualScalingReconciler) markInvalid(
 	ms.Status.FinishedAt = &metav1.Time{Time: r.clock.Now()}
 	if err := r.ctrlClient.Status().Update(ctx, ms); err != nil {
 		if apierrors.IsConflict(err) {
-			return ctrl.Result{Requeue: true}, nil
+			return ctrl.Result{RequeueAfter: conflictRequeueDelay}, nil
 		}
 		log.Error(err, "failed to mark SpannerManualScaling Invalid")
 		return ctrl.Result{}, err

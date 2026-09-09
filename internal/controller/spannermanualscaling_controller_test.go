@@ -76,7 +76,7 @@ func TestSpannerManualScalingReconciler_Orphan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reconcile returned err: %v", err)
 	}
-	if res.Requeue || res.RequeueAfter != 0 { //nolint:staticcheck // production code returns Result{Requeue: true} for benign conflict; the field is still supported in controller-runtime v0.24.
+	if res.RequeueAfter != 0 {
 		t.Errorf("orphan should not requeue; got %+v", res)
 	}
 
@@ -239,8 +239,8 @@ func TestSpannerManualScalingReconciler_UpdateConflictRequeues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("conflict should be swallowed; got err %v", err)
 	}
-	if !res.Requeue { //nolint:staticcheck // production code returns Result{Requeue: true} for benign conflict; the field is still supported in controller-runtime v0.24.
-		t.Errorf("expected Requeue=true on conflict; got %+v", res)
+	if res.RequeueAfter != conflictRequeueDelay {
+		t.Errorf("expected RequeueAfter=conflictRequeueDelay on conflict; got %+v", res)
 	}
 }
 
@@ -258,7 +258,7 @@ func TestSpannerManualScalingReconciler_NotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NotFound on Get should be swallowed; got err %v", err)
 	}
-	if res.Requeue || res.RequeueAfter != 0 { //nolint:staticcheck // production code returns Result{Requeue: true} for benign conflict; the field is still supported in controller-runtime v0.24.
+	if res.RequeueAfter != 0 {
 		t.Errorf("NotFound should not requeue; got %+v", res)
 	}
 }
@@ -352,7 +352,7 @@ func TestSpannerManualScalingReconciler_MarkInvalidIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("markInvalid returned err: %v", err)
 	}
-	if res.Requeue || res.RequeueAfter != 0 { //nolint:staticcheck // production code returns Result{Requeue: true} for benign conflict; the field is still supported in controller-runtime v0.24.
+	if res.RequeueAfter != 0 {
 		t.Errorf("idempotent markInvalid should be no-op; got %+v", res)
 	}
 
