@@ -44,6 +44,7 @@ func runRecommend(args []string) error {
 	totalTargets := fs.String("target-total-cpu", "", "comma-separated candidate targetCPUUtilization.total values")
 	maxExceeded := fs.Float64("max-exceeded-minutes", 0, "constraint: maximum minutes the simulated CPU may spend above its target")
 	maxP99 := fs.Float64("max-p99-cpu", 0, "constraint: maximum allowed p99 of every simulated CPU metric in percent (0 = no cap)")
+	instanceConfig := fs.String("instance-config", "regional", "instance configuration deciding the Google-recommended high-priority CPU ceiling: regional (65%), multi-region (45% per region), or none to disable the guideline")
 	top := fs.Int("top", 10, "number of candidates to print (text format)")
 	showInfeasible := fs.Bool("show-infeasible", false, "also list candidates that violate the constraints (text format)")
 	if err := fs.Parse(args); err != nil {
@@ -70,6 +71,16 @@ func runRecommend(args []string) error {
 	constraints := simulator.Constraints{MaxTargetExceededMinutes: *maxExceeded}
 	if *maxP99 > 0 {
 		constraints.MaxSimCPUP99 = maxP99
+	}
+	switch *instanceConfig {
+	case "regional":
+		constraints.MaxHighPriorityCPU = simulator.RecommendedHighPriorityCPURegional
+	case "multi-region":
+		constraints.MaxHighPriorityCPU = simulator.RecommendedHighPriorityCPUMultiRegion
+	case "none":
+		// Guideline disabled.
+	default:
+		return fmt.Errorf("unknown -instance-config %q (want regional, multi-region, or none)", *instanceConfig)
 	}
 
 	points, err := common.loadPoints()
@@ -112,6 +123,10 @@ func runRecommend(args []string) error {
 			Candidates []simulator.Candidate `json:"candidates"`
 		}{baseResult.Summary, candidates})
 	case "text":
+		if constraints.MaxHighPriorityCPU > 0 {
+			fmt.Printf("guideline: high-priority CPU target and simulated p99 must stay <= %d%% (%s instance configuration)\n",
+				constraints.MaxHighPriorityCPU, *instanceConfig)
+		}
 		writeRecommendTable(baseResult.Summary, candidates, &common, *top, *showInfeasible)
 		return nil
 	default:

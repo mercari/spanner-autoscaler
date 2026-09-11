@@ -135,6 +135,61 @@ func TestRecommendScaleupDimensions(t *testing.T) {
 	}
 }
 
+func TestRecommendHighPriorityCPUGuidelineOnTarget(t *testing.T) {
+	// The workload is tiny, so simulated CPU never approaches the ceiling —
+	// a target above the guideline must still be infeasible, because such a
+	// config would let the autoscaler hold utilization above the
+	// recommended maximum.
+	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	points := constantWorkloadPoints(start, 60, 1000, 50)
+
+	base := Config{Autoscaler: newAutoscaler(1000, 10000, 40)}
+	space := SearchSpace{TargetHighPriorityCPUs: []int{40, 70}}
+
+	candidates, err := Recommend(base, space, Constraints{
+		MaxHighPriorityCPU: RecommendedHighPriorityCPURegional,
+	}, points)
+	if err != nil {
+		t.Fatalf("Recommend: %v", err)
+	}
+	if len(candidates) != 2 {
+		t.Fatalf("got %d candidates; want 2", len(candidates))
+	}
+	if got := candidates[0].Overrides[OverrideTargetHighPriorityCPU]; !candidates[0].Feasible || got != "40" {
+		t.Errorf("first candidate = %s feasible=%t; want feasible target 40",
+			DescribeOverrides(candidates[0].Overrides), candidates[0].Feasible)
+	}
+	if candidates[1].Feasible {
+		t.Errorf("target-70 candidate must be infeasible under the regional 65%% guideline")
+	}
+}
+
+func TestRecommendHighPriorityCPUGuidelineOnSimP99(t *testing.T) {
+	// min == max pins the instance at 1000 PU, so the simulated CPU sits at
+	// a constant 50%: within the regional 65% ceiling but above the
+	// multi-region 45% one.
+	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	points := constantWorkloadPoints(start, 60, 1000, 500)
+	base := Config{Autoscaler: newAutoscaler(1000, 1000, 60)}
+
+	for _, tc := range []struct {
+		limit    int
+		feasible bool
+	}{
+		{RecommendedHighPriorityCPURegional, true},
+		{RecommendedHighPriorityCPUMultiRegion, false},
+	} {
+		candidates, err := Recommend(base, SearchSpace{}, Constraints{MaxHighPriorityCPU: tc.limit}, points)
+		if err != nil {
+			t.Fatalf("Recommend(limit=%d): %v", tc.limit, err)
+		}
+		if len(candidates) != 1 || candidates[0].Feasible != tc.feasible {
+			t.Errorf("limit=%d: candidates = %+v; want single candidate with feasible=%t",
+				tc.limit, candidates, tc.feasible)
+		}
+	}
+}
+
 func TestRecommendRejectsInvalidRange(t *testing.T) {
 	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	points := constantWorkloadPoints(start, 10, 5000, 400)
