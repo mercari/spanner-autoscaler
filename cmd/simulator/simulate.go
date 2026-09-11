@@ -152,6 +152,8 @@ func writeTextReport(w io.Writer, name string, result *simulator.Result, common 
 			common.cost(s.ActualPUHours), common.cost(s.SimPUHours), common.nodeHourPrice)
 	}
 	fmt.Fprintf(w, "  scale events:      %d up / %d down\n", s.ScaleUps, s.ScaleDowns)
+	fmt.Fprintf(w, "  PU-change guide:   %d steps beyond 2x/half, %d gaps < 10m, %d gaps < 30m\n",
+		s.ScaleStepViolations, s.ScaleGapsUnder10Min, s.ScaleGapsUnder30Min)
 	if s.SimHighPriorityCPU != nil {
 		fmt.Fprintf(w, "  sim high-pri CPU:  %s\n", formatCPUStats(s.SimHighPriorityCPU))
 	}

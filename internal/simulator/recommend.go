@@ -74,6 +74,15 @@ type Constraints struct {
 	// recommended maximum — or when the simulated high-priority CPU p99
 	// exceeds it.
 	MaxHighPriorityCPU int
+	// MaxScaleStepViolations / MaxShortScaleGaps, when non-nil, cap the
+	// PU-change guideline counters of the simulated trace: scale events
+	// beyond GuidelineMaxPUChangeFactor per operation, and consecutive scale
+	// events closer together than GuidelineMinScaleGap. Callers typically
+	// set these to 0 (strict) or to the base config's own counts (do not
+	// regress) — the latter tolerates violations caused by fixed schedules
+	// that every candidate shares.
+	MaxScaleStepViolations *int
+	MaxShortScaleGaps      *int
 }
 
 // Candidate is one evaluated configuration.
@@ -230,7 +239,42 @@ func feasible(sa *spannerv1beta1.SpannerAutoscaler, s Summary, constraints Const
 			return false
 		}
 	}
+	if m := constraints.MaxScaleStepViolations; m != nil && s.ScaleStepViolations > *m {
+		return false
+	}
+	if m := constraints.MaxShortScaleGaps; m != nil && s.ScaleGapsUnder10Min > *m {
+		return false
+	}
 	return true
+}
+
+// FillGuidelineStepCandidates populates the step-size and interval dimensions
+// that are still empty with candidates that respect the PU-change guideline:
+// percentage steps (which express the 2x/half rule naturally at any instance
+// size — down to 50%, up to 100% of the current PU) and the guideline's
+// minimum / preferred gaps as intervals. Dimensions the caller already filled
+// are left untouched.
+func (s *SearchSpace) FillGuidelineStepCandidates() {
+	if len(s.ScaledownStepSizes) == 0 {
+		for _, p := range []string{"10%", "20%", "30%", "40%", "50%"} {
+			s.ScaledownStepSizes = append(s.ScaledownStepSizes, intstr.FromString(p))
+		}
+	}
+	if len(s.ScaleupStepSizes) == 0 {
+		for _, p := range []string{"25%", "50%", "100%"} {
+			s.ScaleupStepSizes = append(s.ScaleupStepSizes, intstr.FromString(p))
+		}
+	}
+	guidelineIntervals := []metav1.Duration{
+		{Duration: GuidelineMinScaleGap},
+		{Duration: GuidelinePreferredScaleGap},
+	}
+	if len(s.ScaledownIntervals) == 0 {
+		s.ScaledownIntervals = guidelineIntervals
+	}
+	if len(s.ScaleupIntervals) == 0 {
+		s.ScaleupIntervals = guidelineIntervals
+	}
 }
 
 // buildDimensions converts the search space into per-knob override lists. A

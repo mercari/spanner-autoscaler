@@ -45,7 +45,9 @@ func runRecommend(args []string) error {
 	maxExceeded := fs.Float64("max-exceeded-minutes", 0, "constraint: maximum minutes the simulated CPU may spend above its target")
 	maxP99 := fs.Float64("max-p99-cpu", 0, "constraint: maximum allowed p99 of every simulated CPU metric in percent (0 = no cap)")
 	instanceConfig := fs.String("instance-config", "regional", "instance configuration deciding the Google-recommended high-priority CPU ceiling: regional (65%), multi-region (45% per region), or none to disable the guideline")
-	top := fs.Int("top", 10, "number of candidates to print (text format)")
+	puChangeGuideline := fs.String("pu-change-guideline", "base", "how to enforce the recommended PU-change limits (at most 2x/half per operation, >=10m between operations): base = no worse than the base config's replay, strict = zero violations, none = unconstrained")
+	auto := fs.Bool("auto", false, "auto-generate candidates within the PU-change guideline for any of -scaledown-step-size/-scaleup-step-size/-scaledown-interval/-scaleup-interval left empty")
+	top := fs.Int("top", 6, "number of candidates to print (text format)")
 	showInfeasible := fs.Bool("show-infeasible", false, "also list candidates that violate the constraints (text format)")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -66,6 +68,9 @@ func runRecommend(args []string) error {
 	})
 	if err != nil {
 		return err
+	}
+	if *auto {
+		space.FillGuidelineStepCandidates()
 	}
 
 	constraints := simulator.Constraints{MaxTargetExceededMinutes: *maxExceeded}
@@ -111,6 +116,20 @@ func runRecommend(args []string) error {
 		return fmt.Errorf("%s: %w", *configPath, err)
 	}
 
+	zero := 0
+	switch *puChangeGuideline {
+	case "base":
+		constraints.MaxScaleStepViolations = &baseResult.Summary.ScaleStepViolations
+		constraints.MaxShortScaleGaps = &baseResult.Summary.ScaleGapsUnder10Min
+	case "strict":
+		constraints.MaxScaleStepViolations = &zero
+		constraints.MaxShortScaleGaps = &zero
+	case "none":
+		// Guideline disabled.
+	default:
+		return fmt.Errorf("unknown -pu-change-guideline %q (want base, strict, or none)", *puChangeGuideline)
+	}
+
 	candidates, err := simulator.Recommend(base, space, constraints, points)
 	if err != nil {
 		return err
@@ -126,6 +145,10 @@ func runRecommend(args []string) error {
 		if constraints.MaxHighPriorityCPU > 0 {
 			fmt.Printf("guideline: high-priority CPU target and simulated p99 must stay <= %d%% (%s instance configuration)\n",
 				constraints.MaxHighPriorityCPU, *instanceConfig)
+		}
+		if constraints.MaxScaleStepViolations != nil {
+			fmt.Printf("guideline: at most %d scale events beyond 2x/half and %d gaps < 10m allowed (-pu-change-guideline %s)\n",
+				*constraints.MaxScaleStepViolations, *constraints.MaxShortScaleGaps, *puChangeGuideline)
 		}
 		writeRecommendTable(baseResult.Summary, candidates, &common, *top, *showInfeasible)
 		return nil
@@ -226,12 +249,13 @@ func writeRecommendTable(base simulator.Summary, candidates []simulator.Candidat
 		len(candidates), feasibleCount, base.DataPoints)
 
 	tw := tabwriter.NewWriter(os.Stdout, 2, 8, 2, ' ', 0)
-	fmt.Fprintln(tw, "RANK\tOVERRIDES\tPU-HOURS\tSAVED%\tP95 HI-CPU\tP99 HI-CPU\t>TARGET MIN\tUPS\tDOWNS")
-	fmt.Fprintf(tw, "-\t(recorded)\t%.1f\t\t\t\t\t\t\n", base.ActualPUHours)
-	fmt.Fprintf(tw, "-\t(base)\t%.1f\t%.1f\t%s\t%s\t%.0f\t%d\t%d\n",
+	fmt.Fprintln(tw, "RANK\tOVERRIDES\tPU-HOURS\tSAVED%\tP95 HI-CPU\tP99 HI-CPU\t>TARGET MIN\tUPS\tDOWNS\tSTEP>2X\tGAP<10M")
+	fmt.Fprintf(tw, "-\t(recorded)\t%.1f\t\t\t\t\t\t\t\t\n", base.ActualPUHours)
+	fmt.Fprintf(tw, "-\t(base)\t%.1f\t%.1f\t%s\t%s\t%.0f\t%d\t%d\t%d\t%d\n",
 		base.SimPUHours, base.PUHoursSavedPercent,
 		formatP95(base.SimHighPriorityCPU), formatP99(base.SimHighPriorityCPU),
-		base.TargetExceededMinutes, base.ScaleUps, base.ScaleDowns)
+		base.TargetExceededMinutes, base.ScaleUps, base.ScaleDowns,
+		base.ScaleStepViolations, base.ScaleGapsUnder10Min)
 
 	rank := 0
 	for _, c := range candidates {
@@ -240,23 +264,24 @@ func writeRecommendTable(base simulator.Summary, candidates []simulator.Candidat
 		}
 		rank++
 		if rank > top {
-			fmt.Fprintf(tw, "\t... %d more candidates (raise -top or use -format json)\t\t\t\t\t\t\t\n", len(candidates)-rank+1)
+			fmt.Fprintf(tw, "\t... %d more candidates (raise -top or use -format json)\t\t\t\t\t\t\t\t\t\n", len(candidates)-rank+1)
 			break
 		}
 		label := simulator.DescribeOverrides(c.Overrides)
 		if c.Error != "" {
-			fmt.Fprintf(tw, "%d\t%s\tERROR: %s\t\t\t\t\t\t\n", rank, label, c.Error)
+			fmt.Fprintf(tw, "%d\t%s\tERROR: %s\t\t\t\t\t\t\t\t\n", rank, label, c.Error)
 			continue
 		}
 		marker := ""
 		if !c.Feasible {
 			marker = " [infeasible]"
 		}
-		fmt.Fprintf(tw, "%d\t%s%s\t%.1f\t%.1f\t%s\t%s\t%.0f\t%d\t%d\n",
+		fmt.Fprintf(tw, "%d\t%s%s\t%.1f\t%.1f\t%s\t%s\t%.0f\t%d\t%d\t%d\t%d\n",
 			rank, label, marker,
 			c.Summary.SimPUHours, c.Summary.PUHoursSavedPercent,
 			formatP95(c.Summary.SimHighPriorityCPU), formatP99(c.Summary.SimHighPriorityCPU),
-			c.Summary.TargetExceededMinutes, c.Summary.ScaleUps, c.Summary.ScaleDowns)
+			c.Summary.TargetExceededMinutes, c.Summary.ScaleUps, c.Summary.ScaleDowns,
+			c.Summary.ScaleStepViolations, c.Summary.ScaleGapsUnder10Min)
 	}
 	tw.Flush()
 
