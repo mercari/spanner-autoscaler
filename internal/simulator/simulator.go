@@ -167,7 +167,7 @@ func Run(cfg Config, points []Point) (*Result, error) {
 	if t := sa.Spec.ScaleConfig.TargetCPUUtilization.Total; t != nil {
 		targetTotal = *t
 	}
-	agg := newAggregator(flags, lowConfidenceCPU, targetHigh, targetTotal)
+	agg := newAggregator(flags, lowConfidenceCPU, targetHigh, targetTotal, sa.Spec.ScaleConfig.ProcessingUnits.Min)
 
 	for i, p := range points {
 		now := p.Time
@@ -217,6 +217,7 @@ func Run(cfg Config, points []Point) (*Result, error) {
 			return nil, fmt.Errorf("invalid scale-down time restriction configuration: %w", err)
 		}
 
+		puBefore := simPU
 		if decision == scaling.DecisionScale {
 			result.Events = append(result.Events, Event{
 				Time:   now,
@@ -229,7 +230,7 @@ func Run(cfg Config, points []Point) (*Result, error) {
 
 		sp.SimPU = simPU
 		result.Points = append(result.Points, sp)
-		agg.observe(p, sp, minPU, dt)
+		agg.observe(p, sp, minPU, puBefore, dt)
 	}
 
 	result.Summary = agg.summary(points[0].Time, points[len(points)-1].Time, result.Events)

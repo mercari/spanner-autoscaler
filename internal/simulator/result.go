@@ -113,6 +113,24 @@ type Summary struct {
 	ScaleStepViolations int `json:"scaleStepViolations"`
 	ScaleGapsUnder10Min int `json:"scaleGapsUnder10Min"`
 	ScaleGapsUnder30Min int `json:"scaleGapsUnder30Min"`
+
+	// Min-PU signals, for judging whether processingUnits.min should move.
+	//
+	// SpecMinPU echoes the candidate's spec.processingUnits.min.
+	// MinPinnedPercent is MinPinnedMinutes relative to the whole run.
+	// RequiredPUAtMinP95 is the p95, over the pinned time, of the PU the
+	// recorded workload actually needed to stay on target (workload / target,
+	// rounded up to a valid PU) — far below SpecMinPU means the floor, not
+	// the workload, sets the cost there (room to lower); at or near SpecMinPU
+	// means the min is load-bearing.
+	// TargetExceededAtMinMinutes counts the target-exceeded minutes whose CPU
+	// was observed while the instance sat on the effective minimum — spikes
+	// hitting the floor, which raising the min (or pre-scaling with a
+	// schedule) would absorb.
+	SpecMinPU                  int     `json:"specMinPU"`
+	MinPinnedPercent           float64 `json:"minPinnedPercent"`
+	RequiredPUAtMinP95         int     `json:"requiredPUAtMinP95,omitzero"`
+	TargetExceededAtMinMinutes float64 `json:"targetExceededAtMinMinutes"`
 }
 
 // aggregator accumulates the summary while the replay loop runs.
@@ -121,8 +139,10 @@ type aggregator struct {
 	lowConfidenceCPU float64
 	targetHigh       int
 	targetTotal      int
+	specMinPU        int
 
 	dataPoints    int
+	totalMinutes  float64
 	gapMinutes    float64
 	actualPUHours float64
 	simPUHours    float64
@@ -130,21 +150,27 @@ type aggregator struct {
 	simHighValues  []float64
 	simTotalValues []float64
 
-	targetExceededMinutes float64
-	lowConfidenceMinutes  float64
-	minPinnedMinutes      float64
+	targetExceededMinutes      float64
+	lowConfidenceMinutes       float64
+	minPinnedMinutes           float64
+	targetExceededAtMinMinutes float64
+	requiredPUWhilePinned      []float64
 }
 
-func newAggregator(flags spannerv1beta1.CPUMetricFlags, lowConfidenceCPU float64, targetHigh, targetTotal int) *aggregator {
+func newAggregator(flags spannerv1beta1.CPUMetricFlags, lowConfidenceCPU float64, targetHigh, targetTotal, specMinPU int) *aggregator {
 	return &aggregator{
 		flags:            flags,
 		lowConfidenceCPU: lowConfidenceCPU,
 		targetHigh:       targetHigh,
 		targetTotal:      targetTotal,
+		specMinPU:        specMinPU,
 	}
 }
 
-func (a *aggregator) observe(p Point, sp SimPoint, effectiveMinPU int, dt time.Duration) {
+// observe records one decided tick. puBefore is the PU in effect while the
+// tick's CPU was observed (pre-decision); sp.SimPU is the post-decision PU
+// held until the next tick.
+func (a *aggregator) observe(p Point, sp SimPoint, effectiveMinPU, puBefore int, dt time.Duration) {
 	a.observeCommon(p, sp.SimPU, dt)
 
 	minutes := dt.Minutes()
@@ -164,11 +190,46 @@ func (a *aggregator) observe(p Point, sp SimPoint, effectiveMinPU int, dt time.D
 	}
 	if exceeded {
 		a.targetExceededMinutes += minutes
+		if puBefore <= effectiveMinPU {
+			a.targetExceededAtMinMinutes += minutes
+		}
 	}
 
 	if sp.SimPU <= effectiveMinPU {
 		a.minPinnedMinutes += minutes
+		if req := requiredPU(a.flags, a.targetHigh, a.targetTotal, p); req > 0 {
+			a.requiredPUWhilePinned = append(a.requiredPUWhilePinned, float64(req))
+		}
 	}
+}
+
+// requiredPU derives, from the recorded point alone, the PU the workload
+// needed to sit exactly on the configured target(s): workload / target,
+// rounded up to the next valid PU the same way the controller rounds its
+// desired value. The workload (cpu × PU) is PU-independent, so this does not
+// depend on the simulated instance size.
+func requiredPU(flags spannerv1beta1.CPUMetricFlags, targetHigh, targetTotal int, p Point) int {
+	need := 0.0
+	if flags&spannerv1beta1.CPUMetricFlagHighPriority != 0 && p.HighPriorityCPU != nil && targetHigh > 0 {
+		need = max(need, *p.HighPriorityCPU*float64(p.ProcessingUnits)/float64(targetHigh))
+	}
+	if flags&spannerv1beta1.CPUMetricFlagTotal != 0 && p.TotalCPU != nil && targetTotal > 0 {
+		need = max(need, *p.TotalCPU*float64(p.ProcessingUnits)/float64(targetTotal))
+	}
+	if need <= 0 {
+		return 0
+	}
+	return roundUpToValidPU(int(need))
+}
+
+// roundUpToValidPU mirrors the controller's rounding of a required PU value:
+// step to the next 100 (below 1000) or 1000 (above) so utilization stays
+// below the target even when the value already sits on a boundary.
+func roundUpToValidPU(pu int) int {
+	if pu < 1000 {
+		return ((pu / 100) + 1) * 100
+	}
+	return ((pu / 1000) + 1) * 1000
 }
 
 func (a *aggregator) observeGap(p Point, simPU int, dt time.Duration) {
@@ -178,6 +239,7 @@ func (a *aggregator) observeGap(p Point, simPU int, dt time.Duration) {
 
 func (a *aggregator) observeCommon(p Point, simPU int, dt time.Duration) {
 	a.dataPoints++
+	a.totalMinutes += dt.Minutes()
 	hours := dt.Hours()
 	a.actualPUHours += float64(p.ProcessingUnits) * hours
 	a.simPUHours += float64(simPU) * hours
@@ -190,18 +252,28 @@ func (a *aggregator) observeCommon(p Point, simPU int, dt time.Duration) {
 
 func (a *aggregator) summary(start, end time.Time, events []Event) Summary {
 	s := Summary{
-		Start:                 start,
-		End:                   end,
-		DataPoints:            a.dataPoints,
-		GapMinutes:            a.gapMinutes,
-		ActualPUHours:         a.actualPUHours,
-		SimPUHours:            a.simPUHours,
-		TargetExceededMinutes: a.targetExceededMinutes,
-		LowConfidenceMinutes:  a.lowConfidenceMinutes,
-		MinPinnedMinutes:      a.minPinnedMinutes,
+		Start:                      start,
+		End:                        end,
+		DataPoints:                 a.dataPoints,
+		GapMinutes:                 a.gapMinutes,
+		ActualPUHours:              a.actualPUHours,
+		SimPUHours:                 a.simPUHours,
+		TargetExceededMinutes:      a.targetExceededMinutes,
+		LowConfidenceMinutes:       a.lowConfidenceMinutes,
+		MinPinnedMinutes:           a.minPinnedMinutes,
+		SpecMinPU:                  a.specMinPU,
+		TargetExceededAtMinMinutes: a.targetExceededAtMinMinutes,
 	}
 	if a.actualPUHours > 0 {
 		s.PUHoursSavedPercent = (a.actualPUHours - a.simPUHours) / a.actualPUHours * 100
+	}
+	if a.totalMinutes > 0 {
+		s.MinPinnedPercent = a.minPinnedMinutes / a.totalMinutes * 100
+	}
+	if len(a.requiredPUWhilePinned) > 0 {
+		sorted := slices.Clone(a.requiredPUWhilePinned)
+		slices.Sort(sorted)
+		s.RequiredPUAtMinP95 = int(percentile(sorted, 95))
 	}
 	for i, e := range events {
 		if e.ToPU > e.FromPU {
@@ -229,6 +301,26 @@ func (a *aggregator) summary(start, end time.Time, events []Event) Summary {
 		s.SimTotalCPU = cpuStats(a.simTotalValues)
 	}
 	return s
+}
+
+// MinPUAdvice turns the run's min-PU signals into glanceable directional
+// hints about spec.processingUnits.min. Both hints can apply at once (an
+// over-provisioned floor that still takes spikes from the min); the slice is
+// empty when the min rarely binds and no overshoot starts from it.
+func (s Summary) MinPUAdvice() []string {
+	var advice []string
+	if s.MinPinnedPercent >= 30 && s.RequiredPUAtMinP95 > 0 &&
+		float64(s.RequiredPUAtMinP95) <= float64(s.SpecMinPU)/GuidelineMaxPUChangeFactor {
+		advice = append(advice, fmt.Sprintf(
+			"min PU could go lower: the min (%d), not the workload (p95 required %d while pinned), sets the cost for %.0f%% of the run — test lower -min-pu candidates (verify storage limits and spike headroom first)",
+			s.SpecMinPU, s.RequiredPUAtMinP95, s.MinPinnedPercent))
+	}
+	if s.TargetExceededMinutes > 0 && s.TargetExceededAtMinMinutes >= s.TargetExceededMinutes/2 {
+		advice = append(advice, fmt.Sprintf(
+			"spikes start from the min: %.0f of %.0f minutes above target were observed at the min — raising the min or pre-scaling with a schedule would absorb them",
+			s.TargetExceededAtMinMinutes, s.TargetExceededMinutes))
+	}
+	return advice
 }
 
 func cpuStats(values []float64) *CPUStats {

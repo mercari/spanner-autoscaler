@@ -17,6 +17,7 @@ package simulator
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 	"time"
 
@@ -204,6 +205,54 @@ func TestRunScheduleRaisesMinimum(t *testing.T) {
 	// spec minimum happens on the next tick (cooldown elapsed long ago).
 	if got := puAt(elevenAM.Add(time.Minute)); got != 1000 {
 		t.Errorf("SimPU after schedule expiry = %d; want 1000", got)
+	}
+}
+
+func TestMinPUSignals(t *testing.T) {
+	// A grossly over-provisioned floor: pinned at min 5000 the whole run
+	// while the workload only needs 400/40% → 1000 PU (rounded up to 2000).
+	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	points := constantWorkloadPoints(start, 120, 5000, 400)
+
+	result, err := Run(Config{Autoscaler: newAutoscaler(5000, 10000, 40)}, points)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	s := result.Summary
+	if s.SpecMinPU != 5000 {
+		t.Errorf("SpecMinPU = %d; want 5000", s.SpecMinPU)
+	}
+	if s.MinPinnedPercent != 100 {
+		t.Errorf("MinPinnedPercent = %.1f; want 100", s.MinPinnedPercent)
+	}
+	if s.RequiredPUAtMinP95 != 2000 {
+		t.Errorf("RequiredPUAtMinP95 = %d; want 2000 (workload 400 at target 40, rounded up)", s.RequiredPUAtMinP95)
+	}
+	advice := s.MinPUAdvice()
+	if len(advice) != 1 {
+		t.Fatalf("MinPUAdvice = %v; want exactly the lower-min hint", advice)
+	}
+
+	// The spike scenario: the whole overshoot is observed while sitting at
+	// the min, so the raise/pre-scale hint must fire.
+	spikePoints := constantWorkloadPoints(start, 10, 1000, 900)
+	spikeResult, err := Run(Config{Autoscaler: newAutoscaler(1000, 10000, 30)}, spikePoints)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	ss := spikeResult.Summary
+	if ss.TargetExceededAtMinMinutes == 0 || ss.TargetExceededAtMinMinutes != ss.TargetExceededMinutes {
+		t.Errorf("TargetExceededAtMinMinutes = %.0f (total %.0f); want all overshoot attributed to the min",
+			ss.TargetExceededAtMinMinutes, ss.TargetExceededMinutes)
+	}
+	hasRaiseHint := false
+	for _, a := range ss.MinPUAdvice() {
+		if strings.Contains(a, "spikes start from the min") {
+			hasRaiseHint = true
+		}
+	}
+	if !hasRaiseHint {
+		t.Errorf("MinPUAdvice = %v; want the spikes-start-from-min hint", ss.MinPUAdvice())
 	}
 }
 
