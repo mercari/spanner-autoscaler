@@ -49,6 +49,8 @@ func main() {
 		err = runSimulate(os.Args[2:])
 	case "compare":
 		err = runCompare(os.Args[2:])
+	case "recommend":
+		err = runRecommend(os.Args[2:])
 	case "fetch":
 		err = runFetch(os.Args[2:])
 	case "help", "-h", "--help":
@@ -68,9 +70,10 @@ func usage() {
 	fmt.Fprint(os.Stderr, `Usage: simulator <subcommand> [flags]
 
 Subcommands:
-  fetch     download CPU / processing-units metrics from Cloud Monitoring into a CSV
-  simulate  replay one SpannerAutoscaler configuration against a metrics CSV
-  compare   replay several configurations against the same metrics CSV
+  fetch      download CPU / processing-units metrics from Cloud Monitoring into a CSV
+  simulate   replay one SpannerAutoscaler configuration against a metrics CSV
+  compare    replay several configurations against the same metrics CSV
+  recommend  grid-search configuration candidates and rank the safe ones by cost
 
 Run 'simulator <subcommand> -h' for the flags of each subcommand.
 `)
