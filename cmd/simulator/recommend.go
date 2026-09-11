@@ -38,6 +38,8 @@ func runRecommend(args []string) error {
 	stepSizes := fs.String("scaledown-step-size", "", "comma-separated candidate scaledownStepSize values, int or percent (e.g. \"2000,10%,30%\")")
 	intervals := fs.String("scaledown-interval", "", "comma-separated candidate scaledownInterval values (e.g. \"30m,55m\")")
 	windows := fs.String("scaledown-allowed-times", "", "'|'-separated candidate scaledownAllowedTimes; use ';' between cron expressions inside one candidate and the literal \"none\" for no restriction (e.g. \"* 10-23 * * *|* 13-23 * * *|none\")")
+	scaleupStepSizes := fs.String("scaleup-step-size", "", "comma-separated candidate scaleupStepSize values, int or percent; 0 means no per-step cap (e.g. \"0,5000,20%\")")
+	scaleupIntervals := fs.String("scaleup-interval", "", "comma-separated candidate scaleupInterval values (e.g. \"60s,3m\")")
 	highTargets := fs.String("target-high-cpu", "", "comma-separated candidate targetCPUUtilization.highPriority values (e.g. \"30,40\")")
 	totalTargets := fs.String("target-total-cpu", "", "comma-separated candidate targetCPUUtilization.total values")
 	maxExceeded := fs.Float64("max-exceeded-minutes", 0, "constraint: maximum minutes the simulated CPU may spend above its target")
@@ -51,7 +53,16 @@ func runRecommend(args []string) error {
 		return fmt.Errorf("-config is required")
 	}
 
-	space, err := buildSearchSpace(*minPUs, *stepSizes, *intervals, *windows, *highTargets, *totalTargets)
+	space, err := buildSearchSpace(searchSpaceFlags{
+		minPUs:           *minPUs,
+		stepSizes:        *stepSizes,
+		intervals:        *intervals,
+		windows:          *windows,
+		scaleupStepSizes: *scaleupStepSizes,
+		scaleupIntervals: *scaleupIntervals,
+		highTargets:      *highTargets,
+		totalTargets:     *totalTargets,
+	})
 	if err != nil {
 		return err
 	}
@@ -108,20 +119,32 @@ func runRecommend(args []string) error {
 	}
 }
 
-func buildSearchSpace(minPUs, stepSizes, intervals, windows, highTargets, totalTargets string) (simulator.SearchSpace, error) {
+// searchSpaceFlags carries the raw CLI list values for buildSearchSpace.
+type searchSpaceFlags struct {
+	minPUs           string
+	stepSizes        string
+	intervals        string
+	windows          string
+	scaleupStepSizes string
+	scaleupIntervals string
+	highTargets      string
+	totalTargets     string
+}
+
+func buildSearchSpace(flags searchSpaceFlags) (simulator.SearchSpace, error) {
 	var space simulator.SearchSpace
 	var err error
 
-	if space.MinPUs, err = parseIntList(minPUs); err != nil {
+	if space.MinPUs, err = parseIntList(flags.minPUs); err != nil {
 		return space, fmt.Errorf("-min-pu: %w", err)
 	}
-	for part := range splitList(stepSizes, ",") {
+	for part := range splitList(flags.stepSizes, ",") {
 		space.ScaledownStepSizes = append(space.ScaledownStepSizes, intstr.Parse(part))
 	}
-	if space.ScaledownIntervals, err = simulator.ParseScaledownIntervals(intervals); err != nil {
+	if space.ScaledownIntervals, err = simulator.ParseDurations(flags.intervals); err != nil {
 		return space, fmt.Errorf("-scaledown-interval: %w", err)
 	}
-	for alternative := range splitList(windows, "|") {
+	for alternative := range splitList(flags.windows, "|") {
 		if alternative == "none" {
 			space.ScaledownAllowedTimes = append(space.ScaledownAllowedTimes, nil)
 			continue
@@ -132,10 +155,16 @@ func buildSearchSpace(minPUs, stepSizes, intervals, windows, highTargets, totalT
 		}
 		space.ScaledownAllowedTimes = append(space.ScaledownAllowedTimes, exprs)
 	}
-	if space.TargetHighPriorityCPUs, err = parseIntList(highTargets); err != nil {
+	for part := range splitList(flags.scaleupStepSizes, ",") {
+		space.ScaleupStepSizes = append(space.ScaleupStepSizes, intstr.Parse(part))
+	}
+	if space.ScaleupIntervals, err = simulator.ParseDurations(flags.scaleupIntervals); err != nil {
+		return space, fmt.Errorf("-scaleup-interval: %w", err)
+	}
+	if space.TargetHighPriorityCPUs, err = parseIntList(flags.highTargets); err != nil {
 		return space, fmt.Errorf("-target-high-cpu: %w", err)
 	}
-	if space.TargetTotalCPUs, err = parseIntList(totalTargets); err != nil {
+	if space.TargetTotalCPUs, err = parseIntList(flags.totalTargets); err != nil {
 		return space, fmt.Errorf("-target-total-cpu: %w", err)
 	}
 	return space, nil

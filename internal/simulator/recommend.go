@@ -43,6 +43,8 @@ type SearchSpace struct {
 	ScaledownStepSizes     []intstr.IntOrString
 	ScaledownIntervals     []metav1.Duration
 	ScaledownAllowedTimes  [][]string
+	ScaleupStepSizes       []intstr.IntOrString
+	ScaleupIntervals       []metav1.Duration
 	TargetHighPriorityCPUs []int
 	TargetTotalCPUs        []int
 }
@@ -73,6 +75,8 @@ const (
 	OverrideScaledownStepSize     = "scaledownStepSize"
 	OverrideScaledownInterval     = "scaledownInterval"
 	OverrideScaledownAllowedTimes = "scaledownAllowedTimes"
+	OverrideScaleupStepSize       = "scaleupStepSize"
+	OverrideScaleupInterval       = "scaleupInterval"
 	OverrideTargetHighPriorityCPU = "targetHighPriorityCPU"
 	OverrideTargetTotalCPU        = "targetTotalCPU"
 )
@@ -83,6 +87,8 @@ var OverrideKeys = []string{
 	OverrideScaledownStepSize,
 	OverrideScaledownInterval,
 	OverrideScaledownAllowedTimes,
+	OverrideScaleupStepSize,
+	OverrideScaleupInterval,
 	OverrideTargetHighPriorityCPU,
 	OverrideTargetTotalCPU,
 }
@@ -268,6 +274,28 @@ func buildDimensions(space SearchSpace) [][]override {
 		})
 	}
 
+	var upSteps []override
+	for _, v := range space.ScaleupStepSizes {
+		upSteps = append(upSteps, override{
+			key:   OverrideScaleupStepSize,
+			value: v.String(),
+			apply: func(sa *spannerv1beta1.SpannerAutoscaler) {
+				sa.Spec.ScaleConfig.ScaleupStepSize = v
+			},
+		})
+	}
+
+	var upIntervals []override
+	for _, v := range space.ScaleupIntervals {
+		upIntervals = append(upIntervals, override{
+			key:   OverrideScaleupInterval,
+			value: v.Duration.String(),
+			apply: func(sa *spannerv1beta1.SpannerAutoscaler) {
+				sa.Spec.ScaleConfig.ScaleupInterval = &metav1.Duration{Duration: v.Duration}
+			},
+		})
+	}
+
 	var highTargets []override
 	for _, v := range space.TargetHighPriorityCPUs {
 		highTargets = append(highTargets, override{
@@ -295,6 +323,8 @@ func buildDimensions(space SearchSpace) [][]override {
 		dim(steps),
 		dim(intervals),
 		dim(windows),
+		dim(upSteps),
+		dim(upIntervals),
 		dim(highTargets),
 		dim(totalTargets),
 	}
@@ -317,8 +347,9 @@ func cartesian(dimensions [][]override) [][]override {
 	return combos
 }
 
-// ParseScaledownIntervals converts "30m,55m" style CLI input.
-func ParseScaledownIntervals(s string) ([]metav1.Duration, error) {
+// ParseDurations converts "30m,55m" style CLI input into candidate interval
+// values.
+func ParseDurations(s string) ([]metav1.Duration, error) {
 	if s == "" {
 		return nil, nil
 	}
