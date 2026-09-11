@@ -190,6 +190,71 @@ func TestRecommendHighPriorityCPUGuidelineOnSimP99(t *testing.T) {
 	}
 }
 
+func TestRecommendPUChangeGuideline(t *testing.T) {
+	// Same spike shape as TestRecommendScaleupDimensions: after 30 idle
+	// minutes the workload jumps so that 4000 PU are needed.
+	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	points := constantWorkloadPoints(start, 30, 1000, 50)
+	points = append(points, constantWorkloadPoints(start.Add(30*time.Minute), 90, 1000, 900)...)
+
+	base := Config{Autoscaler: newAutoscaler(1000, 10000, 30)}
+	space := SearchSpace{
+		// Uncapped: one 1000→4000 jump (4x, a step violation, no gaps).
+		// 100% with a 10m interval: 1000→2000→4000, guideline-compliant.
+		ScaleupStepSizes: []intstr.IntOrString{intstr.FromInt(0), intstr.FromString("100%")},
+		ScaleupIntervals: []metav1.Duration{{Duration: 10 * time.Minute}},
+	}
+
+	zero := 0
+	candidates, err := Recommend(base, space, Constraints{
+		MaxTargetExceededMinutes: 60,
+		MaxScaleStepViolations:   &zero,
+		MaxShortScaleGaps:        &zero,
+	}, points)
+	if err != nil {
+		t.Fatalf("Recommend: %v", err)
+	}
+	if len(candidates) != 2 {
+		t.Fatalf("got %d candidates; want 2", len(candidates))
+	}
+
+	first := candidates[0]
+	if !first.Feasible || first.Overrides[OverrideScaleupStepSize] != "100%" {
+		t.Errorf("first candidate = %s feasible=%t (violations=%d); want feasible scaleupStepSize=100%%",
+			DescribeOverrides(first.Overrides), first.Feasible, first.Summary.ScaleStepViolations)
+	}
+	if first.Summary.ScaleStepViolations != 0 || first.Summary.ScaleGapsUnder10Min != 0 {
+		t.Errorf("compliant candidate counters = %d step / %d gap; want 0/0",
+			first.Summary.ScaleStepViolations, first.Summary.ScaleGapsUnder10Min)
+	}
+	second := candidates[1]
+	if second.Feasible || second.Summary.ScaleStepViolations == 0 {
+		t.Errorf("uncapped candidate = feasible=%t violations=%d; want infeasible with >=1 step violation",
+			second.Feasible, second.Summary.ScaleStepViolations)
+	}
+}
+
+func TestFillGuidelineStepCandidates(t *testing.T) {
+	space := SearchSpace{
+		ScaleupStepSizes: []intstr.IntOrString{intstr.FromInt(5000)},
+	}
+	space.FillGuidelineStepCandidates()
+
+	if len(space.ScaledownStepSizes) != 5 || space.ScaledownStepSizes[4] != intstr.FromString("50%") {
+		t.Errorf("ScaledownStepSizes = %v; want 5 percent candidates up to 50%%", space.ScaledownStepSizes)
+	}
+	// A dimension the caller already filled must be left untouched.
+	if len(space.ScaleupStepSizes) != 1 || space.ScaleupStepSizes[0] != intstr.FromInt(5000) {
+		t.Errorf("ScaleupStepSizes = %v; want the caller's single candidate preserved", space.ScaleupStepSizes)
+	}
+	want := []metav1.Duration{{Duration: GuidelineMinScaleGap}, {Duration: GuidelinePreferredScaleGap}}
+	for _, got := range [][]metav1.Duration{space.ScaledownIntervals, space.ScaleupIntervals} {
+		if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+			t.Errorf("intervals = %v; want %v", got, want)
+		}
+	}
+}
+
 func TestRecommendRejectsInvalidRange(t *testing.T) {
 	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	points := constantWorkloadPoints(start, 10, 5000, 400)

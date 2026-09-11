@@ -27,6 +27,16 @@ import (
 	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
 )
 
+// Google-recommended limits for one compute-capacity change: scale by at
+// most 2x (up) / half (down) of the current processing units per operation,
+// and leave at least 10 minutes between operations — 30 minutes preferred —
+// so Spanner can rebalance between resizes.
+const (
+	GuidelineMaxPUChangeFactor = 2.0
+	GuidelineMinScaleGap       = 10 * time.Minute
+	GuidelinePreferredScaleGap = 30 * time.Minute
+)
+
 // Result is the outcome of one simulation run.
 type Result struct {
 	Summary Summary    `json:"summary"`
@@ -94,6 +104,15 @@ type Summary struct {
 	// MinPinnedMinutes counts time the simulated PU sat on the effective
 	// minimum (spec min raised by active schedules).
 	MinPinnedMinutes float64 `json:"minPinnedMinutes"`
+
+	// PU-change guideline indicators (see GuidelineMaxPUChangeFactor and
+	// friends): ScaleStepViolations counts scale events that changed PU
+	// beyond 2x/half in one operation; ScaleGapsUnder10Min and
+	// ScaleGapsUnder30Min count consecutive scale events closer together
+	// than the hard minimum / preferred gap.
+	ScaleStepViolations int `json:"scaleStepViolations"`
+	ScaleGapsUnder10Min int `json:"scaleGapsUnder10Min"`
+	ScaleGapsUnder30Min int `json:"scaleGapsUnder30Min"`
 }
 
 // aggregator accumulates the summary while the replay loop runs.
@@ -184,11 +203,23 @@ func (a *aggregator) summary(start, end time.Time, events []Event) Summary {
 	if a.actualPUHours > 0 {
 		s.PUHoursSavedPercent = (a.actualPUHours - a.simPUHours) / a.actualPUHours * 100
 	}
-	for _, e := range events {
+	for i, e := range events {
 		if e.ToPU > e.FromPU {
 			s.ScaleUps++
 		} else {
 			s.ScaleDowns++
+		}
+		if float64(e.ToPU) > float64(e.FromPU)*GuidelineMaxPUChangeFactor ||
+			float64(e.ToPU) < float64(e.FromPU)/GuidelineMaxPUChangeFactor {
+			s.ScaleStepViolations++
+		}
+		if i > 0 {
+			if gap := e.Time.Sub(events[i-1].Time); gap < GuidelineMinScaleGap {
+				s.ScaleGapsUnder10Min++
+				s.ScaleGapsUnder30Min++
+			} else if gap < GuidelinePreferredScaleGap {
+				s.ScaleGapsUnder30Min++
+			}
 		}
 	}
 	if len(a.simHighValues) > 0 {
