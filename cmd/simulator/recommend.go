@@ -285,9 +285,30 @@ func writeRecommendTable(base simulator.Summary, candidates []simulator.Candidat
 	}
 	tw.Flush()
 
+	printMinPUSignals("base", base)
+	for _, c := range candidates {
+		if c.Feasible {
+			printMinPUSignals("top candidate", c.Summary)
+			break
+		}
+	}
+
 	if base.LowConfidenceMinutes > 0 {
 		fmt.Printf("\nnote: %.0f minutes of the recording are above %.0f%% CPU; the workload model is less reliable there (see -low-confidence-cpu)\n",
 			base.LowConfidenceMinutes, common.lowConfidenceCPU)
+	}
+}
+
+// printMinPUSignals surfaces whether processingUnits.min should move — the
+// one knob whose direction is otherwise invisible in the ranking table.
+func printMinPUSignals(label string, s simulator.Summary) {
+	fmt.Printf("\nmin PU signals (%s): pinned at min %.0f%% of the run", label, s.MinPinnedPercent)
+	if s.RequiredPUAtMinP95 > 0 {
+		fmt.Printf("; p95 required PU while pinned = %d (min %d)", s.RequiredPUAtMinP95, s.SpecMinPU)
+	}
+	fmt.Printf("; %.0f of %.0f exceeded minutes at the min\n", s.TargetExceededAtMinMinutes, s.TargetExceededMinutes)
+	for _, advice := range s.MinPUAdvice() {
+		fmt.Printf("  -> %s\n", advice)
 	}
 }
 
