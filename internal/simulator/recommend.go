@@ -49,6 +49,15 @@ type SearchSpace struct {
 	TargetTotalCPUs        []int
 }
 
+// Google-recommended maximum high-priority CPU utilization for Cloud Spanner
+// (https://cloud.google.com/spanner/docs/cpu-utilization#recommended-max):
+// 65% for regional instances, 45% per region for multi-region / dual-region
+// configurations.
+const (
+	RecommendedHighPriorityCPURegional    = 65
+	RecommendedHighPriorityCPUMultiRegion = 45
+)
+
 // Constraints filter candidates before ranking.
 type Constraints struct {
 	// MaxTargetExceededMinutes is the maximum tolerated time with a
@@ -57,6 +66,14 @@ type Constraints struct {
 	// MaxSimCPUP99, when non-nil, requires the p99 of every simulated CPU
 	// metric to stay at or below this percentage.
 	MaxSimCPUP99 *float64
+	// MaxHighPriorityCPU, when > 0, applies the Google-recommended
+	// high-priority CPU ceiling (RecommendedHighPriorityCPURegional /
+	// RecommendedHighPriorityCPUMultiRegion): a candidate is infeasible when
+	// its effective targetCPUUtilization.highPriority exceeds the ceiling —
+	// such a config would let the autoscaler hold utilization above the
+	// recommended maximum — or when the simulated high-priority CPU p99
+	// exceeds it.
+	MaxHighPriorityCPU int
 }
 
 // Candidate is one evaluated configuration.
@@ -189,11 +206,11 @@ func evaluate(base Config, combo []override, constraints Constraints, points []P
 	}
 
 	c.Summary = result.Summary
-	c.Feasible = feasible(result.Summary, constraints)
+	c.Feasible = feasible(sa, result.Summary, constraints)
 	return c
 }
 
-func feasible(s Summary, constraints Constraints) bool {
+func feasible(sa *spannerv1beta1.SpannerAutoscaler, s Summary, constraints Constraints) bool {
 	if s.TargetExceededMinutes > constraints.MaxTargetExceededMinutes {
 		return false
 	}
@@ -202,6 +219,14 @@ func feasible(s Summary, constraints Constraints) bool {
 			return false
 		}
 		if s.SimTotalCPU != nil && s.SimTotalCPU.P99 > *p {
+			return false
+		}
+	}
+	if limit := constraints.MaxHighPriorityCPU; limit > 0 {
+		if t := sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority; t != nil && *t > limit {
+			return false
+		}
+		if s.SimHighPriorityCPU != nil && s.SimHighPriorityCPU.P99 > float64(limit) {
 			return false
 		}
 	}
