@@ -92,6 +92,49 @@ func TestRecommendConstraintFiltersCandidates(t *testing.T) {
 	}
 }
 
+func TestRecommendScaleupDimensions(t *testing.T) {
+	// 30 minutes idle, then a sustained spike: an uncapped scale-up absorbs
+	// it in one jump while a 1000-PU step needs several minutes above target.
+	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	points := constantWorkloadPoints(start, 30, 1000, 50)
+	spike := constantWorkloadPoints(start.Add(30*time.Minute), 90, 1000, 900)
+	points = append(points, spike...)
+
+	base := Config{Autoscaler: newAutoscaler(1000, 10000, 30)}
+	space := SearchSpace{
+		ScaleupStepSizes: []intstr.IntOrString{intstr.FromInt(0), intstr.FromInt(1000)},
+		ScaleupIntervals: []metav1.Duration{{Duration: time.Minute}},
+	}
+
+	// Allow exactly one minute above target: only the uncapped candidate
+	// (a single spike tick before the jump) stays feasible.
+	candidates, err := Recommend(base, space, Constraints{MaxTargetExceededMinutes: 1}, points)
+	if err != nil {
+		t.Fatalf("Recommend: %v", err)
+	}
+	if len(candidates) != 2 {
+		t.Fatalf("got %d candidates; want 2", len(candidates))
+	}
+
+	first := candidates[0]
+	if !first.Feasible || first.Overrides[OverrideScaleupStepSize] != "0" {
+		t.Errorf("first candidate = %s feasible=%t; want feasible scaleupStepSize=0",
+			DescribeOverrides(first.Overrides), first.Feasible)
+	}
+	if got := first.Overrides[OverrideScaleupInterval]; got != "1m0s" {
+		t.Errorf("scaleupInterval override = %q; want 1m0s", got)
+	}
+	second := candidates[1]
+	if second.Feasible {
+		t.Errorf("stepped candidate %s should exceed the 1-minute budget (got %.0f minutes)",
+			DescribeOverrides(second.Overrides), second.Summary.TargetExceededMinutes)
+	}
+	if second.Summary.TargetExceededMinutes <= first.Summary.TargetExceededMinutes {
+		t.Errorf("stepped candidate exceeded %.0f minutes; want more than uncapped %.0f",
+			second.Summary.TargetExceededMinutes, first.Summary.TargetExceededMinutes)
+	}
+}
+
 func TestRecommendRejectsInvalidRange(t *testing.T) {
 	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	points := constantWorkloadPoints(start, 10, 5000, 400)
