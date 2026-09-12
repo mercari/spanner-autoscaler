@@ -335,28 +335,62 @@ func TestRecommendedIndex(t *testing.T) {
 		mk(10.0, 470, "10%"), // outside the tolerance window
 	}
 
-	recIdx, riskIdx, reason := RecommendedIndex(base, current, candidates, 1.0)
-	if recIdx != 1 || riskIdx != 0 || reason != "" {
-		t.Errorf("RecommendedIndex(tolerance 1.0) = (%d, %d, %q); want the safer near-equal candidate (1) with the cheapest (0) as the riskier alternative", recIdx, riskIdx, reason)
+	// Unlimited changes: the safer near-equal candidate wins the tolerance
+	// window; the cheapest is equivalent by definition, so no further option.
+	recIdx, furtherIdx, reason := RecommendedIndex(base, current, candidates, 1.0, 0)
+	if recIdx != 1 || furtherIdx != -1 || reason != "" {
+		t.Errorf("RecommendedIndex(tolerance 1.0) = (%d, %d, %q); want the safer near-equal candidate (1) and no further option", recIdx, furtherIdx, reason)
 	}
 
-	// Tolerance 0 always takes the cheapest, with no alternative.
-	recIdx, riskIdx, _ = RecommendedIndex(base, current, candidates, 0)
-	if recIdx != 0 || riskIdx != -1 {
-		t.Errorf("RecommendedIndex(tolerance 0) = (%d, %d); want (0, -1)", recIdx, riskIdx)
+	// Tolerance 0, unlimited changes: always the cheapest, no alternative.
+	recIdx, furtherIdx, _ = RecommendedIndex(base, current, candidates, 0, 0)
+	if recIdx != 0 || furtherIdx != -1 {
+		t.Errorf("RecommendedIndex(tolerance 0) = (%d, %d); want (0, -1)", recIdx, furtherIdx)
+	}
+
+	// A one-change budget: the cheapest candidate now changes two parameters
+	// and saves well beyond the tolerance, so it is excluded from the
+	// recommendation pool but surfaces as the further option.
+	candidates[0].Summary.PUHoursSavedPercent = 21.0
+	candidates[0].Summary.SimPUHours = 10000 * (108 - 21.0) / 100
+	candidates[0].Overrides[OverrideMinPU] = "15000"
+	current[OverrideMinPU] = "20000"
+	recIdx, furtherIdx, _ = RecommendedIndex(base, current, candidates, 1.0, 1)
+	if recIdx != 1 || furtherIdx != 0 {
+		t.Errorf("RecommendedIndex(maxChanges 1) = (%d, %d); want the single-change candidate (1) with the two-change one (0) as the further option", recIdx, furtherIdx)
 	}
 
 	// Nothing cheaper than base → keep the current configuration.
 	expensive := []Candidate{mk(-2, 100, "10%")}
 	expensive[0].Summary.SimPUHours = 11000
-	if recIdx, riskIdx, reason = RecommendedIndex(base, current, expensive, 1.0); recIdx != -1 || riskIdx != -1 || reason == "" {
-		t.Errorf("RecommendedIndex(costlier than base) = (%d, %d, %q); want keep-current", recIdx, riskIdx, reason)
+	if recIdx, furtherIdx, reason = RecommendedIndex(base, current, expensive, 1.0, 1); recIdx != -1 || furtherIdx != -1 || reason == "" {
+		t.Errorf("RecommendedIndex(costlier than base) = (%d, %d, %q); want keep-current", recIdx, furtherIdx, reason)
 	}
 
 	// No feasible candidate at all.
 	infeasible := []Candidate{{Feasible: false}}
-	if recIdx, _, reason = RecommendedIndex(base, current, infeasible, 1.0); recIdx != -1 || reason == "" {
+	if recIdx, _, reason = RecommendedIndex(base, current, infeasible, 1.0, 1); recIdx != -1 || reason == "" {
 		t.Errorf("RecommendedIndex(no feasible) = (%d, %q); want keep-current with a reason", recIdx, reason)
+	}
+}
+
+func TestGroupEquivalent(t *testing.T) {
+	mkSummary := func(cost float64) Summary { return Summary{SimPUHours: cost} }
+	candidates := []Candidate{
+		{Feasible: true, Summary: mkSummary(100)},
+		{Feasible: true, Summary: mkSummary(100)}, // same outcome as 0
+		{Feasible: true, Summary: mkSummary(200)},
+		{Feasible: false, Summary: mkSummary(100)}, // same numbers, different feasibility
+	}
+	groups := GroupEquivalent(candidates)
+	want := [][]int{{0, 1}, {2}, {3}}
+	if len(groups) != len(want) {
+		t.Fatalf("groups = %v; want %v", groups, want)
+	}
+	for i := range want {
+		if !slices.Equal(groups[i], want[i]) {
+			t.Errorf("group %d = %v; want %v", i, groups[i], want[i])
+		}
 	}
 }
 

@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 
 	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
+	"github.com/mercari/spanner-autoscaler/internal/scaling"
 )
 
 // maxRecommendCombinations bounds the grid so a typo in a candidate list
@@ -235,20 +236,30 @@ func Recommend(base Config, space SearchSpace, constraints Constraints, points [
 }
 
 // RecommendedIndex selects the candidate the conclusion should propose,
-// plus an optional cheaper-but-riskier alternative.
+// plus an optional alternative that saves more at higher risk.
 //
-// Feasible candidates whose PU-hours savings are within savingsTolerancePt
-// percentage points of the best feasible savings are treated as equal on
-// cost; among them the least risky one — fewest minutes above target, then
-// fewest scale gaps under ten minutes, then fewest changed parameters — is
-// recommended. When the cheapest candidate of that group is a different one,
-// its index is returned as riskierIdx so callers can present it as an option
-// to try after the recommendation has proven out.
+// Only feasible candidates cheaper than the base replay are considered.
+// When maxChanges > 0, the recommendation is restricted to candidates that
+// change at most that many parameters against the current configuration —
+// staged adoption: move one setting, observe, iterate — falling back to all
+// eligible candidates when none qualifies. Within the pool, candidates whose
+// savings are within savingsTolerancePt percentage points of the pool's best
+// count as equal on cost, and the least risky of them is recommended — see
+// lessRisky: the gentlest scale-down first, then the measured risk counters.
+//
+// When the best unrestricted candidate saves more than the recommendation by
+// over savingsTolerancePt, its index is returned as furtherIdx so callers
+// can present it as the option to try after the recommendation has proven
+// out.
 //
 // Both indexes are -1 when nothing should change; keepReason then explains
 // why: no feasible candidate, or none cheaper than the current
 // configuration's own replay.
-func RecommendedIndex(base Summary, current map[string]string, candidates []Candidate, savingsTolerancePt float64) (recommendedIdx, riskierIdx int, keepReason string) {
+func RecommendedIndex(base Summary, current map[string]string, candidates []Candidate, savingsTolerancePt float64, maxChanges int) (recommendedIdx, furtherIdx int, keepReason string) {
+	eligible := func(c *Candidate) bool {
+		return c.Feasible && c.Summary.SimPUHours < base.SimPUHours
+	}
+
 	cheapest := -1
 	for i := range candidates {
 		if !candidates[i].Feasible {
@@ -261,31 +272,93 @@ func RecommendedIndex(base Summary, current map[string]string, candidates []Cand
 	if cheapest == -1 {
 		return -1, -1, "no candidate satisfies the constraints — keep the current configuration, or relax the constraints / widen the search space"
 	}
-	if candidates[cheapest].Summary.SimPUHours >= base.SimPUHours {
+	if !eligible(&candidates[cheapest]) {
 		return -1, -1, "every candidate that satisfies the constraints costs at least as much as the current configuration — keep the current configuration"
 	}
 
-	minSaved := candidates[cheapest].Summary.PUHoursSavedPercent - savingsTolerancePt
-	recommendedIdx = cheapest
+	inPool := func(c *Candidate) bool {
+		return eligible(c) && (maxChanges <= 0 || changedParameterCount(current, *c) <= maxChanges)
+	}
+	poolBest := -1
 	for i := range candidates {
-		c := &candidates[i]
-		if !c.Feasible || c.Summary.SimPUHours >= base.SimPUHours || c.Summary.PUHoursSavedPercent < minSaved {
+		if !inPool(&candidates[i]) {
 			continue
 		}
-		if lessRisky(current, c, &candidates[recommendedIdx]) {
+		if poolBest == -1 || candidates[i].Summary.SimPUHours < candidates[poolBest].Summary.SimPUHours {
+			poolBest = i
+		}
+	}
+	if poolBest == -1 {
+		// No candidate within the change budget; recommend from the full set.
+		poolBest = cheapest
+		inPool = eligible
+	}
+
+	minSaved := candidates[poolBest].Summary.PUHoursSavedPercent - savingsTolerancePt
+	recommendedIdx = poolBest
+	for i := range candidates {
+		c := &candidates[i]
+		if !inPool(c) || c.Summary.PUHoursSavedPercent < minSaved {
+			continue
+		}
+		if lessRisky(current, base.SpecMinPU, c, &candidates[recommendedIdx]) {
 			recommendedIdx = i
 		}
 	}
-	if recommendedIdx != cheapest {
+
+	if cheapest != recommendedIdx &&
+		candidates[cheapest].Summary.PUHoursSavedPercent > candidates[recommendedIdx].Summary.PUHoursSavedPercent+savingsTolerancePt {
 		return recommendedIdx, cheapest, ""
 	}
 	return recommendedIdx, -1, ""
 }
 
-// lessRisky orders near-equal-cost candidates: fewer minutes above target,
-// then fewer scale gaps under ten minutes, then fewer changed parameters,
-// then lower cost.
-func lessRisky(current map[string]string, a, b *Candidate) bool {
+// GroupEquivalent partitions candidate indexes into groups whose simulated
+// outcomes are identical (same cost, risk counters, and scale activity), in
+// the candidates' existing order. Search grids routinely contain parameter
+// combinations that behave identically on a given recording; displays use
+// the groups to show one representative row per outcome.
+func GroupEquivalent(candidates []Candidate) [][]int {
+	type outcome struct {
+		simPUHours, exceeded    float64
+		gaps, steps, ups, downs int
+		feasible                bool
+		err                     string
+	}
+	index := map[outcome]int{}
+	var groups [][]int
+	for i, c := range candidates {
+		key := outcome{
+			simPUHours: c.Summary.SimPUHours,
+			exceeded:   c.Summary.TargetExceededMinutes,
+			gaps:       c.Summary.ScaleGapsUnder10Min,
+			steps:      c.Summary.ScaleStepViolations,
+			ups:        c.Summary.ScaleUps,
+			downs:      c.Summary.ScaleDowns,
+			feasible:   c.Feasible,
+			err:        c.Error,
+		}
+		if gi, ok := index[key]; ok {
+			groups[gi] = append(groups[gi], i)
+			continue
+		}
+		index[key] = len(groups)
+		groups = append(groups, []int{i})
+	}
+	return groups
+}
+
+// lessRisky orders near-equal-cost candidates. The first key is the
+// scale-down aggressiveness (the resolved step size at the base minimum):
+// frequent large downsizes carry costs the simulation cannot measure — split
+// rebalancing and tail latency during resizes — so a gentler scale-down wins
+// even when its measured overshoot is slightly higher. Ties fall through to
+// the measured risk: minutes above target, scale gaps under ten minutes,
+// changed parameters, and finally cost.
+func lessRisky(current map[string]string, refPU int, a, b *Candidate) bool {
+	if sa, sb := scaledownAggressiveness(refPU, a), scaledownAggressiveness(refPU, b); sa != sb {
+		return sa < sb
+	}
 	if a.Summary.TargetExceededMinutes != b.Summary.TargetExceededMinutes {
 		return a.Summary.TargetExceededMinutes < b.Summary.TargetExceededMinutes
 	}
@@ -296,6 +369,16 @@ func lessRisky(current map[string]string, a, b *Candidate) bool {
 		return ca < cb
 	}
 	return a.Summary.SimPUHours < b.Summary.SimPUHours
+}
+
+// scaledownAggressiveness resolves the candidate's scaledownStepSize at a
+// shared reference PU so percentage and fixed steps compare on one scale. A
+// candidate without a resolved configuration compares as neutral (0).
+func scaledownAggressiveness(refPU int, c *Candidate) int {
+	if c.Autoscaler == nil || refPU <= 0 {
+		return 0
+	}
+	return scaling.ResolveStepSize(&c.Autoscaler.Spec.ScaleConfig.ScaledownStepSize, refPU, scaling.StepDirectionScaledown)
 }
 
 // changedParameterCount counts the overrides that differ from the current
