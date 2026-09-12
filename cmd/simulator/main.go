@@ -18,6 +18,10 @@ limitations under the License.
 // sizes, scale-down windows, schedules, …) can be evaluated for cost and CPU
 // risk before touching production.
 //
+// It is a backtest over recorded data (trace-driven simulation), not a
+// forecast: the workload comes from actual history and only the autoscaler's
+// counterfactual behavior under a different configuration is simulated.
+//
 // Subcommands:
 //
 //	fetch     download CPU / processing-units metrics from Cloud Monitoring into a CSV
@@ -68,6 +72,9 @@ func main() {
 
 func usage() {
 	fmt.Fprint(os.Stderr, `Usage: simulator <subcommand> [flags]
+
+Backtests SpannerAutoscaler configurations against recorded metrics
+(trace-driven simulation over actual history — not a forecast).
 
 Subcommands:
   fetch      download CPU / processing-units metrics from Cloud Monitoring into a CSV

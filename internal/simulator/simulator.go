@@ -17,6 +17,12 @@ limitations under the License.
 // candidate SpannerAutoscaler configuration and reports how the autoscaler
 // would have scaled the instance, at what cost, and with what CPU headroom.
 //
+// This is trace-driven simulation — a backtest, not a forecast: the input is
+// the actually observed workload, and what gets simulated is the
+// counterfactual ("what would this configuration have done against that
+// workload"). The simulated PU trace and the simulated CPU values are
+// synthetic outputs that were never observed in production.
+//
 // The decision logic is not reimplemented: every tick calls internal/scaling,
 // the same package the controller uses, so a simulated run exercises exactly
 // the production behavior (desired-PU computation, step sizes, cooldown
