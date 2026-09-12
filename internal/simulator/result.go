@@ -124,9 +124,9 @@ type Summary struct {
 	// the workload, sets the cost there (room to lower); at or near SpecMinPU
 	// means the min is load-bearing.
 	// TargetExceededAtMinMinutes counts the target-exceeded minutes whose CPU
-	// was observed while the instance sat on the effective minimum — spikes
-	// hitting the floor, which raising the min (or pre-scaling with a
-	// schedule) would absorb.
+	// was observed while the instance sat on the effective minimum. Only this
+	// portion of the overshoot would shrink if the min were raised (or the
+	// instance pre-scaled with a schedule).
 	SpecMinPU                  int     `json:"specMinPU"`
 	MinPinnedPercent           float64 `json:"minPinnedPercent"`
 	RequiredPUAtMinP95         int     `json:"requiredPUAtMinP95,omitzero"`
@@ -334,11 +334,11 @@ func (s Summary) AssessMinPU() MinPUAssessment {
 	case s.TargetExceededMinutes == 0:
 		a.Raise = "not indicated: no time above target"
 	case s.TargetExceededAtMinMinutes >= s.TargetExceededMinutes/2:
-		a.Raise = fmt.Sprintf("consider raising or pre-scaling: %.0f of %.0f minutes above target (%.0f%%) are observed at the min — spikes start from the floor",
+		a.Raise = fmt.Sprintf("consider raising or pre-scaling: %.0f of %.0f minutes above target (%.0f%%) start while the instance sits at the min, so a higher min would reduce them",
 			s.TargetExceededAtMinMinutes, s.TargetExceededMinutes,
 			s.TargetExceededAtMinMinutes/s.TargetExceededMinutes*100)
 	default:
-		a.Raise = fmt.Sprintf("not indicated: only %.0f of %.0f minutes above target (%.0f%%) start at the min — raising it would not absorb the overshoot",
+		a.Raise = fmt.Sprintf("not indicated: only %.0f of %.0f minutes above target (%.0f%%) start while the instance sits at the min, so a higher min would not reduce the time above target",
 			s.TargetExceededAtMinMinutes, s.TargetExceededMinutes,
 			s.TargetExceededAtMinMinutes/s.TargetExceededMinutes*100)
 	}
