@@ -32,7 +32,7 @@ import (
 func writeSimulateHTML(w io.Writer, name string, result *simulator.Result, targetHigh, targetTotal int) {
 	s := result.Summary
 	writePageHead(w, "Simulation report: "+name)
-	fmt.Fprintf(w, "<h1>Simulation report</h1>\n<p class=\"sub\">%s — %s .. %s (%d points)</p>\n",
+	fmt.Fprintf(w, "<h1>Simulation report</h1>\n<p class=\"sub\">%s — %s .. %s (%d points) — backtest of recorded metrics, not a forecast</p>\n",
 		html.EscapeString(name),
 		s.Start.UTC().Format("2006-01-02 15:04"), s.End.UTC().Format("2006-01-02 15:04"), s.DataPoints)
 
@@ -135,7 +135,7 @@ func writeRecommendHTML(w io.Writer, name string, base simulator.Summary, candid
 			feasibleCount++
 		}
 	}
-	fmt.Fprintf(w, "<h1>Recommendation report</h1>\n<p class=\"sub\">%s — %d candidates (%d feasible) against %d recorded points, %s .. %s</p>\n",
+	fmt.Fprintf(w, "<h1>Recommendation report</h1>\n<p class=\"sub\">%s — %d candidates (%d feasible) against %d recorded points, %s .. %s — backtest of recorded metrics, not a forecast</p>\n",
 		html.EscapeString(name), len(candidates), feasibleCount, base.DataPoints,
 		base.Start.UTC().Format("2006-01-02"), base.End.UTC().Format("2006-01-02"))
 
