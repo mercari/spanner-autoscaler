@@ -374,6 +374,31 @@ func TestRecommendedIndex(t *testing.T) {
 	}
 }
 
+func TestScaledownRateOrdersGentlerFirst(t *testing.T) {
+	base := Summary{SimPUHours: 10000, PUHoursSavedPercent: 8, SpecMinPU: 20000}
+	current := map[string]string{OverrideScaledownStepSize: "10%", OverrideScaledownInterval: "30m0s"}
+
+	mk := func(saved float64, step string, interval time.Duration) Candidate {
+		sa := newAutoscaler(20000, 60000, 40)
+		sa.Spec.ScaleConfig.ScaledownStepSize = intstr.Parse(step)
+		sa.Spec.ScaleConfig.ScaledownInterval = &metav1.Duration{Duration: interval}
+		return Candidate{
+			Feasible:   true,
+			Autoscaler: sa,
+			Overrides:  map[string]string{OverrideScaledownStepSize: step, OverrideScaledownInterval: interval.String()},
+			Summary:    Summary{SimPUHours: 10000 * (108 - saved) / 100, PUHoursSavedPercent: saved},
+		}
+	}
+	candidates := []Candidate{
+		mk(15.5, "10%", 10*time.Minute), // cheapest; rate 2000/10 = 200 PU/min
+		mk(15.2, "20%", 30*time.Minute), // near-equal; rate 4000/30 ≈ 133 PU/min — gentler
+	}
+	recIdx, _, _ := RecommendedIndex(base, current, candidates, 2.0, 0)
+	if recIdx != 1 {
+		t.Errorf("RecommendedIndex = %d; want 1 (a larger step at a long interval is gentler than a small step fired often)", recIdx)
+	}
+}
+
 func TestDescribeChangesAndDisplay(t *testing.T) {
 	current := map[string]string{
 		OverrideMinPU:             "20000",
