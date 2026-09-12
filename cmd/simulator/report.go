@@ -115,8 +115,8 @@ type scatterView struct {
 type eventView struct{ Time, From, To, Delta string }
 
 type candidateRowView struct {
-	Label, Error                       string
-	Infeasible                         bool
+	Rank, Label, Error                 string
+	Infeasible, Recommended            bool
 	Saved, DSaved, Exceeded, DExceeded string
 	Gaps, Steps, P99, Status           string
 }
@@ -229,8 +229,13 @@ func writeRecommendHTML(w io.Writer, current map[string]string, base simulator.S
 		page.Verdicts = append(page.Verdicts, buildVerdict("top candidate", best.Summary))
 	}
 
-	for _, c := range candidates {
+	// Candidates arrive ranked (feasible first, then by simulated PU-hours),
+	// so the first feasible row is the one the conclusion recommends; mark it
+	// so the two sections cross-reference without comparing values by hand.
+	recommendedMarked := false
+	for i, c := range candidates {
 		row := candidateRowView{
+			Rank:  strconv.Itoa(i + 1),
 			Label: simulator.DescribeOverrides(c.Overrides),
 			Error: c.Error,
 		}
@@ -247,6 +252,10 @@ func writeRecommendHTML(w io.Writer, current map[string]string, base simulator.S
 			row.Status = "feasible"
 			if !c.Feasible {
 				row.Status = "infeasible: " + strings.Join(c.InfeasibleReasons, "; ")
+			} else if !recommendedMarked {
+				row.Recommended = true
+				row.Status = "recommended"
+				recommendedMarked = true
 			}
 		}
 		page.Rows = append(page.Rows, row)
