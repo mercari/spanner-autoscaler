@@ -303,9 +303,9 @@ func (a *aggregator) summary(start, end time.Time, events []Event) Summary {
 	return s
 }
 
-// MinPUAssessment is a decision-ready reading of the run's min-PU signals:
-// one verdict per direction, always populated, so "should the min move?" is
-// answerable at a glance instead of from raw counters.
+// MinPUAssessment summarizes the run's min-PU signals as one verdict per
+// direction, always populated, so whether spec.processingUnits.min should
+// move can be judged without interpreting the raw counters.
 type MinPUAssessment struct {
 	Lower string `json:"lower"`
 	Raise string `json:"raise"`

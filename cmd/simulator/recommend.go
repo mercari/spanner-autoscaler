@@ -136,7 +136,7 @@ func runRecommend(args []string) error {
 		return err
 	}
 
-	current := simulator.CurrentKnobValues(sa)
+	current := simulator.CurrentParameterValues(sa)
 
 	if *htmlPath != "" {
 		f, err := os.Create(*htmlPath)
@@ -257,8 +257,8 @@ func parseIntList(s string) ([]int, error) {
 }
 
 // recommendationLines renders the conclusion: for the top feasible candidate,
-// every knob as "current → recommended" (unchanged knobs marked (keep), so the
-// min PU answer is always visible), followed by the effect of adopting it.
+// every parameter as "current → recommended" (unchanged parameters marked (keep), so the
+// min PU decision is always shown), followed by the effect of adopting it.
 // A nil top yields the keep-current fallback line.
 func recommendationLines(current map[string]string, base simulator.Summary, top *simulator.Candidate) []string {
 	if top == nil {
@@ -303,8 +303,8 @@ func writeRecommendTable(current map[string]string, base simulator.Summary, cand
 	fmt.Printf("Evaluated %d candidates (%d feasible) against %d recorded points\n",
 		len(candidates), feasibleCount, base.DataPoints)
 	if feasibleCount == 0 && !showInfeasible {
-		// A bare "0 feasible" is a dead end; show what came closest and why
-		// it was rejected so the constraints can be revisited deliberately.
+		// When nothing passes the constraints, show the cheapest rejected
+		// candidates and their reasons so the constraints can be revisited.
 		showInfeasible = true
 		fmt.Println("no candidate satisfies the constraints — showing the cheapest infeasible ones with the reasons they were rejected")
 	}
@@ -384,7 +384,7 @@ func writeRecommendTable(current map[string]string, base simulator.Summary, cand
 }
 
 // printMinPUAssessment surfaces whether processingUnits.min should move — the
-// one knob whose direction is otherwise invisible in the ranking table.
+// which the ranking table alone does not answer.
 func printMinPUAssessment(label string, s simulator.Summary) {
 	fmt.Printf("\nmin PU assessment (%s): min %d, pinned %.0f%% of the run", label, s.SpecMinPU, s.MinPinnedPercent)
 	if s.RequiredPUAtMinP95 > 0 {

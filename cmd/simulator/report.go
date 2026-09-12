@@ -57,8 +57,8 @@ type verdictView struct {
 }
 
 type conclusionRow struct {
-	Knob, Current, Recommended string
-	Changed                    bool
+	Parameter, Current, Recommended string
+	Changed                         bool
 }
 
 type conclusionView struct {
@@ -205,8 +205,8 @@ var reportTemplates = template.Must(template.New("report").Parse(`
 <b>Recommended configuration</b>
 {{if .None}}<p>No candidate satisfies the constraints — <b>keep the current configuration</b>, or relax the constraints / widen the search space. See the rejection reasons in the table below.</p>
 {{else}}<table>
-<tr><th>knob</th><th>current</th><th>recommended</th></tr>
-{{range .Rows}}<tr><td>{{.Knob}}</td><td>{{.Current}}</td>{{if .Changed}}<td class="changed">{{.Recommended}}</td>{{else}}<td>{{.Recommended}} (keep)</td>{{end}}</tr>
+<tr><th>parameter</th><th>current</th><th>recommended</th></tr>
+{{range .Rows}}<tr><td>{{.Parameter}}</td><td>{{.Current}}</td>{{if .Changed}}<td class="changed">{{.Recommended}}</td>{{else}}<td>{{.Recommended}} (keep)</td>{{end}}</tr>
 {{end}}</table>
 <div class="effect">{{.Effect}}</div>
 {{end}}</div>
@@ -323,7 +323,7 @@ func writeSimulateHTML(w io.Writer, name string, result *simulator.Result, targe
 }
 
 // writeRecommendHTML renders the candidate ranking visually: the conclusion
-// block up front (current → recommended per knob), a savings-vs-risk scatter
+// block up front (current → recommended per parameter), a savings-vs-risk scatter
 // (feasible candidates in the accent hue, infeasible as gray context, the
 // base config as the orange reference), the min-PU assessments, and the full
 // candidate table with rejection reasons as the table view.
@@ -406,7 +406,7 @@ func buildConclusion(current map[string]string, base simulator.Summary, top *sim
 		if !ok {
 			continue
 		}
-		row := conclusionRow{Knob: key, Current: cur, Recommended: cur}
+		row := conclusionRow{Parameter: key, Current: cur, Recommended: cur}
 		if next, changed := top.Overrides[key]; changed && next != cur {
 			row.Recommended = next
 			row.Changed = true
@@ -424,7 +424,7 @@ func buildConclusion(current map[string]string, base simulator.Summary, top *sim
 // ---- line-chart geometry ----
 
 // tsBucket is one downsampled slot of a time series. Min/max keep the 1-minute
-// spikes honest at any zoom; the mean line carries the trend.
+// spikes visible after downsampling; the mean line shows the trend.
 type tsBucket struct {
 	Min, Max, Mean float64
 	Has            bool

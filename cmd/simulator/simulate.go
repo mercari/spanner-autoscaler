@@ -27,7 +27,7 @@ import (
 	"github.com/mercari/spanner-autoscaler/internal/simulator"
 )
 
-// commonFlags are the simulation knobs shared by simulate and compare.
+// commonFlags are the simulation parameters shared by simulate and compare.
 type commonFlags struct {
 	metricsPath       string
 	initialPU         int
