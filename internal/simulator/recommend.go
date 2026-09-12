@@ -157,6 +157,38 @@ func CurrentParameterValues(sa *spannerv1beta1.SpannerAutoscaler, defaultScaleUp
 	return current
 }
 
+// CurrentParameterDisplay is CurrentParameterValues for human-readable
+// output: an interval the spec leaves unset renders as
+// "controller default (<value>)" so nobody mistakes the effective value for
+// an explicit setting. Comparisons must keep using CurrentParameterValues.
+func CurrentParameterDisplay(sa *spannerv1beta1.SpannerAutoscaler, defaultScaleUpInterval, defaultScaleDownInterval time.Duration) map[string]string {
+	display := CurrentParameterValues(sa, defaultScaleUpInterval, defaultScaleDownInterval)
+	if sa.Spec.ScaleConfig.ScaledownInterval == nil {
+		display[OverrideScaledownInterval] = "controller default (" + display[OverrideScaledownInterval] + ")"
+	}
+	if sa.Spec.ScaleConfig.ScaleupInterval == nil {
+		display[OverrideScaleupInterval] = "controller default (" + display[OverrideScaleupInterval] + ")"
+	}
+	return display
+}
+
+// DescribeChanges renders only the overrides that differ from the current
+// configuration, in canonical key order — search grids attach an override for
+// every dimension, and repeating values that equal the current setting reads
+// as if the candidate changed them.
+func DescribeChanges(current, overrides map[string]string) string {
+	parts := make([]string, 0, len(overrides))
+	for _, key := range OverrideKeys {
+		if v, ok := overrides[key]; ok && v != current[key] {
+			parts = append(parts, key+"="+v)
+		}
+	}
+	if len(parts) == 0 {
+		return "(no change vs current)"
+	}
+	return strings.Join(parts, " ")
+}
+
 // DescribeOverrides renders a candidate's overrides in canonical key order.
 func DescribeOverrides(overrides map[string]string) string {
 	parts := make([]string, 0, len(overrides))

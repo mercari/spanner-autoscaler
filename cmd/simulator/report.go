@@ -205,7 +205,7 @@ func writeSimulateHTML(w io.Writer, result *simulator.Result, targetHigh, target
 // topResult, when non-nil, is a full re-run of the top feasible candidate; its
 // PU/CPU timelines are embedded so the recommendation can be judged from the
 // simulated behavior, not only from aggregate numbers.
-func writeRecommendHTML(w io.Writer, current map[string]string, base simulator.Summary, candidates []simulator.Candidate, savingsTolerance float64, maxChanges int, topResult *simulator.Result, topTargetHigh, topTargetTotal int) error {
+func writeRecommendHTML(w io.Writer, current, displayCurrent map[string]string, base simulator.Summary, candidates []simulator.Candidate, savingsTolerance float64, maxChanges int, topResult *simulator.Result, topTargetHigh, topTargetTotal int) error {
 	feasibleCount := 0
 	for _, c := range candidates {
 		if c.Feasible {
@@ -219,13 +219,13 @@ func writeRecommendHTML(w io.Writer, current map[string]string, base simulator.S
 		Sub: fmt.Sprintf("%d candidates (%d feasible) against %d recorded points, %s .. %s",
 			len(candidates), feasibleCount, base.DataPoints,
 			base.Start.UTC().Format("2006-01-02"), base.End.UTC().Format("2006-01-02")),
-		Conclusion: buildConclusion(current, base, candidates, savingsTolerance, maxChanges),
+		Conclusion: buildConclusion(current, displayCurrent, base, candidates, savingsTolerance, maxChanges),
 		KPIs: []kpiView{
 			{"base PU-hours saved", fmt.Sprintf("%.1f%%", base.PUHoursSavedPercent), "replay of the current config vs recorded"},
 			{"base above target", fmt.Sprintf("%.0f min", base.TargetExceededMinutes), "risk reference for the deltas"},
 			{"feasible candidates", fmt.Sprintf("%d / %d", feasibleCount, len(candidates)), "under the given constraints"},
 		},
-		Scatter:  buildScatter(base, candidates),
+		Scatter:  buildScatter(current, base, candidates),
 		Verdicts: []verdictView{buildVerdict("base", base)},
 	}
 	if topResult != nil {
@@ -249,7 +249,7 @@ func writeRecommendHTML(w io.Writer, current map[string]string, base simulator.S
 		c := candidates[rep]
 		row := candidateRowView{
 			Rank:  strconv.Itoa(rank + 1),
-			Label: simulator.DescribeOverrides(c.Overrides),
+			Label: simulator.DescribeChanges(current, c.Overrides),
 			Error: c.Error,
 		}
 		if len(g) > 1 {
@@ -333,7 +333,7 @@ func buildVerdict(label string, s simulator.Summary) verdictView {
 	return v
 }
 
-func buildConclusion(current map[string]string, base simulator.Summary, candidates []simulator.Candidate, savingsTolerance float64, maxChanges int) conclusionView {
+func buildConclusion(current, displayCurrent map[string]string, base simulator.Summary, candidates []simulator.Candidate, savingsTolerance float64, maxChanges int) conclusionView {
 	idx, furtherIdx, keepReason := simulator.RecommendedIndex(base, current, candidates, savingsTolerance, maxChanges)
 	if idx < 0 {
 		return conclusionView{None: true, Reason: keepReason}
@@ -341,14 +341,14 @@ func buildConclusion(current map[string]string, base simulator.Summary, candidat
 	top := &candidates[idx]
 	view := conclusionView{}
 	if furtherIdx >= 0 {
-		view.Further = furtherOptionLine(*top, candidates[furtherIdx], groupRank(candidates, furtherIdx))
+		view.Further = furtherOptionLine(current, *top, candidates[furtherIdx], groupRank(candidates, furtherIdx))
 	}
 	for _, key := range simulator.OverrideKeys {
 		cur, ok := current[key]
 		if !ok {
 			continue
 		}
-		row := conclusionRow{Parameter: key, Current: cur, Recommended: cur}
+		row := conclusionRow{Parameter: key, Current: displayCurrent[key], Recommended: displayCurrent[key]}
 		if next, changed := top.Overrides[key]; changed && next != cur {
 			row.Recommended = next
 			row.Changed = true
@@ -573,7 +573,7 @@ func chartJSON(unit string, times []int64, series []tsSeries) template.JS {
 
 // ---- scatter geometry ----
 
-func buildScatter(base simulator.Summary, candidates []simulator.Candidate) scatterView {
+func buildScatter(current map[string]string, base simulator.Summary, candidates []simulator.Candidate) scatterView {
 	type dot struct {
 		x, y  float64
 		color template.CSS
@@ -605,7 +605,7 @@ func buildScatter(base simulator.Summary, candidates []simulator.Candidate) scat
 		}
 		dots = append(dots, dot{
 			x: cs.TargetExceededMinutes, y: cs.PUHoursSavedPercent, color: color,
-			info: map[string]any{"label": simulator.DescribeOverrides(c.Overrides), "lines": lines},
+			info: map[string]any{"label": simulator.DescribeChanges(current, c.Overrides), "lines": lines},
 		})
 	}
 
