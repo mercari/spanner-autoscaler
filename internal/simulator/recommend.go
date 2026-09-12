@@ -551,13 +551,14 @@ func MinPUCandidates(sa *spannerv1beta1.SpannerAutoscaler, points []Point) []int
 }
 
 // FillGuidelineStepCandidates populates the scale-down step-size and the
-// interval dimensions that are still empty with candidates that respect the
-// PU-change guideline: percentage steps (which express the half rule
-// naturally at any instance size) and the guideline's minimum / preferred
-// gaps as intervals. scaleupStepSize is intentionally not searched: capping
-// the upward step saves next to nothing (the instance still reaches the
-// desired PU, only later) while delaying spike response, so the current
-// value is kept unless the caller lists candidates explicitly.
+// interval dimensions that are still empty with conservative candidates:
+// scale-down steps of 5-20% (larger steps shed capacity too fast to
+// recommend unless the instance is essentially idle — list them explicitly
+// to search them) and the PU-change guideline's minimum / preferred gaps as
+// intervals. scaleupStepSize is intentionally not searched: capping the
+// upward step saves next to nothing (the instance still reaches the desired
+// PU, only later) while delaying spike response, so the current value is
+// kept unless the caller lists candidates explicitly.
 // Each auto-filled dimension also
 // keeps the configuration's effective current value as a candidate —
 // defaultScaleUpInterval / defaultScaleDownInterval stand in when the spec
@@ -567,7 +568,7 @@ func MinPUCandidates(sa *spannerv1beta1.SpannerAutoscaler, points []Point) []int
 func (s *SearchSpace) FillGuidelineStepCandidates(sa *spannerv1beta1.SpannerAutoscaler, defaultScaleUpInterval, defaultScaleDownInterval time.Duration) {
 	sc := sa.Spec.ScaleConfig
 	if len(s.ScaledownStepSizes) == 0 {
-		for _, p := range []string{"10%", "20%", "30%", "40%", "50%"} {
+		for _, p := range []string{"5%", "10%", "15%", "20%"} {
 			s.ScaledownStepSizes = append(s.ScaledownStepSizes, intstr.FromString(p))
 		}
 		s.ScaledownStepSizes = appendMissingStep(s.ScaledownStepSizes, sc.ScaledownStepSize)
