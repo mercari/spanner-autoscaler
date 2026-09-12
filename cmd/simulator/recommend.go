@@ -193,6 +193,8 @@ func runRecommend(args []string) error {
 		if constraints.MaxScaleStepViolations != nil {
 			fmt.Printf("guideline: at most %d scale events beyond 2x/half and %d gaps < 10m allowed (-pu-change-guideline %s)\n",
 				*constraints.MaxScaleStepViolations, *constraints.MaxShortScaleGaps, *puChangeGuideline)
+		} else {
+			fmt.Println("guideline: PU-change pacing checks are disabled (-pu-change-guideline none); check the STEP>2X and GAP<10M columns before adopting a candidate")
 		}
 		writeRecommendTable(current, baseResult.Summary, candidates, &common, *top, *showInfeasible)
 		return nil
