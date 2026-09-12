@@ -47,6 +47,7 @@ func runRecommend(args []string) error {
 	instanceConfig := fs.String("instance-config", "regional", "instance configuration deciding the Google-recommended high-priority CPU ceiling: regional (65%), multi-region (45% per region), or none to disable the guideline")
 	puChangeGuideline := fs.String("pu-change-guideline", "base", "how to enforce the recommended PU-change limits (at most 2x/half per operation, >=10m between operations): base = no worse than the base config's replay, strict = zero violations, none = unconstrained")
 	auto := fs.Bool("auto", false, "auto-generate candidates for the search dimensions left empty: -min-pu from the recorded workload's required-PU percentiles, and step sizes / intervals within the PU-change guideline")
+	savingsTolerance := fs.Float64("savings-tolerance", 1.0, "treat feasible candidates whose savings are within this many percentage points of the best as equal on cost and recommend the least risky of them; the cheapest still appears as a riskier alternative (0 always recommends the cheapest)")
 	top := fs.Int("top", 6, "number of candidates to print (text format)")
 	showInfeasible := fs.Bool("show-infeasible", false, "also list candidates that violate the constraints (text format)")
 	htmlPath := fs.String("html", "", "also write a self-contained HTML report (savings-vs-risk scatter and candidate table) to this path")
@@ -150,7 +151,7 @@ func runRecommend(args []string) error {
 		// CPU would have moved under the recommended configuration.
 		var topResult *simulator.Result
 		var topHigh, topTotal int
-		if idx, _ := recommendedIndex(baseResult.Summary, candidates); idx >= 0 && candidates[idx].Autoscaler != nil {
+		if idx, _, _ := simulator.RecommendedIndex(baseResult.Summary, current, candidates, *savingsTolerance); idx >= 0 && candidates[idx].Autoscaler != nil {
 			best := &candidates[idx]
 			topConfig := base
 			topConfig.Autoscaler = best.Autoscaler
@@ -169,7 +170,7 @@ func runRecommend(args []string) error {
 		if err != nil {
 			return err
 		}
-		if err := writeRecommendHTML(f, current, baseResult.Summary, candidates, topResult, topHigh, topTotal); err != nil {
+		if err := writeRecommendHTML(f, current, baseResult.Summary, candidates, *savingsTolerance, topResult, topHigh, topTotal); err != nil {
 			f.Close()
 			return err
 		}
@@ -196,7 +197,7 @@ func runRecommend(args []string) error {
 		} else {
 			fmt.Println("guideline: PU-change pacing checks are disabled (-pu-change-guideline none); check the STEP>2X and GAP<10M columns before adopting a candidate")
 		}
-		writeRecommendTable(current, baseResult.Summary, candidates, &common, *top, *showInfeasible)
+		writeRecommendTable(current, baseResult.Summary, candidates, *savingsTolerance, &common, *top, *showInfeasible)
 		return nil
 	default:
 		return fmt.Errorf("unknown format %q", common.format)
@@ -284,24 +285,6 @@ func parseIntList(s string) ([]int, error) {
 	return out, nil
 }
 
-// recommendedIndex returns the index of the candidate the conclusion should
-// propose: the cheapest feasible one, and only when it costs less than the
-// base configuration's own replay — recommending a change that saves nothing
-// would be worse than keeping the current configuration. keepReason explains
-// a -1 result.
-func recommendedIndex(base simulator.Summary, candidates []simulator.Candidate) (int, string) {
-	for i := range candidates {
-		if !candidates[i].Feasible {
-			continue
-		}
-		if candidates[i].Summary.SimPUHours >= base.SimPUHours {
-			return -1, "every candidate that satisfies the constraints costs at least as much as the current configuration — keep the current configuration"
-		}
-		return i, ""
-	}
-	return -1, "no candidate satisfies the constraints — keep the current configuration, or relax the constraints / widen the search space"
-}
-
 // recommendationLines renders the conclusion: for the recommended candidate,
 // every parameter as "current → recommended" (unchanged parameters marked (keep), so the
 // min PU decision is always shown), followed by the effect of adopting it.
@@ -330,7 +313,16 @@ func recommendationLines(current map[string]string, base simulator.Summary, top 
 	return lines
 }
 
-func writeRecommendTable(current map[string]string, base simulator.Summary, candidates []simulator.Candidate, common *commonFlags, top int, showInfeasible bool) {
+// riskierAlternativeLine describes the cheapest near-equal candidate that was
+// passed over for a safer one.
+func riskierAlternativeLine(recommended, riskier simulator.Candidate, riskierRank int) string {
+	return fmt.Sprintf("riskier alternative (rank %d): %s — saves %+.1f pt more with %+.0f min more above target; consider it only after the recommendation has proven out",
+		riskierRank, simulator.DescribeOverrides(riskier.Overrides),
+		riskier.Summary.PUHoursSavedPercent-recommended.Summary.PUHoursSavedPercent,
+		riskier.Summary.TargetExceededMinutes-recommended.Summary.TargetExceededMinutes)
+}
+
+func writeRecommendTable(current map[string]string, base simulator.Summary, candidates []simulator.Candidate, savingsTolerance float64, common *commonFlags, top int, showInfeasible bool) {
 	feasibleCount := 0
 	for _, c := range candidates {
 		if c.Feasible {
@@ -403,7 +395,7 @@ func writeRecommendTable(current map[string]string, base simulator.Summary, cand
 		}
 	}
 
-	recIdx, keepReason := recommendedIndex(base, candidates)
+	recIdx, riskIdx, keepReason := simulator.RecommendedIndex(base, current, candidates, savingsTolerance)
 	var best *simulator.Candidate
 	if recIdx >= 0 {
 		best = &candidates[recIdx]
@@ -411,6 +403,9 @@ func writeRecommendTable(current map[string]string, base simulator.Summary, cand
 	fmt.Println("\nrecommended configuration:")
 	for _, line := range recommendationLines(current, base, best, keepReason) {
 		fmt.Printf("  %s\n", line)
+	}
+	if riskIdx >= 0 {
+		fmt.Printf("  %s\n", riskierAlternativeLine(*best, candidates[riskIdx], riskIdx+1))
 	}
 
 	printMinPUAssessment("base", base)

@@ -213,6 +213,12 @@ func Recommend(base Config, space SearchSpace, constraints Constraints, points [
 	}
 	wg.Wait()
 
+	// Equal-cost candidates are common (e.g. two pacing values that behave
+	// identically on this workload); prefer the one that changes the fewest
+	// parameters against the current configuration.
+	current := CurrentParameterValues(base.Autoscaler,
+		cmp.Or(base.ScaleUpInterval, DefaultScaleUpInterval),
+		cmp.Or(base.ScaleDownInterval, DefaultScaleDownInterval))
 	slices.SortStableFunc(candidates, func(a, b Candidate) int {
 		if a.Feasible != b.Feasible {
 			if a.Feasible {
@@ -220,9 +226,88 @@ func Recommend(base Config, space SearchSpace, constraints Constraints, points [
 			}
 			return 1
 		}
-		return cmp.Compare(a.Summary.SimPUHours, b.Summary.SimPUHours)
+		if c := cmp.Compare(a.Summary.SimPUHours, b.Summary.SimPUHours); c != 0 {
+			return c
+		}
+		return cmp.Compare(changedParameterCount(current, a), changedParameterCount(current, b))
 	})
 	return candidates, nil
+}
+
+// RecommendedIndex selects the candidate the conclusion should propose,
+// plus an optional cheaper-but-riskier alternative.
+//
+// Feasible candidates whose PU-hours savings are within savingsTolerancePt
+// percentage points of the best feasible savings are treated as equal on
+// cost; among them the least risky one — fewest minutes above target, then
+// fewest scale gaps under ten minutes, then fewest changed parameters — is
+// recommended. When the cheapest candidate of that group is a different one,
+// its index is returned as riskierIdx so callers can present it as an option
+// to try after the recommendation has proven out.
+//
+// Both indexes are -1 when nothing should change; keepReason then explains
+// why: no feasible candidate, or none cheaper than the current
+// configuration's own replay.
+func RecommendedIndex(base Summary, current map[string]string, candidates []Candidate, savingsTolerancePt float64) (recommendedIdx, riskierIdx int, keepReason string) {
+	cheapest := -1
+	for i := range candidates {
+		if !candidates[i].Feasible {
+			continue
+		}
+		if cheapest == -1 || candidates[i].Summary.SimPUHours < candidates[cheapest].Summary.SimPUHours {
+			cheapest = i
+		}
+	}
+	if cheapest == -1 {
+		return -1, -1, "no candidate satisfies the constraints — keep the current configuration, or relax the constraints / widen the search space"
+	}
+	if candidates[cheapest].Summary.SimPUHours >= base.SimPUHours {
+		return -1, -1, "every candidate that satisfies the constraints costs at least as much as the current configuration — keep the current configuration"
+	}
+
+	minSaved := candidates[cheapest].Summary.PUHoursSavedPercent - savingsTolerancePt
+	recommendedIdx = cheapest
+	for i := range candidates {
+		c := &candidates[i]
+		if !c.Feasible || c.Summary.SimPUHours >= base.SimPUHours || c.Summary.PUHoursSavedPercent < minSaved {
+			continue
+		}
+		if lessRisky(current, c, &candidates[recommendedIdx]) {
+			recommendedIdx = i
+		}
+	}
+	if recommendedIdx != cheapest {
+		return recommendedIdx, cheapest, ""
+	}
+	return recommendedIdx, -1, ""
+}
+
+// lessRisky orders near-equal-cost candidates: fewer minutes above target,
+// then fewer scale gaps under ten minutes, then fewer changed parameters,
+// then lower cost.
+func lessRisky(current map[string]string, a, b *Candidate) bool {
+	if a.Summary.TargetExceededMinutes != b.Summary.TargetExceededMinutes {
+		return a.Summary.TargetExceededMinutes < b.Summary.TargetExceededMinutes
+	}
+	if a.Summary.ScaleGapsUnder10Min != b.Summary.ScaleGapsUnder10Min {
+		return a.Summary.ScaleGapsUnder10Min < b.Summary.ScaleGapsUnder10Min
+	}
+	if ca, cb := changedParameterCount(current, *a), changedParameterCount(current, *b); ca != cb {
+		return ca < cb
+	}
+	return a.Summary.SimPUHours < b.Summary.SimPUHours
+}
+
+// changedParameterCount counts the overrides that differ from the current
+// configuration's value.
+func changedParameterCount(current map[string]string, c Candidate) int {
+	changed := 0
+	for key, value := range c.Overrides {
+		if cur, ok := current[key]; ok && cur != value {
+			changed++
+		}
+	}
+	return changed
 }
 
 func evaluate(base Config, combo []override, constraints Constraints, points []Point) Candidate {
@@ -339,11 +424,15 @@ func MinPUCandidates(sa *spannerv1beta1.SpannerAutoscaler, points []Point) []int
 	return slices.Compact(candidates)
 }
 
-// FillGuidelineStepCandidates populates the step-size and interval dimensions
-// that are still empty with candidates that respect the PU-change guideline:
-// percentage steps (which express the 2x/half rule naturally at any instance
-// size — down to 50%, up to 100% of the current PU) and the guideline's
-// minimum / preferred gaps as intervals. Each auto-filled dimension also
+// FillGuidelineStepCandidates populates the scale-down step-size and the
+// interval dimensions that are still empty with candidates that respect the
+// PU-change guideline: percentage steps (which express the half rule
+// naturally at any instance size) and the guideline's minimum / preferred
+// gaps as intervals. scaleupStepSize is intentionally not searched: capping
+// the upward step saves next to nothing (the instance still reaches the
+// desired PU, only later) while delaying spike response, so the current
+// value is kept unless the caller lists candidates explicitly.
+// Each auto-filled dimension also
 // keeps the configuration's effective current value as a candidate —
 // defaultScaleUpInterval / defaultScaleDownInterval stand in when the spec
 // leaves the interval unset — so combinations that change only the other
@@ -356,12 +445,6 @@ func (s *SearchSpace) FillGuidelineStepCandidates(sa *spannerv1beta1.SpannerAuto
 			s.ScaledownStepSizes = append(s.ScaledownStepSizes, intstr.FromString(p))
 		}
 		s.ScaledownStepSizes = appendMissingStep(s.ScaledownStepSizes, sc.ScaledownStepSize)
-	}
-	if len(s.ScaleupStepSizes) == 0 {
-		for _, p := range []string{"25%", "50%", "100%"} {
-			s.ScaleupStepSizes = append(s.ScaleupStepSizes, intstr.FromString(p))
-		}
-		s.ScaleupStepSizes = appendMissingStep(s.ScaleupStepSizes, sc.ScaleupStepSize)
 	}
 	guidelineIntervals := []metav1.Duration{
 		{Duration: GuidelineMinScaleGap},

@@ -62,10 +62,11 @@ type conclusionRow struct {
 }
 
 type conclusionView struct {
-	None   bool
-	Reason string
-	Rows   []conclusionRow
-	Effect string
+	None    bool
+	Reason  string
+	Rows    []conclusionRow
+	Effect  string
+	Riskier string
 }
 
 type tickView struct {
@@ -198,7 +199,7 @@ func writeSimulateHTML(w io.Writer, result *simulator.Result, targetHigh, target
 // topResult, when non-nil, is a full re-run of the top feasible candidate; its
 // PU/CPU timelines are embedded so the recommendation can be judged from the
 // simulated behavior, not only from aggregate numbers.
-func writeRecommendHTML(w io.Writer, current map[string]string, base simulator.Summary, candidates []simulator.Candidate, topResult *simulator.Result, topTargetHigh, topTargetTotal int) error {
+func writeRecommendHTML(w io.Writer, current map[string]string, base simulator.Summary, candidates []simulator.Candidate, savingsTolerance float64, topResult *simulator.Result, topTargetHigh, topTargetTotal int) error {
 	feasibleCount := 0
 	for _, c := range candidates {
 		if c.Feasible {
@@ -212,7 +213,7 @@ func writeRecommendHTML(w io.Writer, current map[string]string, base simulator.S
 		Sub: fmt.Sprintf("%d candidates (%d feasible) against %d recorded points, %s .. %s",
 			len(candidates), feasibleCount, base.DataPoints,
 			base.Start.UTC().Format("2006-01-02"), base.End.UTC().Format("2006-01-02")),
-		Conclusion: buildConclusion(current, base, candidates),
+		Conclusion: buildConclusion(current, base, candidates, savingsTolerance),
 		KPIs: []kpiView{
 			{"base PU-hours saved", fmt.Sprintf("%.1f%%", base.PUHoursSavedPercent), "replay of the current config vs recorded"},
 			{"base above target", fmt.Sprintf("%.0f min", base.TargetExceededMinutes), "risk reference for the deltas"},
@@ -226,13 +227,13 @@ func writeRecommendHTML(w io.Writer, current map[string]string, base simulator.S
 			"Processing units — recommended candidate (simulated) vs recorded",
 			"CPU utilization — recommended candidate (simulated)")
 	}
-	if idx, _ := recommendedIndex(base, candidates); idx >= 0 {
+	if idx, _, _ := simulator.RecommendedIndex(base, current, candidates, savingsTolerance); idx >= 0 {
 		page.Verdicts = append(page.Verdicts, buildVerdict("recommended candidate", candidates[idx].Summary))
 	}
 
 	// Mark the row the conclusion recommends (if any), so the two sections
 	// cross-reference without comparing values by hand.
-	recIdx, _ := recommendedIndex(base, candidates)
+	recIdx, _, _ := simulator.RecommendedIndex(base, current, candidates, savingsTolerance)
 	for i, c := range candidates {
 		row := candidateRowView{
 			Rank:  strconv.Itoa(i + 1),
@@ -313,13 +314,16 @@ func buildVerdict(label string, s simulator.Summary) verdictView {
 	return v
 }
 
-func buildConclusion(current map[string]string, base simulator.Summary, candidates []simulator.Candidate) conclusionView {
-	idx, keepReason := recommendedIndex(base, candidates)
+func buildConclusion(current map[string]string, base simulator.Summary, candidates []simulator.Candidate, savingsTolerance float64) conclusionView {
+	idx, riskIdx, keepReason := simulator.RecommendedIndex(base, current, candidates, savingsTolerance)
 	if idx < 0 {
 		return conclusionView{None: true, Reason: keepReason}
 	}
 	top := &candidates[idx]
 	view := conclusionView{}
+	if riskIdx >= 0 {
+		view.Riskier = riskierAlternativeLine(*top, candidates[riskIdx], riskIdx+1)
+	}
 	for _, key := range simulator.OverrideKeys {
 		cur, ok := current[key]
 		if !ok {
