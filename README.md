@@ -492,6 +492,12 @@ Following are some other advanced methods which can also be used for GCP authent
 </details>
 
 
+## Configuration simulator
+
+`cmd/simulator` (`make build-simulator`) backtests `SpannerAutoscaler` configuration changes against metrics recorded by Cloud Monitoring: it replays the actual workload through the controller's own decision logic and reports what a candidate configuration would have cost and how it would have behaved. The results describe the recorded past under a different configuration, not a forecast of future traffic.
+
+See [docs/simulator.md](docs/simulator.md) for the workflow (`fetch` / `simulate` / `compare` / `recommend`), the built-in guideline constraints, and how to read the reports.
+
 ## Metrics
 
 The controller exposes custom Prometheus metrics on the standard controller-runtime `/metrics` endpoint (bound to `--metrics-bind-address`, default `127.0.0.1:8080`). All business metrics carry the four identity labels `namespace`, `name`, `project_id`, `instance_id` so they can be sliced by either the Kubernetes resource identity or the target Spanner instance.
