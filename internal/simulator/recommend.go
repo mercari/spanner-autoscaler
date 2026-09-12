@@ -129,23 +129,18 @@ var OverrideKeys = []string{
 // CurrentParameterValues renders the base configuration's value for every parameter the
 // search space can override, keyed by the Override* names, so outputs can show
 // "current → recommended" for each parameter — including the ones a candidate did
-// not touch.
-func CurrentParameterValues(sa *spannerv1beta1.SpannerAutoscaler) map[string]string {
+// not touch. Interval values are rendered as their effective durations
+// (defaultScaleUpInterval / defaultScaleDownInterval when the spec leaves
+// them unset), so a candidate that sets the same duration explicitly reads as
+// "keep" rather than as a change.
+func CurrentParameterValues(sa *spannerv1beta1.SpannerAutoscaler, defaultScaleUpInterval, defaultScaleDownInterval time.Duration) map[string]string {
 	sc := sa.Spec.ScaleConfig
 	current := map[string]string{
 		OverrideMinPU:             fmt.Sprintf("%d", sc.ProcessingUnits.Min),
 		OverrideScaledownStepSize: sc.ScaledownStepSize.String(),
 		OverrideScaleupStepSize:   sc.ScaleupStepSize.String(),
-	}
-	if sc.ScaledownInterval != nil {
-		current[OverrideScaledownInterval] = sc.ScaledownInterval.Duration.String()
-	} else {
-		current[OverrideScaledownInterval] = "controller default"
-	}
-	if sc.ScaleupInterval != nil {
-		current[OverrideScaleupInterval] = sc.ScaleupInterval.Duration.String()
-	} else {
-		current[OverrideScaleupInterval] = "controller default"
+		OverrideScaledownInterval: DurationValueOr(sc.ScaledownInterval, defaultScaleDownInterval).Duration.String(),
+		OverrideScaleupInterval:   DurationValueOr(sc.ScaleupInterval, defaultScaleUpInterval).Duration.String(),
 	}
 	if len(sc.ScaledownAllowedTimes) > 0 {
 		current[OverrideScaledownAllowedTimes] = strings.Join(sc.ScaledownAllowedTimes, ";")
@@ -295,33 +290,113 @@ func infeasibleReasons(sa *spannerv1beta1.SpannerAutoscaler, s Summary, constrai
 	return reasons
 }
 
+// minPUCandidatePercentiles are the points of the required-PU distribution
+// that become auto-generated minimum candidates: from "covers typical load"
+// (p50) up to "covers almost every observed minute" (p99).
+var minPUCandidatePercentiles = []float64{50, 75, 90, 95, 99}
+
+// MinPUCandidates derives spec.processingUnits.min candidates from the
+// recorded workload instead of requiring the caller to guess them. For every
+// point it computes the PU the workload needed to stay on the configuration's
+// targets (workload / target, PU-independent), takes percentiles of that
+// distribution, and returns them as valid PU values together with the current
+// minimum — deduplicated, sorted, and clamped to the configured maximum. The
+// candidates are heuristic starting points; Recommend still evaluates each
+// one against the full recording and the constraints.
+func MinPUCandidates(sa *spannerv1beta1.SpannerAutoscaler, points []Point) []int {
+	flags := sa.Spec.ScaleConfig.TargetCPUUtilization.ActiveMetricFlags()
+	var targetHigh, targetTotal int
+	if t := sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority; t != nil {
+		targetHigh = *t
+	}
+	if t := sa.Spec.ScaleConfig.TargetCPUUtilization.Total; t != nil {
+		targetTotal = *t
+	}
+
+	required := make([]float64, 0, len(points))
+	for _, p := range points {
+		if req := requiredPU(flags, targetHigh, targetTotal, p); req > 0 {
+			required = append(required, float64(req))
+		}
+	}
+	if len(required) == 0 {
+		return nil
+	}
+	slices.Sort(required)
+
+	maxPU := sa.Spec.ScaleConfig.ProcessingUnits.Max
+	candidates := []int{sa.Spec.ScaleConfig.ProcessingUnits.Min}
+	for _, q := range minPUCandidatePercentiles {
+		// Nearest-rank percentile returns an element of required, and
+		// requiredPU already rounds to valid PU values.
+		c := max(int(percentile(required, q)), 100)
+		if maxPU > 0 {
+			c = min(c, maxPU)
+		}
+		candidates = append(candidates, c)
+	}
+	slices.Sort(candidates)
+	return slices.Compact(candidates)
+}
+
 // FillGuidelineStepCandidates populates the step-size and interval dimensions
 // that are still empty with candidates that respect the PU-change guideline:
 // percentage steps (which express the 2x/half rule naturally at any instance
 // size — down to 50%, up to 100% of the current PU) and the guideline's
-// minimum / preferred gaps as intervals. Dimensions the caller already filled
-// are left untouched.
-func (s *SearchSpace) FillGuidelineStepCandidates() {
+// minimum / preferred gaps as intervals. Each auto-filled dimension also
+// keeps the configuration's effective current value as a candidate —
+// defaultScaleUpInterval / defaultScaleDownInterval stand in when the spec
+// leaves the interval unset — so combinations that change only the other
+// parameters stay in the search. Dimensions the caller already filled are
+// left untouched.
+func (s *SearchSpace) FillGuidelineStepCandidates(sa *spannerv1beta1.SpannerAutoscaler, defaultScaleUpInterval, defaultScaleDownInterval time.Duration) {
+	sc := sa.Spec.ScaleConfig
 	if len(s.ScaledownStepSizes) == 0 {
 		for _, p := range []string{"10%", "20%", "30%", "40%", "50%"} {
 			s.ScaledownStepSizes = append(s.ScaledownStepSizes, intstr.FromString(p))
 		}
+		s.ScaledownStepSizes = appendMissingStep(s.ScaledownStepSizes, sc.ScaledownStepSize)
 	}
 	if len(s.ScaleupStepSizes) == 0 {
 		for _, p := range []string{"25%", "50%", "100%"} {
 			s.ScaleupStepSizes = append(s.ScaleupStepSizes, intstr.FromString(p))
 		}
+		s.ScaleupStepSizes = appendMissingStep(s.ScaleupStepSizes, sc.ScaleupStepSize)
 	}
 	guidelineIntervals := []metav1.Duration{
 		{Duration: GuidelineMinScaleGap},
 		{Duration: GuidelinePreferredScaleGap},
 	}
 	if len(s.ScaledownIntervals) == 0 {
-		s.ScaledownIntervals = guidelineIntervals
+		s.ScaledownIntervals = appendMissingInterval(guidelineIntervals, DurationValueOr(sc.ScaledownInterval, defaultScaleDownInterval))
 	}
 	if len(s.ScaleupIntervals) == 0 {
-		s.ScaleupIntervals = guidelineIntervals
+		s.ScaleupIntervals = appendMissingInterval(guidelineIntervals, DurationValueOr(sc.ScaleupInterval, defaultScaleUpInterval))
 	}
+}
+
+// DurationValueOr resolves a spec interval to its effective value: the spec's
+// own duration, or the controller-level default when the spec leaves it nil.
+func DurationValueOr(spec *metav1.Duration, def time.Duration) metav1.Duration {
+	if spec != nil {
+		return *spec
+	}
+	return metav1.Duration{Duration: def}
+}
+
+func appendMissingStep(candidates []intstr.IntOrString, current intstr.IntOrString) []intstr.IntOrString {
+	if slices.Contains(candidates, current) {
+		return candidates
+	}
+	return append(candidates, current)
+}
+
+func appendMissingInterval(candidates []metav1.Duration, current metav1.Duration) []metav1.Duration {
+	out := slices.Clone(candidates)
+	if slices.Contains(out, current) {
+		return out
+	}
+	return append(out, current)
 }
 
 // buildDimensions converts the search space into per-parameter override lists. A

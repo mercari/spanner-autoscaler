@@ -16,6 +16,7 @@ limitations under the License.
 package simulator
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -247,24 +248,61 @@ func TestRecommendPUChangeGuideline(t *testing.T) {
 	}
 }
 
+func TestMinPUCandidates(t *testing.T) {
+	// Two workload levels: 60 quiet minutes needing 2000 PU (workload 400 at
+	// target 40 → required 1000, rounded up one unit) and 60 busy minutes
+	// needing 8000 PU (workload 2800 → required 7000, rounded up).
+	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	points := constantWorkloadPoints(start, 60, 20000, 400)
+	points = append(points, constantWorkloadPoints(start.Add(time.Hour), 60, 20000, 2800)...)
+
+	sa := newAutoscaler(20000, 30000, 40)
+	got := MinPUCandidates(sa, points)
+
+	// p50 lands on the quiet level (2000), p75..p99 on the busy level (8000),
+	// plus the current minimum — deduplicated and sorted.
+	want := []int{2000, 8000, 20000}
+	if !slices.Equal(got, want) {
+		t.Errorf("MinPUCandidates = %v; want %v", got, want)
+	}
+
+	// Percentile candidates above the configured maximum are clamped to it.
+	sa = newAutoscaler(3000, 5000, 40)
+	if got, want := MinPUCandidates(sa, points), []int{2000, 3000, 5000}; !slices.Equal(got, want) {
+		t.Errorf("MinPUCandidates with max 5000 = %v; want %v", got, want)
+	}
+
+	if got := MinPUCandidates(newAutoscaler(1000, 2000, 40), nil); got != nil {
+		t.Errorf("MinPUCandidates with no points = %v; want nil", got)
+	}
+}
+
 func TestFillGuidelineStepCandidates(t *testing.T) {
+	sa := newAutoscaler(1000, 10000, 30)
+	sa.Spec.ScaleConfig.ScaledownInterval = &metav1.Duration{Duration: 55 * time.Minute}
 	space := SearchSpace{
 		ScaleupStepSizes: []intstr.IntOrString{intstr.FromInt(5000)},
 	}
-	space.FillGuidelineStepCandidates()
+	space.FillGuidelineStepCandidates(sa, time.Minute, 55*time.Minute)
 
-	if len(space.ScaledownStepSizes) != 5 || space.ScaledownStepSizes[4] != intstr.FromString("50%") {
-		t.Errorf("ScaledownStepSizes = %v; want 5 percent candidates up to 50%%", space.ScaledownStepSizes)
+	// Five guideline percentages plus the spec's current value (2000).
+	if len(space.ScaledownStepSizes) != 6 || space.ScaledownStepSizes[5] != intstr.FromInt(2000) {
+		t.Errorf("ScaledownStepSizes = %v; want 5 percent candidates plus the current 2000", space.ScaledownStepSizes)
 	}
 	// A dimension the caller already filled must be left untouched.
 	if len(space.ScaleupStepSizes) != 1 || space.ScaleupStepSizes[0] != intstr.FromInt(5000) {
 		t.Errorf("ScaleupStepSizes = %v; want the caller's single candidate preserved", space.ScaleupStepSizes)
 	}
-	want := []metav1.Duration{{Duration: GuidelineMinScaleGap}, {Duration: GuidelinePreferredScaleGap}}
-	for _, got := range [][]metav1.Duration{space.ScaledownIntervals, space.ScaleupIntervals} {
-		if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
-			t.Errorf("intervals = %v; want %v", got, want)
-		}
+	// Scaledown intervals: the two guideline gaps plus the spec's current 55m;
+	// scaleup intervals: the guideline gaps plus the controller default (the
+	// spec leaves the interval nil).
+	wantDown := []metav1.Duration{{Duration: GuidelineMinScaleGap}, {Duration: GuidelinePreferredScaleGap}, {Duration: 55 * time.Minute}}
+	if !slices.Equal(space.ScaledownIntervals, wantDown) {
+		t.Errorf("ScaledownIntervals = %v; want %v", space.ScaledownIntervals, wantDown)
+	}
+	wantUp := []metav1.Duration{{Duration: GuidelineMinScaleGap}, {Duration: GuidelinePreferredScaleGap}, {Duration: time.Minute}}
+	if !slices.Equal(space.ScaleupIntervals, wantUp) {
+		t.Errorf("ScaleupIntervals = %v; want %v", space.ScaleupIntervals, wantUp)
 	}
 }
 

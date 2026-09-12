@@ -47,19 +47,27 @@ $ ./bin/simulator help
        -html report.html
    ```
 
-3. **Search** for a better configuration. Candidate values replace the
-   manifest's value for that parameter; unspecified parameters keep the
-   manifest's value. `-auto` generates step-size and interval candidates
-   within the recommended PU-change limits.
+3. **Search** for a better configuration. With `-auto`, the candidates are
+   generated from the data and the guidelines, so no parameter values need
+   to be supplied:
 
    ```console
    $ ./bin/simulator recommend -metrics metrics.csv -config current.yaml \
-       -min-pu 16000,18000,20000 -scaledown-step-size "10%,30%" \
-       -max-exceeded-minutes 500 -html report.html
+       -auto -max-exceeded-minutes 500 -html report.html
    ```
 
-   `compare` replays several complete manifests side by side instead of
-   searching.
+   `-auto` derives `-min-pu` candidates from percentiles of the PU the
+   recorded workload actually required, and step-size / interval candidates
+   from the PU-change limits; each generated dimension keeps the current
+   value in the running. Explicit candidate lists (for example
+   `-min-pu 16000,18000,20000`) replace the manifest's value for that
+   parameter and take precedence over `-auto`; unspecified parameters keep
+   the manifest's value. `compare` replays several complete manifests side
+   by side instead of searching.
+
+   A candidate is recommended only when it satisfies every constraint and
+   costs less than the current configuration's own replay; otherwise the
+   conclusion says to keep the current configuration.
 
 ## Constraints and guidelines
 
