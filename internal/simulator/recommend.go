@@ -34,8 +34,8 @@ import (
 // cannot explode into an hours-long search.
 const maxRecommendCombinations = 20000
 
-// SearchSpace lists the candidate values tried for each configuration knob.
-// An empty slice keeps the base configuration's value for that knob; a
+// SearchSpace lists the candidate values tried for each configuration parameter.
+// An empty slice keeps the base configuration's value for that parameter; a
 // non-empty slice REPLACES it with each candidate in turn (include the
 // current value explicitly if it should stay in the running).
 type SearchSpace struct {
@@ -87,8 +87,8 @@ type Constraints struct {
 
 // Candidate is one evaluated configuration.
 type Candidate struct {
-	// Overrides maps knob names to the value this candidate applied on top
-	// of the base configuration (only the knobs present in the SearchSpace).
+	// Overrides maps parameter names to the value this candidate applied on top
+	// of the base configuration (only the parameters present in the SearchSpace).
 	Overrides map[string]string `json:"overrides"`
 	Summary   Summary           `json:"summary"`
 	Feasible  bool              `json:"feasible"`
@@ -98,7 +98,7 @@ type Candidate struct {
 	Error             string   `json:"error,omitempty"`
 }
 
-// Override knob names used as Overrides keys, in display order.
+// Override parameter names used as Overrides keys, in display order.
 const (
 	OverrideMinPU                 = "minPU"
 	OverrideScaledownStepSize     = "scaledownStepSize"
@@ -122,11 +122,11 @@ var OverrideKeys = []string{
 	OverrideTargetTotalCPU,
 }
 
-// CurrentKnobValues renders the base configuration's value for every knob the
+// CurrentParameterValues renders the base configuration's value for every parameter the
 // search space can override, keyed by the Override* names, so outputs can show
-// "current → recommended" for each knob — including the ones a candidate did
+// "current → recommended" for each parameter — including the ones a candidate did
 // not touch.
-func CurrentKnobValues(sa *spannerv1beta1.SpannerAutoscaler) map[string]string {
+func CurrentParameterValues(sa *spannerv1beta1.SpannerAutoscaler) map[string]string {
 	sc := sa.Spec.ScaleConfig
 	current := map[string]string{
 		OverrideMinPU:             fmt.Sprintf("%d", sc.ProcessingUnits.Min),
@@ -320,8 +320,8 @@ func (s *SearchSpace) FillGuidelineStepCandidates() {
 	}
 }
 
-// buildDimensions converts the search space into per-knob override lists. A
-// knob with no candidates contributes a single no-op so the cartesian product
+// buildDimensions converts the search space into per-parameter override lists. A
+// parameter with no candidates contributes a single no-op so the cartesian product
 // keeps the base value.
 func buildDimensions(space SearchSpace) [][]override {
 	noop := []override{{}}
@@ -442,7 +442,7 @@ func buildDimensions(space SearchSpace) [][]override {
 	}
 }
 
-// cartesian expands the per-knob override lists into every combination.
+// cartesian expands the per-parameter override lists into every combination.
 func cartesian(dimensions [][]override) [][]override {
 	combos := [][]override{{}}
 	for _, dim := range dimensions {
