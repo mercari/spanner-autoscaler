@@ -63,6 +63,15 @@ func TestRecommendRanksCheapestFeasibleFirst(t *testing.T) {
 	if got := candidates[0].Overrides[OverrideScaledownStepSize]; got != "30%" {
 		t.Errorf("top candidate scaledownStepSize = %q; want 30%%", got)
 	}
+	// The candidate keeps its resolved configuration so callers can re-run it.
+	top := candidates[0]
+	if top.Autoscaler == nil || top.Autoscaler.Spec.ScaleConfig.ProcessingUnits.Min != 1000 {
+		t.Errorf("top candidate Autoscaler = %+v; want the override applied (min 1000)", top.Autoscaler)
+	}
+	if base.Autoscaler.Spec.ScaleConfig.ProcessingUnits.Min != 5000 {
+		t.Errorf("base autoscaler min = %d; candidates must not mutate the base config",
+			base.Autoscaler.Spec.ScaleConfig.ProcessingUnits.Min)
+	}
 }
 
 func TestRecommendConstraintFiltersCandidates(t *testing.T) {

@@ -139,11 +139,30 @@ func runRecommend(args []string) error {
 	current := simulator.CurrentParameterValues(sa)
 
 	if *htmlPath != "" {
+		// Re-run the top feasible candidate to chart its full time series in
+		// the report — the aggregate numbers alone do not show how the PU and
+		// CPU would have moved under the recommended configuration.
+		var topResult *simulator.Result
+		var topHigh, topTotal int
+		if best := topFeasible(candidates); best != nil && best.Autoscaler != nil {
+			topConfig := base
+			topConfig.Autoscaler = best.Autoscaler
+			if topResult, err = simulator.Run(topConfig, points); err != nil {
+				return err
+			}
+			if t := best.Autoscaler.Spec.ScaleConfig.TargetCPUUtilization.HighPriority; t != nil {
+				topHigh = *t
+			}
+			if t := best.Autoscaler.Spec.ScaleConfig.TargetCPUUtilization.Total; t != nil {
+				topTotal = *t
+			}
+		}
+
 		f, err := os.Create(*htmlPath)
 		if err != nil {
 			return err
 		}
-		if err := writeRecommendHTML(f, current, baseResult.Summary, candidates); err != nil {
+		if err := writeRecommendHTML(f, current, baseResult.Summary, candidates, topResult, topHigh, topTotal); err != nil {
 			f.Close()
 			return err
 		}

@@ -138,6 +138,7 @@ type recommendPage struct {
 	Sub        string
 	Conclusion conclusionView
 	KPIs       []kpiView
+	Charts     []lineChartView
 	Scatter    scatterView
 	Verdicts   []verdictView
 	Rows       []candidateRowView
@@ -173,34 +174,8 @@ func writeSimulateHTML(w io.Writer, result *simulator.Result, targetHigh, target
 		Verdict: buildVerdict("this config", s),
 	}
 
-	times, simPU := downsample(result.Points, buckets, func(p simulator.SimPoint) (float64, bool) {
-		return float64(p.SimPU), true
-	})
-	_, actualPU := downsample(result.Points, buckets, func(p simulator.SimPoint) (float64, bool) {
-		return float64(p.ActualPU), true
-	})
-	page.Charts = append(page.Charts, buildLineChart("Processing units — simulated vs recorded", "PU", times, []tsSeries{
-		{Name: "simulated", Color: "var(--series-1)", Buckets: simPU},
-		{Name: "recorded", Color: "var(--context)", Buckets: actualPU},
-	}, nil))
-
-	var cpuSeries []tsSeries
-	var refs []refLine
-	if _, hp := downsample(result.Points, buckets, simHighCPU); hasData(hp) {
-		cpuSeries = append(cpuSeries, tsSeries{Name: "high-priority (simulated)", Color: "var(--series-1)", Buckets: hp})
-		if targetHigh > 0 {
-			refs = append(refs, refLine{Y: float64(targetHigh), Label: fmt.Sprintf("high-pri target %d%%", targetHigh)})
-		}
-	}
-	if _, tt := downsample(result.Points, buckets, simTotalCPU); hasData(tt) {
-		cpuSeries = append(cpuSeries, tsSeries{Name: "total (simulated)", Color: "var(--series-2)", Buckets: tt})
-		if targetTotal > 0 {
-			refs = append(refs, refLine{Y: float64(targetTotal), Label: fmt.Sprintf("total target %d%%", targetTotal)})
-		}
-	}
-	if len(cpuSeries) > 0 {
-		page.Charts = append(page.Charts, buildLineChart("Simulated CPU utilization", "%", times, cpuSeries, refs))
-	}
+	page.Charts = buildResultCharts(result, targetHigh, targetTotal,
+		"Processing units — simulated vs recorded", "Simulated CPU utilization")
 
 	for _, e := range result.Events {
 		page.Events = append(page.Events, eventView{
@@ -219,7 +194,10 @@ func writeSimulateHTML(w io.Writer, result *simulator.Result, targetHigh, target
 // (feasible candidates in the accent hue, infeasible as gray context, the
 // base config as the orange reference), the min-PU assessments, and the full
 // candidate table with rejection reasons as the table view.
-func writeRecommendHTML(w io.Writer, current map[string]string, base simulator.Summary, candidates []simulator.Candidate) error {
+// topResult, when non-nil, is a full re-run of the top feasible candidate; its
+// PU/CPU timelines are embedded so the recommendation can be judged from the
+// simulated behavior, not only from aggregate numbers.
+func writeRecommendHTML(w io.Writer, current map[string]string, base simulator.Summary, candidates []simulator.Candidate, topResult *simulator.Result, topTargetHigh, topTargetTotal int) error {
 	feasibleCount := 0
 	for _, c := range candidates {
 		if c.Feasible {
@@ -241,6 +219,11 @@ func writeRecommendHTML(w io.Writer, current map[string]string, base simulator.S
 		},
 		Scatter:  buildScatter(base, candidates),
 		Verdicts: []verdictView{buildVerdict("base", base)},
+	}
+	if topResult != nil {
+		page.Charts = buildResultCharts(topResult, topTargetHigh, topTargetTotal,
+			"Processing units — top candidate (simulated) vs recorded",
+			"CPU utilization — top candidate (simulated)")
 	}
 	if best := topFeasible(candidates); best != nil {
 		page.Verdicts = append(page.Verdicts, buildVerdict("top candidate", best.Summary))
@@ -270,6 +253,41 @@ func writeRecommendHTML(w io.Writer, current map[string]string, base simulator.S
 	}
 
 	return reportTemplates.ExecuteTemplate(w, "recommend", page)
+}
+
+// buildResultCharts renders one run as the two report timelines: simulated
+// versus recorded processing units, and the simulated CPU with its targets
+// as reference lines.
+func buildResultCharts(result *simulator.Result, targetHigh, targetTotal int, puTitle, cpuTitle string) []lineChartView {
+	times, simPU := downsample(result.Points, buckets, func(p simulator.SimPoint) (float64, bool) {
+		return float64(p.SimPU), true
+	})
+	_, actualPU := downsample(result.Points, buckets, func(p simulator.SimPoint) (float64, bool) {
+		return float64(p.ActualPU), true
+	})
+	charts := []lineChartView{buildLineChart(puTitle, "PU", times, []tsSeries{
+		{Name: "simulated", Color: "var(--series-1)", Buckets: simPU},
+		{Name: "recorded", Color: "var(--context)", Buckets: actualPU},
+	}, nil)}
+
+	var cpuSeries []tsSeries
+	var refs []refLine
+	if _, hp := downsample(result.Points, buckets, simHighCPU); hasData(hp) {
+		cpuSeries = append(cpuSeries, tsSeries{Name: "high-priority (simulated)", Color: "var(--series-1)", Buckets: hp})
+		if targetHigh > 0 {
+			refs = append(refs, refLine{Y: float64(targetHigh), Label: fmt.Sprintf("high-pri target %d%%", targetHigh)})
+		}
+	}
+	if _, tt := downsample(result.Points, buckets, simTotalCPU); hasData(tt) {
+		cpuSeries = append(cpuSeries, tsSeries{Name: "total (simulated)", Color: "var(--series-2)", Buckets: tt})
+		if targetTotal > 0 {
+			refs = append(refs, refLine{Y: float64(targetTotal), Label: fmt.Sprintf("total target %d%%", targetTotal)})
+		}
+	}
+	if len(cpuSeries) > 0 {
+		charts = append(charts, buildLineChart(cpuTitle, "%", times, cpuSeries, refs))
+	}
+	return charts
 }
 
 func buildVerdict(label string, s simulator.Summary) verdictView {

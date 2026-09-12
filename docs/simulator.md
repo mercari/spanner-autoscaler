@@ -85,6 +85,11 @@ Rejected candidates are listed with the specific constraint they broke.
 - The text output and the HTML report both start with the conclusion: each
   parameter as `current → recommended`, with the cost and risk deltas of
   adopting the top candidate.
+- The `recommend` HTML report embeds the top candidate's simulated PU and CPU
+  timelines next to the recorded ones, so the behavior under the recommended
+  configuration — for example, how close the CPU would have come to its
+  target with a lower minimum — can be inspected over time before adopting
+  it.
 - The min PU assessment answers the two directions separately: whether the
   minimum can go lower (time pinned at the minimum and the workload's p95
   requirement while pinned) and whether raising it
