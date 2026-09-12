@@ -285,9 +285,9 @@ func TestFillGuidelineStepCandidates(t *testing.T) {
 	}
 	space.FillGuidelineStepCandidates(sa, time.Minute, 55*time.Minute)
 
-	// Five guideline percentages plus the spec's current value (2000).
-	if len(space.ScaledownStepSizes) != 6 || space.ScaledownStepSizes[5] != intstr.FromInt(2000) {
-		t.Errorf("ScaledownStepSizes = %v; want 5 percent candidates plus the current 2000", space.ScaledownStepSizes)
+	// Four conservative percentages plus the spec's current value (2000).
+	if len(space.ScaledownStepSizes) != 5 || space.ScaledownStepSizes[4] != intstr.FromInt(2000) {
+		t.Errorf("ScaledownStepSizes = %v; want 5/10/15/20%% plus the current 2000", space.ScaledownStepSizes)
 	}
 	// A dimension the caller already filled must be left untouched.
 	if len(space.ScaleupStepSizes) != 1 || space.ScaleupStepSizes[0] != intstr.FromInt(5000) {
