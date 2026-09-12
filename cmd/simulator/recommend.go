@@ -49,6 +49,7 @@ func runRecommend(args []string) error {
 	auto := fs.Bool("auto", false, "auto-generate candidates within the PU-change guideline for any of -scaledown-step-size/-scaleup-step-size/-scaledown-interval/-scaleup-interval left empty")
 	top := fs.Int("top", 6, "number of candidates to print (text format)")
 	showInfeasible := fs.Bool("show-infeasible", false, "also list candidates that violate the constraints (text format)")
+	htmlPath := fs.String("html", "", "also write a self-contained HTML report (savings-vs-risk scatter and candidate table) to this path")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -133,6 +134,18 @@ func runRecommend(args []string) error {
 	candidates, err := simulator.Recommend(base, space, constraints, points)
 	if err != nil {
 		return err
+	}
+
+	if *htmlPath != "" {
+		f, err := os.Create(*htmlPath)
+		if err != nil {
+			return err
+		}
+		writeRecommendHTML(f, *configPath, baseResult.Summary, candidates)
+		if err := f.Close(); err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "wrote HTML report to %s\n", *htmlPath)
 	}
 
 	switch common.format {

@@ -87,12 +87,33 @@ func (c *commonFlags) cost(puHours float64) float64 {
 	return puHours / 1000 * c.nodeHourPrice
 }
 
+// configTargets re-reads the manifest for the CPU targets so the HTML report
+// can draw them as reference lines.
+func configTargets(configPath string) (targetHigh, targetTotal int, err error) {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return 0, 0, err
+	}
+	sa, _, err := simulator.LoadManifests(data)
+	if err != nil {
+		return 0, 0, fmt.Errorf("%s: %w", configPath, err)
+	}
+	if t := sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority; t != nil {
+		targetHigh = *t
+	}
+	if t := sa.Spec.ScaleConfig.TargetCPUUtilization.Total; t != nil {
+		targetTotal = *t
+	}
+	return targetHigh, targetTotal, nil
+}
+
 func runSimulate(args []string) error {
 	fs := flag.NewFlagSet("simulate", flag.ExitOnError)
 	var common commonFlags
 	common.register(fs)
 	configPath := fs.String("config", "", "path to YAML manifests holding one SpannerAutoscaler and its SpannerAutoscaleSchedules (required)")
 	pointsCSV := fs.String("points-csv", "", "also write the per-tick recorded-vs-simulated series to this CSV path")
+	htmlPath := fs.String("html", "", "also write a self-contained HTML report with charts to this path")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -121,6 +142,22 @@ func runSimulate(args []string) error {
 		if err := f.Close(); err != nil {
 			return err
 		}
+	}
+
+	if *htmlPath != "" {
+		targetHigh, targetTotal, err := configTargets(*configPath)
+		if err != nil {
+			return err
+		}
+		f, err := os.Create(*htmlPath)
+		if err != nil {
+			return err
+		}
+		writeSimulateHTML(f, *configPath, result, targetHigh, targetTotal)
+		if err := f.Close(); err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "wrote HTML report to %s\n", *htmlPath)
 	}
 
 	switch common.format {
