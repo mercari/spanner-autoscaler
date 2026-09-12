@@ -54,7 +54,7 @@
 
 {{define "conclusion"}}<div class="conclusion">
 <b>Recommended configuration</b>
-{{if .None}}<p>No candidate satisfies the constraints — <b>keep the current configuration</b>, or relax the constraints / widen the search space. See the rejection reasons in the table below.</p>
+{{if .None}}<p>{{.Reason}} See the candidate table below for the details.</p>
 {{else}}<table>
 <tr><th>parameter</th><th>current</th><th>recommended</th></tr>
 {{range .Rows}}<tr><td>{{.Parameter}}</td><td>{{.Current}}</td>{{if .Changed}}<td class="changed">{{.Recommended}}</td>{{else}}<td>{{.Recommended}} (keep)</td>{{end}}</tr>

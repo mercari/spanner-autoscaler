@@ -46,7 +46,7 @@ func runRecommend(args []string) error {
 	maxP99 := fs.Float64("max-p99-cpu", 0, "constraint: maximum allowed p99 of every simulated CPU metric in percent (0 = no cap)")
 	instanceConfig := fs.String("instance-config", "regional", "instance configuration deciding the Google-recommended high-priority CPU ceiling: regional (65%), multi-region (45% per region), or none to disable the guideline")
 	puChangeGuideline := fs.String("pu-change-guideline", "base", "how to enforce the recommended PU-change limits (at most 2x/half per operation, >=10m between operations): base = no worse than the base config's replay, strict = zero violations, none = unconstrained")
-	auto := fs.Bool("auto", false, "auto-generate candidates within the PU-change guideline for any of -scaledown-step-size/-scaleup-step-size/-scaledown-interval/-scaleup-interval left empty")
+	auto := fs.Bool("auto", false, "auto-generate candidates for the search dimensions left empty: -min-pu from the recorded workload's required-PU percentiles, and step sizes / intervals within the PU-change guideline")
 	top := fs.Int("top", 6, "number of candidates to print (text format)")
 	showInfeasible := fs.Bool("show-infeasible", false, "also list candidates that violate the constraints (text format)")
 	htmlPath := fs.String("html", "", "also write a self-contained HTML report (savings-vs-risk scatter and candidate table) to this path")
@@ -69,9 +69,6 @@ func runRecommend(args []string) error {
 	})
 	if err != nil {
 		return err
-	}
-	if *auto {
-		space.FillGuidelineStepCandidates()
 	}
 
 	constraints := simulator.Constraints{MaxTargetExceededMinutes: *maxExceeded}
@@ -102,6 +99,15 @@ func runRecommend(args []string) error {
 	if err != nil {
 		return fmt.Errorf("%s: %w", *configPath, err)
 	}
+
+	if *auto {
+		space.FillGuidelineStepCandidates(sa, common.scaleUpInterval, common.scaleDownInterval)
+		if len(space.MinPUs) == 0 {
+			space.MinPUs = simulator.MinPUCandidates(sa, points)
+			fmt.Fprintf(os.Stderr, "auto-generated -min-pu candidates from the workload's required-PU percentiles: %v\n", space.MinPUs)
+		}
+	}
+
 	base := simulator.Config{
 		Autoscaler:        sa,
 		Schedules:         schedules,
@@ -136,7 +142,7 @@ func runRecommend(args []string) error {
 		return err
 	}
 
-	current := simulator.CurrentParameterValues(sa)
+	current := simulator.CurrentParameterValues(sa, common.scaleUpInterval, common.scaleDownInterval)
 
 	if *htmlPath != "" {
 		// Re-run the top feasible candidate to chart its full time series in
@@ -144,7 +150,8 @@ func runRecommend(args []string) error {
 		// CPU would have moved under the recommended configuration.
 		var topResult *simulator.Result
 		var topHigh, topTotal int
-		if best := topFeasible(candidates); best != nil && best.Autoscaler != nil {
+		if idx, _ := recommendedIndex(baseResult.Summary, candidates); idx >= 0 && candidates[idx].Autoscaler != nil {
+			best := &candidates[idx]
 			topConfig := base
 			topConfig.Autoscaler = best.Autoscaler
 			if topResult, err = simulator.Run(topConfig, points); err != nil {
@@ -275,13 +282,31 @@ func parseIntList(s string) ([]int, error) {
 	return out, nil
 }
 
-// recommendationLines renders the conclusion: for the top feasible candidate,
+// recommendedIndex returns the index of the candidate the conclusion should
+// propose: the cheapest feasible one, and only when it costs less than the
+// base configuration's own replay — recommending a change that saves nothing
+// would be worse than keeping the current configuration. keepReason explains
+// a -1 result.
+func recommendedIndex(base simulator.Summary, candidates []simulator.Candidate) (int, string) {
+	for i := range candidates {
+		if !candidates[i].Feasible {
+			continue
+		}
+		if candidates[i].Summary.SimPUHours >= base.SimPUHours {
+			return -1, "every candidate that satisfies the constraints costs at least as much as the current configuration — keep the current configuration"
+		}
+		return i, ""
+	}
+	return -1, "no candidate satisfies the constraints — keep the current configuration, or relax the constraints / widen the search space"
+}
+
+// recommendationLines renders the conclusion: for the recommended candidate,
 // every parameter as "current → recommended" (unchanged parameters marked (keep), so the
 // min PU decision is always shown), followed by the effect of adopting it.
-// A nil top yields the keep-current fallback line.
-func recommendationLines(current map[string]string, base simulator.Summary, top *simulator.Candidate) []string {
+// A nil top yields keepReason as the conclusion.
+func recommendationLines(current map[string]string, base simulator.Summary, top *simulator.Candidate, keepReason string) []string {
 	if top == nil {
-		return []string{"no candidate satisfies the constraints — keep the current configuration, or relax the constraints / widen the search space"}
+		return []string{keepReason}
 	}
 	var lines []string
 	for _, key := range simulator.OverrideKeys {
@@ -301,15 +326,6 @@ func recommendationLines(current map[string]string, base simulator.Summary, top 
 		s.TargetExceededMinutes, s.TargetExceededMinutes-base.TargetExceededMinutes,
 		s.ScaleGapsUnder10Min, s.ScaleGapsUnder10Min-base.ScaleGapsUnder10Min))
 	return lines
-}
-
-func topFeasible(candidates []simulator.Candidate) *simulator.Candidate {
-	for i := range candidates {
-		if candidates[i].Feasible {
-			return &candidates[i]
-		}
-	}
-	return nil
 }
 
 func writeRecommendTable(current map[string]string, base simulator.Summary, candidates []simulator.Candidate, common *commonFlags, top int, showInfeasible bool) {
@@ -385,15 +401,19 @@ func writeRecommendTable(current map[string]string, base simulator.Summary, cand
 		}
 	}
 
-	best := topFeasible(candidates)
+	recIdx, keepReason := recommendedIndex(base, candidates)
+	var best *simulator.Candidate
+	if recIdx >= 0 {
+		best = &candidates[recIdx]
+	}
 	fmt.Println("\nrecommended configuration:")
-	for _, line := range recommendationLines(current, base, best) {
+	for _, line := range recommendationLines(current, base, best, keepReason) {
 		fmt.Printf("  %s\n", line)
 	}
 
 	printMinPUAssessment("base", base)
 	if best != nil {
-		printMinPUAssessment("top candidate", best.Summary)
+		printMinPUAssessment("recommended candidate", best.Summary)
 	}
 
 	if base.LowConfidenceMinutes > 0 {
