@@ -136,12 +136,14 @@ func runRecommend(args []string) error {
 		return err
 	}
 
+	current := simulator.CurrentKnobValues(sa)
+
 	if *htmlPath != "" {
 		f, err := os.Create(*htmlPath)
 		if err != nil {
 			return err
 		}
-		writeRecommendHTML(f, *configPath, baseResult.Summary, candidates)
+		writeRecommendHTML(f, *configPath, current, baseResult.Summary, candidates)
 		if err := f.Close(); err != nil {
 			return err
 		}
@@ -163,7 +165,7 @@ func runRecommend(args []string) error {
 			fmt.Printf("guideline: at most %d scale events beyond 2x/half and %d gaps < 10m allowed (-pu-change-guideline %s)\n",
 				*constraints.MaxScaleStepViolations, *constraints.MaxShortScaleGaps, *puChangeGuideline)
 		}
-		writeRecommendTable(baseResult.Summary, candidates, &common, *top, *showInfeasible)
+		writeRecommendTable(current, baseResult.Summary, candidates, &common, *top, *showInfeasible)
 		return nil
 	default:
 		return fmt.Errorf("unknown format %q", common.format)
@@ -251,7 +253,44 @@ func parseIntList(s string) ([]int, error) {
 	return out, nil
 }
 
-func writeRecommendTable(base simulator.Summary, candidates []simulator.Candidate, common *commonFlags, top int, showInfeasible bool) {
+// recommendationLines renders the conclusion: for the top feasible candidate,
+// every knob as "current → recommended" (unchanged knobs marked (keep), so the
+// min PU answer is always visible), followed by the effect of adopting it.
+// A nil top yields the keep-current fallback line.
+func recommendationLines(current map[string]string, base simulator.Summary, top *simulator.Candidate) []string {
+	if top == nil {
+		return []string{"no candidate satisfies the constraints — keep the current configuration, or relax the constraints / widen the search space"}
+	}
+	var lines []string
+	for _, key := range simulator.OverrideKeys {
+		cur, ok := current[key]
+		if !ok {
+			continue
+		}
+		if next, changed := top.Overrides[key]; changed && next != cur {
+			lines = append(lines, fmt.Sprintf("%s: %s -> %s", key, cur, next))
+		} else {
+			lines = append(lines, fmt.Sprintf("%s: %s (keep)", key, cur))
+		}
+	}
+	s := top.Summary
+	lines = append(lines, fmt.Sprintf("effect: saves %.1f%% PU-hours (%+.1f vs current), above target %.0fm (%+.0f), gaps<10m %d (%+d)",
+		s.PUHoursSavedPercent, s.PUHoursSavedPercent-base.PUHoursSavedPercent,
+		s.TargetExceededMinutes, s.TargetExceededMinutes-base.TargetExceededMinutes,
+		s.ScaleGapsUnder10Min, s.ScaleGapsUnder10Min-base.ScaleGapsUnder10Min))
+	return lines
+}
+
+func topFeasible(candidates []simulator.Candidate) *simulator.Candidate {
+	for i := range candidates {
+		if candidates[i].Feasible {
+			return &candidates[i]
+		}
+	}
+	return nil
+}
+
+func writeRecommendTable(current map[string]string, base simulator.Summary, candidates []simulator.Candidate, common *commonFlags, top int, showInfeasible bool) {
 	feasibleCount := 0
 	for _, c := range candidates {
 		if c.Feasible {
@@ -324,12 +363,15 @@ func writeRecommendTable(base simulator.Summary, candidates []simulator.Candidat
 		}
 	}
 
+	best := topFeasible(candidates)
+	fmt.Println("\nrecommended configuration:")
+	for _, line := range recommendationLines(current, base, best) {
+		fmt.Printf("  %s\n", line)
+	}
+
 	printMinPUAssessment("base", base)
-	for _, c := range candidates {
-		if c.Feasible {
-			printMinPUAssessment("top candidate", c.Summary)
-			break
-		}
+	if best != nil {
+		printMinPUAssessment("top candidate", best.Summary)
 	}
 
 	if base.LowConfidenceMinutes > 0 {
