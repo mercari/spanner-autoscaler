@@ -126,7 +126,7 @@ const (
 // scatter (feasible in the accent hue, infeasible as gray context, the base
 // config as the orange reference), the min-PU assessments, and the full
 // candidate table with rejection reasons as the table view.
-func writeRecommendHTML(w io.Writer, name string, base simulator.Summary, candidates []simulator.Candidate) {
+func writeRecommendHTML(w io.Writer, name string, current map[string]string, base simulator.Summary, candidates []simulator.Candidate) {
 	writePageHead(w, "Recommendation report: "+name)
 
 	feasibleCount := 0
@@ -138,6 +138,8 @@ func writeRecommendHTML(w io.Writer, name string, base simulator.Summary, candid
 	fmt.Fprintf(w, "<h1>Recommendation report</h1>\n<p class=\"sub\">%s — %d candidates (%d feasible) against %d recorded points, %s .. %s — backtest of recorded metrics, not a forecast</p>\n",
 		html.EscapeString(name), len(candidates), feasibleCount, base.DataPoints,
 		base.Start.UTC().Format("2006-01-02"), base.End.UTC().Format("2006-01-02"))
+
+	writeConclusion(w, current, base, topFeasible(candidates))
 
 	fmt.Fprint(w, "<div class=\"kpis\">\n")
 	writeKPI(w, "base PU-hours saved", fmt.Sprintf("%.1f%%", base.PUHoursSavedPercent), "replay of the current config vs recorded")
@@ -179,6 +181,37 @@ func writeRecommendHTML(w io.Writer, name string, base simulator.Summary, candid
 	fmt.Fprint(w, "</table>\n")
 
 	writePageFoot(w)
+}
+
+// writeConclusion leads the report with the answer: every tunable knob as
+// current → recommended (minPU always included, unchanged knobs marked keep)
+// and the effect of adopting the top feasible candidate.
+func writeConclusion(w io.Writer, current map[string]string, base simulator.Summary, top *simulator.Candidate) {
+	fmt.Fprint(w, "<div class=\"conclusion\">\n<b>Recommended configuration</b>\n")
+	if top == nil {
+		fmt.Fprint(w, "<p>No candidate satisfies the constraints — <b>keep the current configuration</b>, or relax the constraints / widen the search space. See the rejection reasons in the table below.</p>\n</div>\n")
+		return
+	}
+	fmt.Fprint(w, "<table>\n<tr><th>knob</th><th>current</th><th>recommended</th></tr>\n")
+	for _, key := range simulator.OverrideKeys {
+		cur, ok := current[key]
+		if !ok {
+			continue
+		}
+		if next, changed := top.Overrides[key]; changed && next != cur {
+			fmt.Fprintf(w, "<tr><td>%s</td><td>%s</td><td class=\"changed\">%s</td></tr>\n",
+				html.EscapeString(key), html.EscapeString(cur), html.EscapeString(next))
+		} else {
+			fmt.Fprintf(w, "<tr><td>%s</td><td>%s</td><td>%s (keep)</td></tr>\n",
+				html.EscapeString(key), html.EscapeString(cur), html.EscapeString(cur))
+		}
+	}
+	fmt.Fprint(w, "</table>\n")
+	s := top.Summary
+	fmt.Fprintf(w, "<div class=\"effect\">effect: saves %.1f%% PU-hours (%+.1f vs current) · above target %.0f min (%+.0f) · gaps&lt;10m %d (%+d)</div>\n</div>\n",
+		s.PUHoursSavedPercent, s.PUHoursSavedPercent-base.PUHoursSavedPercent,
+		s.TargetExceededMinutes, s.TargetExceededMinutes-base.TargetExceededMinutes,
+		s.ScaleGapsUnder10Min, s.ScaleGapsUnder10Min-base.ScaleGapsUnder10Min)
 }
 
 func writeScatter(w io.Writer, base simulator.Summary, candidates []simulator.Candidate) {

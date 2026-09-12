@@ -122,6 +122,41 @@ var OverrideKeys = []string{
 	OverrideTargetTotalCPU,
 }
 
+// CurrentKnobValues renders the base configuration's value for every knob the
+// search space can override, keyed by the Override* names, so outputs can show
+// "current → recommended" for each knob — including the ones a candidate did
+// not touch.
+func CurrentKnobValues(sa *spannerv1beta1.SpannerAutoscaler) map[string]string {
+	sc := sa.Spec.ScaleConfig
+	current := map[string]string{
+		OverrideMinPU:             fmt.Sprintf("%d", sc.ProcessingUnits.Min),
+		OverrideScaledownStepSize: sc.ScaledownStepSize.String(),
+		OverrideScaleupStepSize:   sc.ScaleupStepSize.String(),
+	}
+	if sc.ScaledownInterval != nil {
+		current[OverrideScaledownInterval] = sc.ScaledownInterval.Duration.String()
+	} else {
+		current[OverrideScaledownInterval] = "controller default"
+	}
+	if sc.ScaleupInterval != nil {
+		current[OverrideScaleupInterval] = sc.ScaleupInterval.Duration.String()
+	} else {
+		current[OverrideScaleupInterval] = "controller default"
+	}
+	if len(sc.ScaledownAllowedTimes) > 0 {
+		current[OverrideScaledownAllowedTimes] = strings.Join(sc.ScaledownAllowedTimes, ";")
+	} else {
+		current[OverrideScaledownAllowedTimes] = "none"
+	}
+	if t := sc.TargetCPUUtilization.HighPriority; t != nil {
+		current[OverrideTargetHighPriorityCPU] = fmt.Sprintf("%d", *t)
+	}
+	if t := sc.TargetCPUUtilization.Total; t != nil {
+		current[OverrideTargetTotalCPU] = fmt.Sprintf("%d", *t)
+	}
+	return current
+}
+
 // DescribeOverrides renders a candidate's overrides in canonical key order.
 func DescribeOverrides(overrides map[string]string) string {
 	parts := make([]string, 0, len(overrides))
@@ -431,7 +466,7 @@ func ParseDurations(s string) ([]metav1.Duration, error) {
 		return nil, nil
 	}
 	var out []metav1.Duration
-	for _, part := range strings.Split(s, ",") {
+	for part := range strings.SplitSeq(s, ",") {
 		d, err := time.ParseDuration(strings.TrimSpace(part))
 		if err != nil {
 			return nil, fmt.Errorf("invalid duration %q: %w", part, err)

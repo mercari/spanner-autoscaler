@@ -92,6 +92,10 @@ details { margin: 12px 0; }
 summary { cursor: pointer; color: var(--text-secondary); }
 .verdict { background: var(--surface-2); border-radius: 8px; padding: 10px 14px; margin: 8px 0; }
 .verdict b { font-weight: 600; }
+.conclusion { border-left: 4px solid var(--series-1); background: var(--surface-2); border-radius: 8px; padding: 12px 16px; margin: 14px 0; }
+.conclusion table { margin: 8px 0 6px; }
+.conclusion td.changed { font-weight: 600; }
+.conclusion .effect { color: var(--text-secondary); }
 .infeasible { color: var(--text-secondary); }
 .reason { color: var(--text-secondary); font-size: 12px; }
 `
