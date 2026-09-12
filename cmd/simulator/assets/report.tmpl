@@ -60,6 +60,7 @@
 {{range .Rows}}<tr><td>{{.Parameter}}</td><td>{{.Current}}</td>{{if .Changed}}<td class="changed">{{.Recommended}}</td>{{else}}<td>{{.Recommended}} (keep)</td>{{end}}</tr>
 {{end}}</table>
 <div class="effect">{{.Effect}}</div>
+{{with .Riskier}}<div class="effect">{{.}}</div>{{end}}
 {{end}}</div>
 {{end}}
 

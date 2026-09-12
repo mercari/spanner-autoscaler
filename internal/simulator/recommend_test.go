@@ -304,6 +304,60 @@ func TestFillGuidelineStepCandidates(t *testing.T) {
 	if !slices.Equal(space.ScaleupIntervals, wantUp) {
 		t.Errorf("ScaleupIntervals = %v; want %v", space.ScaleupIntervals, wantUp)
 	}
+
+	// scaleupStepSize is not searched automatically: an empty dimension stays
+	// empty, keeping the configuration's current value.
+	empty := SearchSpace{}
+	empty.FillGuidelineStepCandidates(sa, time.Minute, 55*time.Minute)
+	if len(empty.ScaleupStepSizes) != 0 {
+		t.Errorf("ScaleupStepSizes = %v; want none auto-generated", empty.ScaleupStepSizes)
+	}
+}
+
+func TestRecommendedIndex(t *testing.T) {
+	base := Summary{SimPUHours: 10000, PUHoursSavedPercent: 8}
+	current := map[string]string{OverrideScaledownStepSize: "10%"}
+	mk := func(saved, exceeded float64, step string) Candidate {
+		return Candidate{
+			Feasible:  true,
+			Overrides: map[string]string{OverrideScaledownStepSize: step},
+			Summary: Summary{
+				// Higher savings = lower cost against the same recording.
+				SimPUHours:            10000 * (108 - saved) / 100,
+				PUHoursSavedPercent:   saved,
+				TargetExceededMinutes: exceeded,
+			},
+		}
+	}
+	candidates := []Candidate{
+		mk(19.4, 694, "20%"), // cheapest but riskiest
+		mk(18.9, 500, "10%"), // within 1pt of the best, far less risk
+		mk(10.0, 470, "10%"), // outside the tolerance window
+	}
+
+	recIdx, riskIdx, reason := RecommendedIndex(base, current, candidates, 1.0)
+	if recIdx != 1 || riskIdx != 0 || reason != "" {
+		t.Errorf("RecommendedIndex(tolerance 1.0) = (%d, %d, %q); want the safer near-equal candidate (1) with the cheapest (0) as the riskier alternative", recIdx, riskIdx, reason)
+	}
+
+	// Tolerance 0 always takes the cheapest, with no alternative.
+	recIdx, riskIdx, _ = RecommendedIndex(base, current, candidates, 0)
+	if recIdx != 0 || riskIdx != -1 {
+		t.Errorf("RecommendedIndex(tolerance 0) = (%d, %d); want (0, -1)", recIdx, riskIdx)
+	}
+
+	// Nothing cheaper than base → keep the current configuration.
+	expensive := []Candidate{mk(-2, 100, "10%")}
+	expensive[0].Summary.SimPUHours = 11000
+	if recIdx, riskIdx, reason = RecommendedIndex(base, current, expensive, 1.0); recIdx != -1 || riskIdx != -1 || reason == "" {
+		t.Errorf("RecommendedIndex(costlier than base) = (%d, %d, %q); want keep-current", recIdx, riskIdx, reason)
+	}
+
+	// No feasible candidate at all.
+	infeasible := []Candidate{{Feasible: false}}
+	if recIdx, _, reason = RecommendedIndex(base, current, infeasible, 1.0); recIdx != -1 || reason == "" {
+		t.Errorf("RecommendedIndex(no feasible) = (%d, %q); want keep-current with a reason", recIdx, reason)
+	}
 }
 
 func TestRecommendRejectsInvalidRange(t *testing.T) {

@@ -57,9 +57,11 @@ $ ./bin/simulator help
    ```
 
    `-auto` derives `-min-pu` candidates from percentiles of the PU the
-   recorded workload actually required, and step-size / interval candidates
-   from the PU-change limits; each generated dimension keeps the current
-   value in the running. Explicit candidate lists (for example
+   recorded workload actually required, and scale-down step-size / interval
+   candidates from the PU-change limits; each generated dimension keeps the
+   current value in the running. `scaleupStepSize` is not searched
+   automatically — capping the upward step saves almost nothing while
+   delaying spike response — but explicit candidates can still be given. Explicit candidate lists (for example
    `-min-pu 16000,18000,20000`) replace the manifest's value for that
    parameter and take precedence over `-auto`; unspecified parameters keep
    the manifest's value. `compare` replays several complete manifests side
@@ -67,7 +69,11 @@ $ ./bin/simulator help
 
    A candidate is recommended only when it satisfies every constraint and
    costs less than the current configuration's own replay; otherwise the
-   conclusion says to keep the current configuration.
+   conclusion says to keep the current configuration. Candidates whose
+   savings are within `-savings-tolerance` percentage points of the best
+   (default 1.0) count as equal on cost, and the least risky of them is
+   recommended — the cheapest then appears as a riskier alternative to try
+   after the recommendation has proven out.
 
 ## Constraints and guidelines
 
