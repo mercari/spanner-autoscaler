@@ -374,6 +374,39 @@ func TestRecommendedIndex(t *testing.T) {
 	}
 }
 
+func TestDescribeChangesAndDisplay(t *testing.T) {
+	current := map[string]string{
+		OverrideMinPU:             "20000",
+		OverrideScaledownStepSize: "10%",
+		OverrideScaleupInterval:   "1m0s",
+	}
+	overrides := map[string]string{
+		OverrideMinPU:             "15000",
+		OverrideScaledownStepSize: "10%",  // equals current — must not appear
+		OverrideScaleupInterval:   "1m0s", // equals current — must not appear
+	}
+	if got, want := DescribeChanges(current, overrides), "minPU=15000"; got != want {
+		t.Errorf("DescribeChanges = %q; want %q", got, want)
+	}
+	if got, want := DescribeChanges(current, map[string]string{OverrideMinPU: "20000"}), "(no change vs current)"; got != want {
+		t.Errorf("DescribeChanges(no diff) = %q; want %q", got, want)
+	}
+
+	sa := newAutoscaler(20000, 60000, 40) // intervals left nil in the spec
+	display := CurrentParameterDisplay(sa, time.Minute, 55*time.Minute)
+	if got, want := display[OverrideScaleupInterval], "controller default (1m0s)"; got != want {
+		t.Errorf("display scaleupInterval = %q; want %q", got, want)
+	}
+	if got, want := display[OverrideScaledownInterval], "controller default (55m0s)"; got != want {
+		t.Errorf("display scaledownInterval = %q; want %q", got, want)
+	}
+	// The comparison map keeps plain effective values.
+	values := CurrentParameterValues(sa, time.Minute, 55*time.Minute)
+	if got, want := values[OverrideScaleupInterval], "1m0s"; got != want {
+		t.Errorf("values scaleupInterval = %q; want %q", got, want)
+	}
+}
+
 func TestGroupEquivalent(t *testing.T) {
 	mkSummary := func(cost float64) Summary { return Summary{SimPUHours: cost} }
 	candidates := []Candidate{
