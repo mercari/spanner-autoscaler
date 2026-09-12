@@ -153,7 +153,10 @@ func runSimulate(args []string) error {
 		if err != nil {
 			return err
 		}
-		writeSimulateHTML(f, *configPath, result, targetHigh, targetTotal)
+		if err := writeSimulateHTML(f, *configPath, result, targetHigh, targetTotal); err != nil {
+			f.Close()
+			return err
+		}
 		if err := f.Close(); err != nil {
 			return err
 		}

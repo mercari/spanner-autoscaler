@@ -18,181 +18,410 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"html"
+	"html/template"
 	"io"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/mercari/spanner-autoscaler/internal/simulator"
 )
 
-// The report is a single self-contained HTML file: inline CSS/SVG/JS, no
+// The reports are single self-contained HTML files: inline CSS/SVG/JS, no
 // external resources, light and dark mode from the same validated palette
 // (categorical blue/orange pass the palette validator in both modes; the
 // recorded series uses the de-emphasis gray of the emphasis form, with
 // identity carried by the legend and tooltip, not color alone).
+//
+// Rendering is html/template driven: Go computes view models (coordinates,
+// paths, formatted labels) and the templates own all markup. Chart geometry
+// is fixed, so the plot-box coordinates live directly in the template text.
 
-const reportCSS = `
-:root {
-  color-scheme: light;
-  --surface-1: #fcfcfb; --surface-2: #f3f2ef;
-  --text-primary: #0b0b0b; --text-secondary: #52514e;
-  --grid: #e7e6e2; --ref: #a5a49d;
-  --series-1: #2a78d6; --series-2: #eb6834; --context: #8f8e88;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    color-scheme: dark;
-    --surface-1: #1a1a19; --surface-2: #232322;
-    --text-primary: #ffffff; --text-secondary: #c3c2b7;
-    --grid: #2c2c2a; --ref: #6b6a64;
-    --series-1: #3987e5; --series-2: #d95926; --context: #8a8a84;
-  }
-}
-:root[data-theme="dark"] {
-  color-scheme: dark;
-  --surface-1: #1a1a19; --surface-2: #232322;
-  --text-primary: #ffffff; --text-secondary: #c3c2b7;
-  --grid: #2c2c2a; --ref: #6b6a64;
-  --series-1: #3987e5; --series-2: #d95926; --context: #8a8a84;
-}
-* { box-sizing: border-box; }
-body { margin: 0 auto; padding: 24px 20px 48px; max-width: 1040px;
-  background: var(--surface-1); color: var(--text-primary);
-  font: 14px/1.5 -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif; }
-h1 { font-size: 20px; margin: 0 0 4px; }
-h2 { font-size: 15px; margin: 28px 0 8px; }
-.sub { color: var(--text-secondary); margin: 0 0 16px; }
-.kpis { display: flex; flex-wrap: wrap; gap: 12px; margin: 16px 0; }
-.kpi { background: var(--surface-2); border-radius: 8px; padding: 10px 14px; min-width: 150px; }
-.kpi .label { color: var(--text-secondary); font-size: 12px; }
-.kpi .value { font-size: 22px; font-weight: 600; }
-.kpi .note { color: var(--text-secondary); font-size: 12px; }
-figure.chart { margin: 8px 0 4px; position: relative; }
-.legend { display: flex; gap: 16px; margin: 0 0 4px; color: var(--text-secondary); font-size: 12px; }
-.legend .key { display: inline-block; width: 14px; height: 0; border-top: 3px solid; vertical-align: middle; margin-right: 5px; border-radius: 2px; }
-svg { max-width: 100%; height: auto; display: block; }
-svg text { fill: var(--text-secondary); font-size: 11px; }
-.gridline { stroke: var(--grid); stroke-width: 1; }
-.refline { stroke: var(--ref); stroke-width: 1; }
-.crosshair { stroke: var(--ref); stroke-width: 1; visibility: hidden; }
-.tooltip { position: absolute; pointer-events: none; visibility: hidden;
-  background: var(--surface-2); color: var(--text-primary); border-radius: 6px;
-  padding: 6px 10px; font-size: 12px; box-shadow: 0 2px 8px rgba(0,0,0,.25); max-width: 340px; z-index: 2; }
-.tooltip .t { color: var(--text-secondary); margin-bottom: 2px; }
-.tooltip .row { display: flex; align-items: baseline; gap: 6px; }
-.tooltip .key { display: inline-block; width: 12px; border-top: 3px solid; border-radius: 2px; flex: none; }
-.tooltip .v { font-weight: 600; }
-.tooltip .n { color: var(--text-secondary); }
-table { border-collapse: collapse; font-size: 13px; }
-th, td { text-align: right; padding: 3px 10px; border-bottom: 1px solid var(--grid); }
-th:first-child, td:first-child { text-align: left; }
-details { margin: 12px 0; }
-summary { cursor: pointer; color: var(--text-secondary); }
-.verdict { background: var(--surface-2); border-radius: 8px; padding: 10px 14px; margin: 8px 0; }
-.verdict b { font-weight: 600; }
-.conclusion { border-left: 4px solid var(--series-1); background: var(--surface-2); border-radius: 8px; padding: 12px 16px; margin: 14px 0; }
-.conclusion table { margin: 8px 0 6px; }
-.conclusion td.changed { font-weight: 600; }
-.conclusion .effect { color: var(--text-secondary); }
-.infeasible { color: var(--text-secondary); }
-.reason { color: var(--text-secondary); font-size: 12px; }
-`
+// ---- view models ----
 
-// reportJS drives the crosshair tooltip on line charts and the per-mark
-// tooltip on scatter dots. All user-derived strings are inserted with
-// textContent only.
-const reportJS = `
-function fmtVal(v, unit) {
-  const s = unit === "%" ? v.toFixed(1) : Math.round(v).toLocaleString("en-US");
-  return s + (unit === "%" ? "%" : "");
-}
-function makeTooltip(fig) {
-  const tip = document.createElement("div");
-  tip.className = "tooltip";
-  fig.appendChild(tip);
-  return tip;
-}
-document.querySelectorAll("figure.chart[data-kind=line]").forEach(fig => {
-  const data = JSON.parse(fig.querySelector("script[type='application/json']").textContent);
-  const svg = fig.querySelector("svg");
-  const plot = data.plot;
-  const tip = makeTooltip(fig);
-  const cross = svg.querySelector(".crosshair");
-  function hide() { tip.style.visibility = "hidden"; cross.style.visibility = "hidden"; }
-  svg.addEventListener("pointerleave", hide);
-  svg.addEventListener("pointermove", e => {
-    const rect = svg.getBoundingClientRect();
-    const sx = (e.clientX - rect.left) * (plot.w / rect.width);
-    if (sx < plot.x0 || sx > plot.x1 || data.t.length === 0) { hide(); return; }
-    const frac = (sx - plot.x0) / (plot.x1 - plot.x0);
-    const i = Math.max(0, Math.min(data.t.length - 1, Math.round(frac * (data.t.length - 1))));
-    const px = plot.x0 + (data.t.length === 1 ? 0 : i / (data.t.length - 1) * (plot.x1 - plot.x0));
-    cross.setAttribute("x1", px); cross.setAttribute("x2", px);
-    cross.style.visibility = "visible";
-    tip.replaceChildren();
-    const t = document.createElement("div"); t.className = "t";
-    t.textContent = new Date(data.t[i]).toISOString().slice(0, 16).replace("T", " ") + " UTC";
-    tip.appendChild(t);
-    data.series.forEach(s => {
-      if (s.min[i] === null) return;
-      const row = document.createElement("div"); row.className = "row";
-      const key = document.createElement("span"); key.className = "key"; key.style.borderTopColor = s.color;
-      const v = document.createElement("span"); v.className = "v";
-      v.textContent = Math.abs(s.max[i] - s.min[i]) > (data.unit === "%" ? 0.05 : 0.5)
-        ? fmtVal(s.min[i], data.unit) + "–" + fmtVal(s.max[i], data.unit)
-        : fmtVal(s.mean[i], data.unit);
-      const n = document.createElement("span"); n.className = "n"; n.textContent = s.name;
-      row.append(key, v, n); tip.appendChild(row);
-    });
-    tip.style.visibility = "visible";
-    const fr = fig.getBoundingClientRect();
-    let left = e.clientX - fr.left + 14;
-    if (left + tip.offsetWidth > fr.width) left = e.clientX - fr.left - tip.offsetWidth - 14;
-    tip.style.left = Math.max(0, left) + "px";
-    tip.style.top = (e.clientY - fr.top + 12) + "px";
-  });
-});
-document.querySelectorAll("figure.chart[data-kind=scatter]").forEach(fig => {
-  const tip = makeTooltip(fig);
-  function show(g, cx, cy) {
-    const info = JSON.parse(g.dataset.info);
-    tip.replaceChildren();
-    const t = document.createElement("div"); t.className = "t"; t.textContent = info.label;
-    tip.appendChild(t);
-    info.lines.forEach(l => {
-      const row = document.createElement("div"); row.textContent = l;
-      tip.appendChild(row);
-    });
-    tip.style.visibility = "visible";
-    const fr = fig.getBoundingClientRect();
-    let left = cx - fr.left + 14;
-    if (left + tip.offsetWidth > fr.width) left = cx - fr.left - tip.offsetWidth - 14;
-    tip.style.left = Math.max(0, left) + "px";
-    tip.style.top = (cy - fr.top + 12) + "px";
-  }
-  fig.querySelectorAll("g.dot").forEach(g => {
-    g.addEventListener("pointerenter", e => show(g, e.clientX, e.clientY));
-    g.addEventListener("pointerleave", () => { tip.style.visibility = "hidden"; });
-    g.addEventListener("focus", () => {
-      const r = g.getBoundingClientRect();
-      show(g, r.left + r.width / 2, r.top + r.height / 2);
-    });
-    g.addEventListener("blur", () => { tip.style.visibility = "hidden"; });
-  });
-});
-`
-
-func writePageHead(w io.Writer, title string) {
-	fmt.Fprintf(w, "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>%s</title>\n<style>%s</style>\n</head>\n<body>\n", html.EscapeString(title), reportCSS)
+type legendItem struct {
+	Name  string
+	Color template.CSS
 }
 
-func writePageFoot(w io.Writer) {
-	fmt.Fprintf(w, "<script>%s</script>\n</body>\n</html>\n", reportJS)
+type kpiView struct{ Label, Value, Note string }
+
+type verdictView struct {
+	Label  string
+	MinPU  string
+	Pinned string
+	Floor  string // empty when the run never pinned with usable data
+	Lower  string
+	Raise  string
 }
 
-// ---- time-series chart ----
+type conclusionRow struct {
+	Knob, Current, Recommended string
+	Changed                    bool
+}
+
+type conclusionView struct {
+	None   bool
+	Rows   []conclusionRow
+	Effect string
+}
+
+type tickView struct {
+	Pos      string // formatted coordinate of the tick
+	LabelPos string // formatted coordinate of its label
+	Label    string
+}
+
+type refView struct {
+	Y, LabelY, Label string
+}
+
+type seriesView struct {
+	Color      template.CSS
+	Band, Line string // SVG path data; Band may be empty
+}
+
+type bucketRowView struct {
+	Time  string
+	Cells []string
+}
+
+type lineChartView struct {
+	Title, Unit   string
+	Legend        []legendItem
+	YTicks        []tickView
+	XTicks        []tickView
+	Refs          []refView
+	Series        []seriesView
+	DataJSON      template.JS
+	BucketHeaders []string
+	BucketRows    []bucketRowView
+}
+
+type dotView struct {
+	CX, CY string
+	Color  template.CSS
+	Info   string // JSON consumed by the tooltip script
+}
+
+type scatterView struct {
+	Legend []legendItem
+	YTicks []tickView
+	XTicks []tickView
+	Dots   []dotView
+}
+
+type eventView struct{ Time, From, To, Delta string }
+
+type candidateRowView struct {
+	Label, Error                       string
+	Infeasible                         bool
+	Saved, DSaved, Exceeded, DExceeded string
+	Gaps, Steps, P99, Status           string
+}
+
+type simulatePage struct {
+	CSS     template.CSS
+	JS      template.JS
+	Name    string
+	Period  string
+	Points  int
+	KPIs    []kpiView
+	Verdict verdictView
+	Charts  []lineChartView
+	Events  []eventView
+}
+
+type recommendPage struct {
+	CSS        template.CSS
+	JS         template.JS
+	Name       string
+	Sub        string
+	Conclusion conclusionView
+	KPIs       []kpiView
+	Scatter    scatterView
+	Verdicts   []verdictView
+	Rows       []candidateRowView
+}
+
+// ---- templates ----
+
+var reportTemplates = template.Must(template.New("report").Parse(`
+{{define "head"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.}}</title>
+</head>
+{{end}}
+
+{{define "kpis"}}<div class="kpis">
+{{range .}}<div class="kpi"><div class="label">{{.Label}}</div><div class="value">{{.Value}}</div><div class="note">{{.Note}}</div></div>
+{{end}}</div>
+{{end}}
+
+{{define "verdict"}}<div class="verdict"><b>min PU assessment ({{.Label}})</b> — min {{.MinPU}}, pinned {{.Pinned}} of the run{{with .Floor}}, workload floor while pinned (p95) = {{.}} PU{{end}}<br>lower? {{.Lower}}<br>raise? {{.Raise}}</div>
+{{end}}
+
+{{define "legend"}}<div class="legend">{{range .}}<span><span class="key" style="border-top-color:{{.Color}}"></span>{{.Name}}</span>{{end}}</div>
+{{end}}
+
+{{define "linechart"}}<h2>{{.Title}}</h2>
+<figure class="chart" data-kind="line">
+{{template "legend" .Legend}}
+<svg viewBox="0 0 960 280" role="img" aria-label="{{.Title}}">
+{{range .YTicks}}<line class="gridline" x1="68" y1="{{.Pos}}" x2="940" y2="{{.Pos}}"/><text x="62" y="{{.LabelPos}}" text-anchor="end">{{.Label}}</text>
+{{end}}{{range .XTicks}}<text x="{{.Pos}}" y="268" text-anchor="middle">{{.Label}}</text>
+{{end}}<text x="940" y="268" text-anchor="end">UTC</text>
+{{range .Refs}}<line class="refline" x1="68" y1="{{.Y}}" x2="940" y2="{{.Y}}"/><text x="940" y="{{.LabelY}}" text-anchor="end">{{.Label}}</text>
+{{end}}{{range .Series}}{{if .Band}}<path d="{{.Band}}" fill="{{.Color}}" fill-opacity="0.1" stroke="none"/>
+{{end}}<path d="{{.Line}}" fill="none" stroke="{{.Color}}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+{{end}}<line class="crosshair" x1="0" y1="14" x2="0" y2="250"/>
+</svg>
+<script type="application/json">{{.DataJSON}}</script>
+</figure>
+<details><summary>table view (downsampled buckets)</summary><table>
+<tr><th>time (UTC)</th>{{range .BucketHeaders}}<th>{{.}}</th>{{end}}</tr>
+{{range .BucketRows}}<tr><td>{{.Time}}</td>{{range .Cells}}<td>{{.}}</td>{{end}}</tr>
+{{end}}</table></details>
+{{end}}
+
+{{define "scatter"}}<h2>Savings vs risk</h2>
+<figure class="chart" data-kind="scatter">
+{{template "legend" .Legend}}
+<svg viewBox="0 0 960 400" role="img" aria-label="savings versus risk scatter">
+{{range .YTicks}}<line class="gridline" x1="68" y1="{{.Pos}}" x2="940" y2="{{.Pos}}"/><text x="62" y="{{.LabelPos}}" text-anchor="end">{{.Label}}</text>
+{{end}}{{range .XTicks}}<text x="{{.Pos}}" y="384" text-anchor="middle">{{.Label}}</text>
+{{end}}<text x="940" y="398" text-anchor="end">minutes above target (risk) →</text>
+<text x="68" y="14">PU-hours saved ↑</text>
+{{range .Dots}}<g class="dot" tabindex="0" data-info="{{.Info}}"><circle cx="{{.CX}}" cy="{{.CY}}" r="14" fill="transparent"/><circle cx="{{.CX}}" cy="{{.CY}}" r="5" fill="{{.Color}}" stroke="var(--surface-1)" stroke-width="2"/></g>
+{{end}}</svg>
+</figure>
+{{end}}
+
+{{define "conclusion"}}<div class="conclusion">
+<b>Recommended configuration</b>
+{{if .None}}<p>No candidate satisfies the constraints — <b>keep the current configuration</b>, or relax the constraints / widen the search space. See the rejection reasons in the table below.</p>
+{{else}}<table>
+<tr><th>knob</th><th>current</th><th>recommended</th></tr>
+{{range .Rows}}<tr><td>{{.Knob}}</td><td>{{.Current}}</td>{{if .Changed}}<td class="changed">{{.Recommended}}</td>{{else}}<td>{{.Recommended}} (keep)</td>{{end}}</tr>
+{{end}}</table>
+<div class="effect">{{.Effect}}</div>
+{{end}}</div>
+{{end}}
+
+{{define "simulate"}}{{template "head" "Simulation report"}}
+<body>
+<style>{{.CSS}}</style>
+<h1>Simulation report</h1>
+<p class="sub">{{.Name}} — {{.Period}} ({{.Points}} points) — backtest of recorded metrics, not a forecast</p>
+{{template "kpis" .KPIs}}
+{{template "verdict" .Verdict}}
+{{range .Charts}}{{template "linechart" .}}{{end}}
+<details><summary>scale events ({{len .Events}})</summary><table>
+<tr><th>time (UTC)</th><th>from</th><th>to</th><th>change</th></tr>
+{{range .Events}}<tr><td>{{.Time}}</td><td>{{.From}}</td><td>{{.To}}</td><td>{{.Delta}}</td></tr>
+{{end}}</table></details>
+<script>{{.JS}}</script>
+</body>
+</html>
+{{end}}
+
+{{define "recommend"}}{{template "head" "Recommendation report"}}
+<body>
+<style>{{.CSS}}</style>
+<h1>Recommendation report</h1>
+<p class="sub">{{.Name}} — {{.Sub}} — backtest of recorded metrics, not a forecast</p>
+{{template "conclusion" .Conclusion}}
+{{template "kpis" .KPIs}}
+{{template "scatter" .Scatter}}
+{{range .Verdicts}}{{template "verdict" .}}{{end}}
+<h2>All candidates</h2>
+<table>
+<tr><th>candidate</th><th>saved%</th><th>Δ saved</th><th>above target</th><th>Δ</th><th>gaps&lt;10m</th><th>steps&gt;2x</th><th>p99 hi-CPU</th><th>status</th></tr>
+{{range .Rows}}{{if .Error}}<tr class="infeasible"><td>{{.Label}}</td><td colspan="7"></td><td>error: {{.Error}}</td></tr>
+{{else}}<tr{{if .Infeasible}} class="infeasible"{{end}}><td>{{.Label}}</td><td>{{.Saved}}</td><td>{{.DSaved}}</td><td>{{.Exceeded}}</td><td>{{.DExceeded}}</td><td>{{.Gaps}}</td><td>{{.Steps}}</td><td>{{.P99}}</td><td class="reason">{{.Status}}</td></tr>
+{{end}}{{end}}</table>
+<script>{{.JS}}</script>
+</body>
+</html>
+{{end}}
+`))
+
+// ---- page builders ----
+
+// writeSimulateHTML renders the full report for one simulation run: KPI row,
+// the recorded-vs-simulated PU timeline (emphasis form: the simulation in the
+// accent hue, the recording as gray context), the simulated CPU timeline with
+// target reference lines, the min-PU assessment, and the scale-event table.
+func writeSimulateHTML(w io.Writer, name string, result *simulator.Result, targetHigh, targetTotal int) error {
+	s := result.Summary
+	days := max(s.End.Sub(s.Start).Hours()/24, 1)
+
+	page := simulatePage{
+		CSS:    reportCSS,
+		JS:     reportJS,
+		Name:   name,
+		Period: s.Start.UTC().Format("2006-01-02 15:04") + " .. " + s.End.UTC().Format("2006-01-02 15:04"),
+		Points: s.DataPoints,
+		KPIs: []kpiView{
+			{"PU-hours saved", fmt.Sprintf("%.1f%%", s.PUHoursSavedPercent),
+				fmt.Sprintf("recorded %s → simulated %s", commaInt(int(s.ActualPUHours)), commaInt(int(s.SimPUHours)))},
+			{"above target", fmt.Sprintf("%.0f min", s.TargetExceededMinutes),
+				fmt.Sprintf("%.1f min/day", s.TargetExceededMinutes/days)},
+			{"pinned at min PU", fmt.Sprintf("%.0f%%", s.MinPinnedPercent),
+				fmt.Sprintf("workload floor p95 %s PU", commaInt(s.RequiredPUAtMinP95))},
+			{"scale events", fmt.Sprintf("%d ↑ / %d ↓", s.ScaleUps, s.ScaleDowns),
+				fmt.Sprintf("%d steps >2x, %d gaps <10m", s.ScaleStepViolations, s.ScaleGapsUnder10Min)},
+			{"low confidence", fmt.Sprintf("%.0f min", s.LowConfidenceMinutes),
+				"recorded CPU above the model threshold"},
+		},
+		Verdict: buildVerdict("this config", s),
+	}
+
+	times, simPU := downsample(result.Points, buckets, func(p simulator.SimPoint) (float64, bool) {
+		return float64(p.SimPU), true
+	})
+	_, actualPU := downsample(result.Points, buckets, func(p simulator.SimPoint) (float64, bool) {
+		return float64(p.ActualPU), true
+	})
+	page.Charts = append(page.Charts, buildLineChart("Processing units — simulated vs recorded", "PU", times, []tsSeries{
+		{Name: "simulated", Color: "var(--series-1)", Buckets: simPU},
+		{Name: "recorded", Color: "var(--context)", Buckets: actualPU},
+	}, nil))
+
+	var cpuSeries []tsSeries
+	var refs []refLine
+	if _, hp := downsample(result.Points, buckets, simHighCPU); hasData(hp) {
+		cpuSeries = append(cpuSeries, tsSeries{Name: "high-priority (simulated)", Color: "var(--series-1)", Buckets: hp})
+		if targetHigh > 0 {
+			refs = append(refs, refLine{Y: float64(targetHigh), Label: fmt.Sprintf("high-pri target %d%%", targetHigh)})
+		}
+	}
+	if _, tt := downsample(result.Points, buckets, simTotalCPU); hasData(tt) {
+		cpuSeries = append(cpuSeries, tsSeries{Name: "total (simulated)", Color: "var(--series-2)", Buckets: tt})
+		if targetTotal > 0 {
+			refs = append(refs, refLine{Y: float64(targetTotal), Label: fmt.Sprintf("total target %d%%", targetTotal)})
+		}
+	}
+	if len(cpuSeries) > 0 {
+		page.Charts = append(page.Charts, buildLineChart("Simulated CPU utilization", "%", times, cpuSeries, refs))
+	}
+
+	for _, e := range result.Events {
+		page.Events = append(page.Events, eventView{
+			Time:  e.Time.UTC().Format("2006-01-02 15:04"),
+			From:  commaInt(e.FromPU),
+			To:    commaInt(e.ToPU),
+			Delta: fmt.Sprintf("%+d", e.ToPU-e.FromPU),
+		})
+	}
+
+	return reportTemplates.ExecuteTemplate(w, "simulate", page)
+}
+
+// writeRecommendHTML renders the candidate ranking visually: the conclusion
+// block up front (current → recommended per knob), a savings-vs-risk scatter
+// (feasible candidates in the accent hue, infeasible as gray context, the
+// base config as the orange reference), the min-PU assessments, and the full
+// candidate table with rejection reasons as the table view.
+func writeRecommendHTML(w io.Writer, name string, current map[string]string, base simulator.Summary, candidates []simulator.Candidate) error {
+	feasibleCount := 0
+	for _, c := range candidates {
+		if c.Feasible {
+			feasibleCount++
+		}
+	}
+
+	page := recommendPage{
+		CSS:  reportCSS,
+		JS:   reportJS,
+		Name: name,
+		Sub: fmt.Sprintf("%d candidates (%d feasible) against %d recorded points, %s .. %s",
+			len(candidates), feasibleCount, base.DataPoints,
+			base.Start.UTC().Format("2006-01-02"), base.End.UTC().Format("2006-01-02")),
+		Conclusion: buildConclusion(current, base, topFeasible(candidates)),
+		KPIs: []kpiView{
+			{"base PU-hours saved", fmt.Sprintf("%.1f%%", base.PUHoursSavedPercent), "replay of the current config vs recorded"},
+			{"base above target", fmt.Sprintf("%.0f min", base.TargetExceededMinutes), "risk reference for the deltas"},
+			{"feasible candidates", fmt.Sprintf("%d / %d", feasibleCount, len(candidates)), "under the given constraints"},
+		},
+		Scatter:  buildScatter(base, candidates),
+		Verdicts: []verdictView{buildVerdict("base", base)},
+	}
+	if best := topFeasible(candidates); best != nil {
+		page.Verdicts = append(page.Verdicts, buildVerdict("top candidate", best.Summary))
+	}
+
+	for _, c := range candidates {
+		row := candidateRowView{
+			Label: simulator.DescribeOverrides(c.Overrides),
+			Error: c.Error,
+		}
+		if c.Error == "" {
+			cs := c.Summary
+			row.Infeasible = !c.Feasible
+			row.Saved = fmt.Sprintf("%.1f%%", cs.PUHoursSavedPercent)
+			row.DSaved = fmt.Sprintf("%+.1f", cs.PUHoursSavedPercent-base.PUHoursSavedPercent)
+			row.Exceeded = fmt.Sprintf("%.0f min", cs.TargetExceededMinutes)
+			row.DExceeded = fmt.Sprintf("%+.0f", cs.TargetExceededMinutes-base.TargetExceededMinutes)
+			row.Gaps = strconv.Itoa(cs.ScaleGapsUnder10Min)
+			row.Steps = strconv.Itoa(cs.ScaleStepViolations)
+			row.P99 = formatP99(cs.SimHighPriorityCPU)
+			row.Status = "feasible"
+			if !c.Feasible {
+				row.Status = "infeasible: " + strings.Join(c.InfeasibleReasons, "; ")
+			}
+		}
+		page.Rows = append(page.Rows, row)
+	}
+
+	return reportTemplates.ExecuteTemplate(w, "recommend", page)
+}
+
+func buildVerdict(label string, s simulator.Summary) verdictView {
+	a := s.AssessMinPU()
+	v := verdictView{
+		Label:  label,
+		MinPU:  commaInt(s.SpecMinPU),
+		Pinned: fmt.Sprintf("%.0f%%", s.MinPinnedPercent),
+		Lower:  a.Lower,
+		Raise:  a.Raise,
+	}
+	if s.RequiredPUAtMinP95 > 0 {
+		v.Floor = commaInt(s.RequiredPUAtMinP95)
+	}
+	return v
+}
+
+func buildConclusion(current map[string]string, base simulator.Summary, top *simulator.Candidate) conclusionView {
+	if top == nil {
+		return conclusionView{None: true}
+	}
+	view := conclusionView{}
+	for _, key := range simulator.OverrideKeys {
+		cur, ok := current[key]
+		if !ok {
+			continue
+		}
+		row := conclusionRow{Knob: key, Current: cur, Recommended: cur}
+		if next, changed := top.Overrides[key]; changed && next != cur {
+			row.Recommended = next
+			row.Changed = true
+		}
+		view.Rows = append(view.Rows, row)
+	}
+	s := top.Summary
+	view.Effect = fmt.Sprintf("effect: saves %.1f%% PU-hours (%+.1f vs current) · above target %.0f min (%+.0f) · gaps<10m %d (%+d)",
+		s.PUHoursSavedPercent, s.PUHoursSavedPercent-base.PUHoursSavedPercent,
+		s.TargetExceededMinutes, s.TargetExceededMinutes-base.TargetExceededMinutes,
+		s.ScaleGapsUnder10Min, s.ScaleGapsUnder10Min-base.ScaleGapsUnder10Min)
+	return view
+}
+
+// ---- line-chart geometry ----
 
 // tsBucket is one downsampled slot of a time series. Min/max keep the 1-minute
 // spikes honest at any zoom; the mean line carries the trend.
@@ -203,7 +432,7 @@ type tsBucket struct {
 
 type tsSeries struct {
 	Name    string
-	Color   string // resolved CSS variable, e.g. var(--series-1)
+	Color   template.CSS
 	Buckets []tsBucket
 }
 
@@ -211,6 +440,17 @@ type refLine struct {
 	Y     float64
 	Label string
 }
+
+// The fixed plot box; the same values are hardcoded in the template markup.
+const (
+	plotX0    = 68.0
+	plotX1    = 940.0
+	plotY0    = 14.0
+	plotY1    = 250.0
+	scatterY0 = 16.0
+	scatterY1 = 366.0
+	buckets   = 440
+)
 
 // downsample splits points into n uniform time buckets and aggregates value(p)
 // per bucket. Returned bucket midpoints are shared by every series of a chart.
@@ -226,7 +466,7 @@ func downsample(points []simulator.SimPoint, n int, value func(simulator.SimPoin
 	for i := range n {
 		times[i] = start + span*int64(2*i+1)/int64(2*n)
 	}
-	buckets := make([]tsBucket, n)
+	bs := make([]tsBucket, n)
 	counts := make([]int, n)
 	for _, p := range points {
 		v, ok := value(p)
@@ -234,7 +474,7 @@ func downsample(points []simulator.SimPoint, n int, value func(simulator.SimPoin
 			continue
 		}
 		i := min(int((p.Time.UnixMilli()-start)*int64(n)/span), n-1)
-		b := &buckets[i]
+		b := &bs[i]
 		if !b.Has {
 			*b = tsBucket{Min: v, Max: v, Has: true}
 		} else {
@@ -244,28 +484,15 @@ func downsample(points []simulator.SimPoint, n int, value func(simulator.SimPoin
 		b.Mean += v
 		counts[i]++
 	}
-	for i := range buckets {
+	for i := range bs {
 		if counts[i] > 0 {
-			buckets[i].Mean /= float64(counts[i])
+			bs[i].Mean /= float64(counts[i])
 		}
 	}
-	return times, buckets
+	return times, bs
 }
 
-const (
-	chartW  = 960
-	chartH  = 280
-	plotX0  = 68.0
-	plotX1  = chartW - 20.0
-	plotY0  = 14.0
-	plotY1  = chartH - 30.0
-	buckets = 440
-)
-
-// writeLineChart renders one figure: legend, SVG (grid, axes, per-series
-// min-max band at 10% opacity plus a 2px mean line), reference lines, and the
-// embedded JSON that powers the crosshair tooltip.
-func writeLineChart(w io.Writer, title, unit string, times []int64, series []tsSeries, refs []refLine) {
+func buildLineChart(title, unit string, times []int64, series []tsSeries, refs []refLine) lineChartView {
 	var yMax float64
 	for _, s := range series {
 		for _, b := range s.Buckets {
@@ -291,55 +518,50 @@ func writeLineChart(w io.Writer, title, unit string, times []int64, series []tsS
 	}
 	yAt := func(v float64) float64 { return plotY1 - v/yTop*(plotY1-plotY0) }
 
-	fmt.Fprintf(w, "<h2>%s</h2>\n<figure class=\"chart\" data-kind=\"line\">\n", html.EscapeString(title))
-
-	fmt.Fprint(w, "<div class=\"legend\">")
+	view := lineChartView{Title: title, Unit: unit}
 	for _, s := range series {
-		fmt.Fprintf(w, "<span><span class=\"key\" style=\"border-top-color:%s\"></span>%s</span>", s.Color, html.EscapeString(s.Name))
+		view.Legend = append(view.Legend, legendItem{Name: s.Name, Color: s.Color})
 	}
-	fmt.Fprint(w, "</div>\n")
-
-	fmt.Fprintf(w, "<svg viewBox=\"0 0 %d %d\" role=\"img\" aria-label=\"%s\">\n", chartW, chartH, html.EscapeString(title))
-
-	// Horizontal gridlines + y tick labels.
 	for _, t := range ticks {
 		y := yAt(t)
-		fmt.Fprintf(w, "<line class=\"gridline\" x1=\"%.1f\" y1=\"%.1f\" x2=\"%.1f\" y2=\"%.1f\"/>\n", plotX0, y, plotX1, y)
-		fmt.Fprintf(w, "<text x=\"%.1f\" y=\"%.1f\" text-anchor=\"end\">%s</text>\n", plotX0-6, y+4, formatTick(t, unit))
+		view.YTicks = append(view.YTicks, tickView{Pos: coord(y), LabelPos: coord(y + 4), Label: formatTick(t, unit)})
 	}
-	// X tick labels.
 	for _, i := range xTickIndexes(len(times)) {
-		fmt.Fprintf(w, "<text x=\"%.1f\" y=\"%.1f\" text-anchor=\"middle\">%s</text>\n",
-			xAt(i), plotY1+18, time.UnixMilli(times[i]).UTC().Format("01-02"))
+		view.XTicks = append(view.XTicks, tickView{
+			Pos:   coord(xAt(i)),
+			Label: time.UnixMilli(times[i]).UTC().Format("01-02"),
+		})
 	}
-	fmt.Fprintf(w, "<text x=\"%.1f\" y=\"%.1f\" text-anchor=\"end\">UTC</text>\n", plotX1, plotY1+18)
-
-	// Reference lines with direct labels.
 	for _, r := range refs {
 		y := yAt(r.Y)
-		fmt.Fprintf(w, "<line class=\"refline\" x1=\"%.1f\" y1=\"%.1f\" x2=\"%.1f\" y2=\"%.1f\"/>\n", plotX0, y, plotX1, y)
-		fmt.Fprintf(w, "<text x=\"%.1f\" y=\"%.1f\" text-anchor=\"end\">%s</text>\n", plotX1, y-4, html.EscapeString(r.Label))
+		view.Refs = append(view.Refs, refView{Y: coord(y), LabelY: coord(y - 4), Label: r.Label})
 	}
-
 	for _, s := range series {
 		band, line := seriesPaths(s.Buckets, xAt, yAt)
-		if band != "" {
-			fmt.Fprintf(w, "<path d=\"%s\" fill=\"%s\" fill-opacity=\"0.1\" stroke=\"none\"/>\n", band, s.Color)
-		}
-		if line != "" {
-			fmt.Fprintf(w, "<path d=\"%s\" fill=\"none\" stroke=\"%s\" stroke-width=\"2\" stroke-linejoin=\"round\" stroke-linecap=\"round\"/>\n", line, s.Color)
-		}
+		view.Series = append(view.Series, seriesView{Color: s.Color, Band: band, Line: line})
 	}
+	view.DataJSON = chartJSON(unit, times, series)
 
-	fmt.Fprintf(w, "<line class=\"crosshair\" x1=\"0\" y1=\"%.1f\" x2=\"0\" y2=\"%.1f\"/>\n", plotY0, plotY1)
-	fmt.Fprint(w, "</svg>\n")
-
-	writeChartJSON(w, unit, times, series)
-	fmt.Fprint(w, "</figure>\n")
-
-	writeBucketTable(w, unit, times, series)
+	for _, s := range series {
+		view.BucketHeaders = append(view.BucketHeaders, s.Name+" (min)", s.Name+" (max)")
+	}
+	for i, t := range times {
+		row := bucketRowView{Time: time.UnixMilli(t).UTC().Format("2006-01-02 15:04")}
+		for _, s := range series {
+			b := s.Buckets[i]
+			if !b.Has {
+				row.Cells = append(row.Cells, "", "")
+				continue
+			}
+			row.Cells = append(row.Cells, formatTick(b.Min, unit), formatTick(b.Max, unit))
+		}
+		view.BucketRows = append(view.BucketRows, row)
+	}
+	return view
 }
 
+// seriesPaths returns the min-max envelope (a closed band) and the mean line
+// as SVG path data. Gaps in the data lift the pen.
 func seriesPaths(bs []tsBucket, xAt func(int) float64, yAt func(float64) float64) (band, line string) {
 	var upper, lower, mean strings.Builder
 	pen := "M"
@@ -366,13 +588,16 @@ func seriesPaths(bs []tsBucket, xAt func(int) float64, yAt func(float64) float64
 	return upper.String() + "L" + back.String() + "Z", mean.String()
 }
 
-func writeChartJSON(w io.Writer, unit string, times []int64, series []tsSeries) {
+// chartJSON is the payload behind the crosshair tooltip. Marked template.JS:
+// the content is produced entirely by encoding/json over data this program
+// computed.
+func chartJSON(unit string, times []int64, series []tsSeries) template.JS {
 	type jsSeries struct {
-		Name  string     `json:"name"`
-		Color string     `json:"color"`
-		Min   []*float64 `json:"min"`
-		Max   []*float64 `json:"max"`
-		Mean  []*float64 `json:"mean"`
+		Name  string       `json:"name"`
+		Color template.CSS `json:"color"`
+		Min   []*float64   `json:"min"`
+		Max   []*float64   `json:"max"`
+		Mean  []*float64   `json:"mean"`
 	}
 	payload := struct {
 		T      []int64            `json:"t"`
@@ -382,7 +607,7 @@ func writeChartJSON(w io.Writer, unit string, times []int64, series []tsSeries) 
 	}{
 		T:    times,
 		Unit: unit,
-		Plot: map[string]float64{"x0": plotX0, "x1": plotX1, "w": chartW},
+		Plot: map[string]float64{"x0": plotX0, "x1": plotX1, "w": 960},
 	}
 	for _, s := range series {
 		js := jsSeries{Name: s.Name, Color: s.Color}
@@ -401,36 +626,118 @@ func writeChartJSON(w io.Writer, unit string, times []int64, series []tsSeries) 
 		payload.Series = append(payload.Series, js)
 	}
 	buf, _ := json.Marshal(payload)
-	// </script> cannot appear in the marshaled output: JSON strings here are
-	// only series names we control, but escape defensively anyway.
-	fmt.Fprintf(w, "<script type=\"application/json\">%s</script>\n",
-		strings.ReplaceAll(string(buf), "</", "<\\/"))
+	return template.JS(strings.ReplaceAll(string(buf), "</", "<\\/")) //nolint:gosec // program-generated JSON, see above
 }
 
-// writeBucketTable is the table view backing the chart: the same downsampled
-// buckets, so every plotted value is reachable without hover.
-func writeBucketTable(w io.Writer, unit string, times []int64, series []tsSeries) {
-	fmt.Fprint(w, "<details><summary>table view (downsampled buckets)</summary><table>\n<tr><th>time (UTC)</th>")
-	for _, s := range series {
-		fmt.Fprintf(w, "<th>%s (min)</th><th>%s (max)</th>", html.EscapeString(s.Name), html.EscapeString(s.Name))
+// ---- scatter geometry ----
+
+func buildScatter(base simulator.Summary, candidates []simulator.Candidate) scatterView {
+	type dot struct {
+		x, y  float64
+		color template.CSS
+		info  map[string]any
 	}
-	fmt.Fprint(w, "</tr>\n")
-	for i, t := range times {
-		fmt.Fprintf(w, "<tr><td>%s</td>", time.UnixMilli(t).UTC().Format("2006-01-02 15:04"))
-		for _, s := range series {
-			b := s.Buckets[i]
-			if !b.Has {
-				fmt.Fprint(w, "<td></td><td></td>")
-				continue
-			}
-			fmt.Fprintf(w, "<td>%s</td><td>%s</td>", formatTick(b.Min, unit), formatTick(b.Max, unit))
+	dots := []dot{{
+		x: base.TargetExceededMinutes, y: base.PUHoursSavedPercent, color: "var(--series-2)",
+		info: map[string]any{"label": "(base) current config", "lines": []string{
+			fmt.Sprintf("saved %.1f%%", base.PUHoursSavedPercent),
+			fmt.Sprintf("above target %.0f min", base.TargetExceededMinutes),
+		}},
+	}}
+	for _, c := range candidates {
+		if c.Error != "" {
+			continue
 		}
-		fmt.Fprint(w, "</tr>\n")
+		cs := c.Summary
+		color := template.CSS("var(--context)")
+		if c.Feasible {
+			color = "var(--series-1)"
+		}
+		lines := []string{
+			fmt.Sprintf("saved %.1f%% (%+.1f vs base)", cs.PUHoursSavedPercent, cs.PUHoursSavedPercent-base.PUHoursSavedPercent),
+			fmt.Sprintf("above target %.0f min (%+.0f)", cs.TargetExceededMinutes, cs.TargetExceededMinutes-base.TargetExceededMinutes),
+			fmt.Sprintf("gaps<10m %d (%+d), steps>2x %d", cs.ScaleGapsUnder10Min, cs.ScaleGapsUnder10Min-base.ScaleGapsUnder10Min, cs.ScaleStepViolations),
+		}
+		for _, r := range c.InfeasibleReasons {
+			lines = append(lines, "infeasible: "+r)
+		}
+		dots = append(dots, dot{
+			x: cs.TargetExceededMinutes, y: cs.PUHoursSavedPercent, color: color,
+			info: map[string]any{"label": simulator.DescribeOverrides(c.Overrides), "lines": lines},
+		})
 	}
-	fmt.Fprint(w, "</table></details>\n")
+
+	var xMax, yMax, yMin float64
+	for _, d := range dots {
+		xMax = max(xMax, d.x)
+		yMax = max(yMax, d.y)
+		yMin = min(yMin, d.y)
+	}
+	xTicks := niceTicks(xMax * 1.05)
+	yTicks := niceTicks(max(yMax, 1) * 1.1)
+	xTop := xTicks[len(xTicks)-1]
+	yTop := yTicks[len(yTicks)-1]
+	yBottom := min(yMin*1.1, 0.0)
+
+	xAt := func(v float64) float64 { return plotX0 + v/xTop*(plotX1-plotX0) }
+	yAt := func(v float64) float64 {
+		return scatterY1 - (v-yBottom)/(yTop-yBottom)*(scatterY1-scatterY0)
+	}
+
+	view := scatterView{
+		Legend: []legendItem{
+			{"feasible candidate", "var(--series-1)"},
+			{"infeasible candidate", "var(--context)"},
+			{"current config (base)", "var(--series-2)"},
+		},
+	}
+	for _, t := range yTicks {
+		if t > yTop {
+			break
+		}
+		y := yAt(t)
+		view.YTicks = append(view.YTicks, tickView{Pos: coord(y), LabelPos: coord(y + 4), Label: formatTick(t, "%")})
+	}
+	for _, t := range xTicks {
+		view.XTicks = append(view.XTicks, tickView{Pos: coord(xAt(t)), Label: commaInt(int(t))})
+	}
+	for _, d := range dots {
+		info, _ := json.Marshal(d.info)
+		view.Dots = append(view.Dots, dotView{
+			CX: coord(xAt(d.x)), CY: coord(yAt(d.y)), Color: d.color, Info: string(info),
+		})
+	}
+	return view
 }
 
 // ---- helpers ----
+
+func simHighCPU(p simulator.SimPoint) (float64, bool) {
+	if p.SimHighCPU == nil {
+		return 0, false
+	}
+	return *p.SimHighCPU, true
+}
+
+func simTotalCPU(p simulator.SimPoint) (float64, bool) {
+	if p.SimTotalCPU == nil {
+		return 0, false
+	}
+	return *p.SimTotalCPU, true
+}
+
+func hasData(bs []tsBucket) bool {
+	for _, b := range bs {
+		if b.Has {
+			return true
+		}
+	}
+	return false
+}
+
+func coord(v float64) string {
+	return strconv.FormatFloat(v, 'f', 1, 64)
+}
 
 func niceTicks(maxVal float64) []float64 {
 	if maxVal <= 0 {
@@ -466,10 +773,10 @@ func formatTick(v float64, unit string) string {
 }
 
 func commaInt(v int) string {
-	s := fmt.Sprintf("%d", v)
 	if v < 0 {
 		return "-" + commaInt(-v)
 	}
+	s := strconv.Itoa(v)
 	var out strings.Builder
 	for i, r := range s {
 		if i > 0 && (len(s)-i)%3 == 0 {
@@ -490,19 +797,4 @@ func xTickIndexes(n int) []int {
 		idx = append(idx, i*(n-1)/max(count-1, 1))
 	}
 	return idx
-}
-
-func writeKPI(w io.Writer, label, value, note string) {
-	fmt.Fprintf(w, "<div class=\"kpi\"><div class=\"label\">%s</div><div class=\"value\">%s</div><div class=\"note\">%s</div></div>\n",
-		html.EscapeString(label), html.EscapeString(value), html.EscapeString(note))
-}
-
-func writeMinPUVerdict(w io.Writer, label string, s simulator.Summary) {
-	a := s.AssessMinPU()
-	fmt.Fprintf(w, "<div class=\"verdict\"><b>min PU assessment (%s)</b> — min %s, pinned %.0f%% of the run",
-		html.EscapeString(label), commaInt(s.SpecMinPU), s.MinPinnedPercent)
-	if s.RequiredPUAtMinP95 > 0 {
-		fmt.Fprintf(w, ", workload floor while pinned (p95) = %s PU", commaInt(s.RequiredPUAtMinP95))
-	}
-	fmt.Fprintf(w, "<br>lower? %s<br>raise? %s</div>\n", html.EscapeString(a.Lower), html.EscapeString(a.Raise))
 }
