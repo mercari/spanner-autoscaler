@@ -87,8 +87,9 @@ Rejected candidates are listed with the specific constraint they broke.
   adopting the top candidate.
 - The min PU assessment answers the two directions separately: whether the
   minimum can go lower (time pinned at the minimum and the workload's p95
-  requirement while pinned) and whether raising it would absorb overshoot
-  (the share of above-target minutes observed at the minimum).
+  requirement while pinned) and whether raising it
+  would reduce the time above target (the share of above-target minutes
+  observed while the instance sits at the minimum).
 - `low confidence` counts the minutes whose recorded CPU exceeds
   `-low-confidence-cpu` (default 50%). The counterfactual CPU model assumes
   `cpu = workload / PU`; when the recorded CPU was that high, the workload
