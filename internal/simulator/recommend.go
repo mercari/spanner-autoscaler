@@ -96,6 +96,10 @@ type Candidate struct {
 	// constraints it broke and by how much.
 	InfeasibleReasons []string `json:"infeasibleReasons,omitempty"`
 	Error             string   `json:"error,omitempty"`
+	// Autoscaler is the base configuration with this candidate's overrides
+	// applied, so callers can re-run the candidate (e.g. to chart its full
+	// time series). Excluded from JSON output.
+	Autoscaler *spannerv1beta1.SpannerAutoscaler `json:"-"`
 }
 
 // Override parameter names used as Overrides keys, in display order.
@@ -237,7 +241,7 @@ func evaluate(base Config, combo []override, constraints Constraints, points []P
 		overrides[o.key] = o.value
 	}
 
-	c := Candidate{Overrides: overrides}
+	c := Candidate{Overrides: overrides, Autoscaler: sa}
 
 	if minPU, maxPU := sa.Spec.ScaleConfig.ProcessingUnits.Min, sa.Spec.ScaleConfig.ProcessingUnits.Max; minPU > maxPU {
 		c.Error = fmt.Sprintf("min PU %d exceeds max PU %d", minPU, maxPU)

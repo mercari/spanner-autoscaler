@@ -87,6 +87,7 @@
 <p class="sub">{{.Sub}}</p>
 {{template "conclusion" .Conclusion}}
 {{template "kpis" .KPIs}}
+{{range .Charts}}{{template "linechart" .}}{{end}}
 {{template "scatter" .Scatter}}
 {{range .Verdicts}}{{template "verdict" .}}{{end}}
 <h2>All candidates</h2>
