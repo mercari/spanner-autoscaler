@@ -21,6 +21,7 @@ import (
 	"html/template"
 	"io"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -66,7 +67,7 @@ type conclusionView struct {
 	Reason  string
 	Rows    []conclusionRow
 	Effect  string
-	Riskier string
+	Further string
 }
 
 type tickView struct {
@@ -134,6 +135,10 @@ type simulatePage struct {
 	Events  []eventView
 }
 
+// htmlTopGroups caps the main candidate table of the HTML report; the
+// remaining outcome groups collapse into a details section.
+const htmlTopGroups = 10
+
 type recommendPage struct {
 	CSS        template.CSS
 	JS         template.JS
@@ -144,6 +149,7 @@ type recommendPage struct {
 	Scatter    scatterView
 	Verdicts   []verdictView
 	Rows       []candidateRowView
+	MoreRows   []candidateRowView
 }
 
 // ---- page builders ----
@@ -199,7 +205,7 @@ func writeSimulateHTML(w io.Writer, result *simulator.Result, targetHigh, target
 // topResult, when non-nil, is a full re-run of the top feasible candidate; its
 // PU/CPU timelines are embedded so the recommendation can be judged from the
 // simulated behavior, not only from aggregate numbers.
-func writeRecommendHTML(w io.Writer, current map[string]string, base simulator.Summary, candidates []simulator.Candidate, savingsTolerance float64, topResult *simulator.Result, topTargetHigh, topTargetTotal int) error {
+func writeRecommendHTML(w io.Writer, current map[string]string, base simulator.Summary, candidates []simulator.Candidate, savingsTolerance float64, maxChanges int, topResult *simulator.Result, topTargetHigh, topTargetTotal int) error {
 	feasibleCount := 0
 	for _, c := range candidates {
 		if c.Feasible {
@@ -213,7 +219,7 @@ func writeRecommendHTML(w io.Writer, current map[string]string, base simulator.S
 		Sub: fmt.Sprintf("%d candidates (%d feasible) against %d recorded points, %s .. %s",
 			len(candidates), feasibleCount, base.DataPoints,
 			base.Start.UTC().Format("2006-01-02"), base.End.UTC().Format("2006-01-02")),
-		Conclusion: buildConclusion(current, base, candidates, savingsTolerance),
+		Conclusion: buildConclusion(current, base, candidates, savingsTolerance, maxChanges),
 		KPIs: []kpiView{
 			{"base PU-hours saved", fmt.Sprintf("%.1f%%", base.PUHoursSavedPercent), "replay of the current config vs recorded"},
 			{"base above target", fmt.Sprintf("%.0f min", base.TargetExceededMinutes), "risk reference for the deltas"},
@@ -227,18 +233,27 @@ func writeRecommendHTML(w io.Writer, current map[string]string, base simulator.S
 			"Processing units — recommended candidate (simulated) vs recorded",
 			"CPU utilization — recommended candidate (simulated)")
 	}
-	if idx, _, _ := simulator.RecommendedIndex(base, current, candidates, savingsTolerance); idx >= 0 {
-		page.Verdicts = append(page.Verdicts, buildVerdict("recommended candidate", candidates[idx].Summary))
+	recIdx, _, _ := simulator.RecommendedIndex(base, current, candidates, savingsTolerance, maxChanges)
+	if recIdx >= 0 {
+		page.Verdicts = append(page.Verdicts, buildVerdict("recommended candidate", candidates[recIdx].Summary))
 	}
 
-	// Mark the row the conclusion recommends (if any), so the two sections
-	// cross-reference without comparing values by hand.
-	recIdx, _, _ := simulator.RecommendedIndex(base, current, candidates, savingsTolerance)
-	for i, c := range candidates {
+	// One row per distinct outcome, the recommended combination as its
+	// group's representative; the first htmlTopGroups groups form the main
+	// table and the rest collapse into a details section.
+	for rank, g := range simulator.GroupEquivalent(candidates) {
+		rep := g[0]
+		if slices.Contains(g, recIdx) {
+			rep = recIdx
+		}
+		c := candidates[rep]
 		row := candidateRowView{
-			Rank:  strconv.Itoa(i + 1),
+			Rank:  strconv.Itoa(rank + 1),
 			Label: simulator.DescribeOverrides(c.Overrides),
 			Error: c.Error,
+		}
+		if len(g) > 1 {
+			row.Label += fmt.Sprintf(" (+%d equivalent)", len(g)-1)
 		}
 		if c.Error == "" {
 			cs := c.Summary
@@ -253,12 +268,16 @@ func writeRecommendHTML(w io.Writer, current map[string]string, base simulator.S
 			row.Status = "feasible"
 			if !c.Feasible {
 				row.Status = "infeasible: " + strings.Join(c.InfeasibleReasons, "; ")
-			} else if i == recIdx {
+			} else if rep == recIdx {
 				row.Recommended = true
 				row.Status = "recommended"
 			}
 		}
-		page.Rows = append(page.Rows, row)
+		if len(page.Rows) < htmlTopGroups {
+			page.Rows = append(page.Rows, row)
+		} else {
+			page.MoreRows = append(page.MoreRows, row)
+		}
 	}
 
 	return reportTemplates.ExecuteTemplate(w, "recommend", page)
@@ -314,15 +333,15 @@ func buildVerdict(label string, s simulator.Summary) verdictView {
 	return v
 }
 
-func buildConclusion(current map[string]string, base simulator.Summary, candidates []simulator.Candidate, savingsTolerance float64) conclusionView {
-	idx, riskIdx, keepReason := simulator.RecommendedIndex(base, current, candidates, savingsTolerance)
+func buildConclusion(current map[string]string, base simulator.Summary, candidates []simulator.Candidate, savingsTolerance float64, maxChanges int) conclusionView {
+	idx, furtherIdx, keepReason := simulator.RecommendedIndex(base, current, candidates, savingsTolerance, maxChanges)
 	if idx < 0 {
 		return conclusionView{None: true, Reason: keepReason}
 	}
 	top := &candidates[idx]
 	view := conclusionView{}
-	if riskIdx >= 0 {
-		view.Riskier = riskierAlternativeLine(*top, candidates[riskIdx], riskIdx+1)
+	if furtherIdx >= 0 {
+		view.Further = furtherOptionLine(*top, candidates[furtherIdx], groupRank(candidates, furtherIdx))
 	}
 	for _, key := range simulator.OverrideKeys {
 		cur, ok := current[key]

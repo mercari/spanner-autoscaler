@@ -69,11 +69,17 @@ $ ./bin/simulator help
 
    A candidate is recommended only when it satisfies every constraint and
    costs less than the current configuration's own replay; otherwise the
-   conclusion says to keep the current configuration. Candidates whose
-   savings are within `-savings-tolerance` percentage points of the best
-   (default 1.0) count as equal on cost, and the least risky of them is
-   recommended — the cheapest then appears as a riskier alternative to try
-   after the recommendation has proven out.
+   conclusion says to keep the current configuration. The recommendation is
+   staged: `-max-changes` (default 1) restricts it to candidates changing
+   that many parameters at once, and among candidates whose savings are
+   within `-savings-tolerance` percentage points of the best (default 2.0)
+   the least risky wins — the gentlest scale-down step first, because resize
+   churn is a cost the simulation cannot measure, then the measured risk
+   counters. A candidate that saves more than the tolerance beyond the
+   recommendation appears as a further option to try after the recommended
+   change has proven out. Candidate tables show one row per distinct
+   simulated outcome; parameter combinations that behave identically fold
+   into it as "(+N equivalent)".
 
 ## Constraints and guidelines
 

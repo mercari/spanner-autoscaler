@@ -52,6 +52,10 @@
 </figure>
 {{end}}
 
+{{define "candidaterows"}}{{range .}}{{if .Error}}<tr class="infeasible"><td>{{.Rank}}</td><td>{{.Label}}</td><td colspan="7"></td><td>error: {{.Error}}</td></tr>
+{{else}}<tr{{if .Infeasible}} class="infeasible"{{end}}{{if .Recommended}} class="recommended"{{end}}><td>{{.Rank}}</td><td>{{.Label}}</td><td>{{.Saved}}</td><td>{{.DSaved}}</td><td>{{.Exceeded}}</td><td>{{.DExceeded}}</td><td>{{.Gaps}}</td><td>{{.Steps}}</td><td>{{.P99}}</td><td class="reason">{{.Status}}</td></tr>
+{{end}}{{end}}{{end}}
+
 {{define "conclusion"}}<div class="conclusion">
 <b>Recommended configuration</b>
 {{if .None}}<p>{{.Reason}} See the candidate table below for the details.</p>
@@ -60,7 +64,7 @@
 {{range .Rows}}<tr><td>{{.Parameter}}</td><td>{{.Current}}</td>{{if .Changed}}<td class="changed">{{.Recommended}}</td>{{else}}<td>{{.Recommended}} (keep)</td>{{end}}</tr>
 {{end}}</table>
 <div class="effect">{{.Effect}}</div>
-{{with .Riskier}}<div class="effect">{{.}}</div>{{end}}
+{{with .Further}}<div class="effect">{{.}}</div>{{end}}
 {{end}}</div>
 {{end}}
 
@@ -94,9 +98,11 @@
 <h2>All candidates</h2>
 <table>
 <tr><th>#</th><th>candidate</th><th>saved%</th><th>Δ saved</th><th>above target</th><th>Δ</th><th>gaps&lt;10m</th><th>steps&gt;2x</th><th>p99 hi-CPU</th><th>status</th></tr>
-{{range .Rows}}{{if .Error}}<tr class="infeasible"><td>{{.Rank}}</td><td>{{.Label}}</td><td colspan="7"></td><td>error: {{.Error}}</td></tr>
-{{else}}<tr{{if .Infeasible}} class="infeasible"{{end}}{{if .Recommended}} class="recommended"{{end}}><td>{{.Rank}}</td><td>{{.Label}}</td><td>{{.Saved}}</td><td>{{.DSaved}}</td><td>{{.Exceeded}}</td><td>{{.DExceeded}}</td><td>{{.Gaps}}</td><td>{{.Steps}}</td><td>{{.P99}}</td><td class="reason">{{.Status}}</td></tr>
-{{end}}{{end}}</table>
+{{template "candidaterows" .Rows}}</table>
+{{if .MoreRows}}<details><summary>{{len .MoreRows}} more distinct outcomes</summary><table>
+<tr><th>#</th><th>candidate</th><th>saved%</th><th>Δ saved</th><th>above target</th><th>Δ</th><th>gaps&lt;10m</th><th>steps&gt;2x</th><th>p99 hi-CPU</th><th>status</th></tr>
+{{template "candidaterows" .MoreRows}}</table></details>
+{{end}}
 <script>{{.JS}}</script>
 </body>
 </html>
