@@ -16,6 +16,7 @@ limitations under the License.
 package simulator
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -161,6 +162,9 @@ func TestRecommendHighPriorityCPUGuidelineOnTarget(t *testing.T) {
 	}
 	if candidates[1].Feasible {
 		t.Errorf("target-70 candidate must be infeasible under the regional 65%% guideline")
+	}
+	if reasons := candidates[1].InfeasibleReasons; len(reasons) == 0 || !strings.Contains(strings.Join(reasons, ";"), "recommended 65") {
+		t.Errorf("InfeasibleReasons = %v; want a reason naming the recommended 65%% ceiling", reasons)
 	}
 }
 

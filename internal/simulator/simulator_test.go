@@ -228,9 +228,12 @@ func TestMinPUSignals(t *testing.T) {
 	if s.RequiredPUAtMinP95 != 2000 {
 		t.Errorf("RequiredPUAtMinP95 = %d; want 2000 (workload 400 at target 40, rounded up)", s.RequiredPUAtMinP95)
 	}
-	advice := s.MinPUAdvice()
-	if len(advice) != 1 {
-		t.Fatalf("MinPUAdvice = %v; want exactly the lower-min hint", advice)
+	assessment := s.AssessMinPU()
+	if !strings.Contains(assessment.Lower, "possible down to ~2000") {
+		t.Errorf("AssessMinPU().Lower = %q; want a lower-possible verdict around 2000", assessment.Lower)
+	}
+	if !strings.Contains(assessment.Raise, "not indicated") {
+		t.Errorf("AssessMinPU().Raise = %q; want not-indicated (no overshoot)", assessment.Raise)
 	}
 
 	// The spike scenario: the whole overshoot is observed while sitting at
@@ -245,14 +248,8 @@ func TestMinPUSignals(t *testing.T) {
 		t.Errorf("TargetExceededAtMinMinutes = %.0f (total %.0f); want all overshoot attributed to the min",
 			ss.TargetExceededAtMinMinutes, ss.TargetExceededMinutes)
 	}
-	hasRaiseHint := false
-	for _, a := range ss.MinPUAdvice() {
-		if strings.Contains(a, "spikes start from the min") {
-			hasRaiseHint = true
-		}
-	}
-	if !hasRaiseHint {
-		t.Errorf("MinPUAdvice = %v; want the spikes-start-from-min hint", ss.MinPUAdvice())
+	if raise := ss.AssessMinPU().Raise; !strings.Contains(raise, "consider raising or pre-scaling") {
+		t.Errorf("AssessMinPU().Raise = %q; want the raise/pre-scale verdict", raise)
 	}
 }
 

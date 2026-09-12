@@ -92,7 +92,10 @@ type Candidate struct {
 	Overrides map[string]string `json:"overrides"`
 	Summary   Summary           `json:"summary"`
 	Feasible  bool              `json:"feasible"`
-	Error     string            `json:"error,omitempty"`
+	// InfeasibleReasons lists, for an infeasible candidate, which
+	// constraints it broke and by how much.
+	InfeasibleReasons []string `json:"infeasibleReasons,omitempty"`
+	Error             string   `json:"error,omitempty"`
 }
 
 // Override knob names used as Overrides keys, in display order.
@@ -215,37 +218,42 @@ func evaluate(base Config, combo []override, constraints Constraints, points []P
 	}
 
 	c.Summary = result.Summary
-	c.Feasible = feasible(sa, result.Summary, constraints)
+	c.InfeasibleReasons = infeasibleReasons(sa, result.Summary, constraints)
+	c.Feasible = len(c.InfeasibleReasons) == 0
 	return c
 }
 
-func feasible(sa *spannerv1beta1.SpannerAutoscaler, s Summary, constraints Constraints) bool {
+// infeasibleReasons reports every constraint the candidate breaks, with the
+// actual value against the allowed one, so an infeasible row explains itself.
+func infeasibleReasons(sa *spannerv1beta1.SpannerAutoscaler, s Summary, constraints Constraints) []string {
+	var reasons []string
 	if s.TargetExceededMinutes > constraints.MaxTargetExceededMinutes {
-		return false
+		reasons = append(reasons, fmt.Sprintf("above target %.0fm > %.0fm allowed",
+			s.TargetExceededMinutes, constraints.MaxTargetExceededMinutes))
 	}
 	if p := constraints.MaxSimCPUP99; p != nil {
 		if s.SimHighPriorityCPU != nil && s.SimHighPriorityCPU.P99 > *p {
-			return false
+			reasons = append(reasons, fmt.Sprintf("p99 high-priority CPU %.1f%% > %.1f%%", s.SimHighPriorityCPU.P99, *p))
 		}
 		if s.SimTotalCPU != nil && s.SimTotalCPU.P99 > *p {
-			return false
+			reasons = append(reasons, fmt.Sprintf("p99 total CPU %.1f%% > %.1f%%", s.SimTotalCPU.P99, *p))
 		}
 	}
 	if limit := constraints.MaxHighPriorityCPU; limit > 0 {
 		if t := sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority; t != nil && *t > limit {
-			return false
+			reasons = append(reasons, fmt.Sprintf("high-priority CPU target %d%% > recommended %d%%", *t, limit))
 		}
 		if s.SimHighPriorityCPU != nil && s.SimHighPriorityCPU.P99 > float64(limit) {
-			return false
+			reasons = append(reasons, fmt.Sprintf("p99 high-priority CPU %.1f%% > recommended %d%%", s.SimHighPriorityCPU.P99, limit))
 		}
 	}
 	if m := constraints.MaxScaleStepViolations; m != nil && s.ScaleStepViolations > *m {
-		return false
+		reasons = append(reasons, fmt.Sprintf("steps beyond 2x/half %d > %d allowed", s.ScaleStepViolations, *m))
 	}
 	if m := constraints.MaxShortScaleGaps; m != nil && s.ScaleGapsUnder10Min > *m {
-		return false
+		reasons = append(reasons, fmt.Sprintf("scale gaps <10m %d > %d allowed", s.ScaleGapsUnder10Min, *m))
 	}
-	return true
+	return reasons
 }
 
 // FillGuidelineStepCandidates populates the step-size and interval dimensions
