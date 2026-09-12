@@ -245,8 +245,15 @@ func writeRecommendTable(base simulator.Summary, candidates []simulator.Candidat
 			feasibleCount++
 		}
 	}
-	fmt.Printf("Evaluated %d candidates (%d feasible) against %d recorded points\n\n",
+	fmt.Printf("Evaluated %d candidates (%d feasible) against %d recorded points\n",
 		len(candidates), feasibleCount, base.DataPoints)
+	if feasibleCount == 0 && !showInfeasible {
+		// A bare "0 feasible" is a dead end; show what came closest and why
+		// it was rejected so the constraints can be revisited deliberately.
+		showInfeasible = true
+		fmt.Println("no candidate satisfies the constraints — showing the cheapest infeasible ones with the reasons they were rejected")
+	}
+	fmt.Println()
 
 	tw := tabwriter.NewWriter(os.Stdout, 2, 8, 2, ' ', 0)
 	fmt.Fprintln(tw, "RANK\tOVERRIDES\tPU-HOURS\tSAVED%\tP95 HI-CPU\tP99 HI-CPU\t>TARGET MIN\tUPS\tDOWNS\tSTEP>2X\tGAP<10M")
@@ -256,6 +263,12 @@ func writeRecommendTable(base simulator.Summary, candidates []simulator.Candidat
 		formatP95(base.SimHighPriorityCPU), formatP99(base.SimHighPriorityCPU),
 		base.TargetExceededMinutes, base.ScaleUps, base.ScaleDowns,
 		base.ScaleStepViolations, base.ScaleGapsUnder10Min)
+
+	type rejected struct {
+		rank    int
+		reasons []string
+	}
+	var rejections []rejected
 
 	rank := 0
 	for _, c := range candidates {
@@ -275,20 +288,33 @@ func writeRecommendTable(base simulator.Summary, candidates []simulator.Candidat
 		marker := ""
 		if !c.Feasible {
 			marker = " [infeasible]"
+			rejections = append(rejections, rejected{rank, c.InfeasibleReasons})
 		}
-		fmt.Fprintf(tw, "%d\t%s%s\t%.1f\t%.1f\t%s\t%s\t%.0f\t%d\t%d\t%d\t%d\n",
+		// Deltas are against the (base) reference row, so a row reads as
+		// "what adopting this candidate changes", not just absolute numbers.
+		fmt.Fprintf(tw, "%d\t%s%s\t%.1f\t%.1f (%+.1f)\t%s\t%s\t%.0f (%+.0f)\t%d\t%d\t%d\t%d (%+d)\n",
 			rank, label, marker,
-			c.Summary.SimPUHours, c.Summary.PUHoursSavedPercent,
+			c.Summary.SimPUHours,
+			c.Summary.PUHoursSavedPercent, c.Summary.PUHoursSavedPercent-base.PUHoursSavedPercent,
 			formatP95(c.Summary.SimHighPriorityCPU), formatP99(c.Summary.SimHighPriorityCPU),
-			c.Summary.TargetExceededMinutes, c.Summary.ScaleUps, c.Summary.ScaleDowns,
-			c.Summary.ScaleStepViolations, c.Summary.ScaleGapsUnder10Min)
+			c.Summary.TargetExceededMinutes, c.Summary.TargetExceededMinutes-base.TargetExceededMinutes,
+			c.Summary.ScaleUps, c.Summary.ScaleDowns,
+			c.Summary.ScaleStepViolations,
+			c.Summary.ScaleGapsUnder10Min, c.Summary.ScaleGapsUnder10Min-base.ScaleGapsUnder10Min)
 	}
 	tw.Flush()
 
-	printMinPUSignals("base", base)
+	if len(rejections) > 0 {
+		fmt.Println("\nwhy infeasible:")
+		for _, r := range rejections {
+			fmt.Printf("  %d: %s\n", r.rank, strings.Join(r.reasons, "; "))
+		}
+	}
+
+	printMinPUAssessment("base", base)
 	for _, c := range candidates {
 		if c.Feasible {
-			printMinPUSignals("top candidate", c.Summary)
+			printMinPUAssessment("top candidate", c.Summary)
 			break
 		}
 	}
@@ -299,17 +325,17 @@ func writeRecommendTable(base simulator.Summary, candidates []simulator.Candidat
 	}
 }
 
-// printMinPUSignals surfaces whether processingUnits.min should move — the
+// printMinPUAssessment surfaces whether processingUnits.min should move — the
 // one knob whose direction is otherwise invisible in the ranking table.
-func printMinPUSignals(label string, s simulator.Summary) {
-	fmt.Printf("\nmin PU signals (%s): pinned at min %.0f%% of the run", label, s.MinPinnedPercent)
+func printMinPUAssessment(label string, s simulator.Summary) {
+	fmt.Printf("\nmin PU assessment (%s): min %d, pinned %.0f%% of the run", label, s.SpecMinPU, s.MinPinnedPercent)
 	if s.RequiredPUAtMinP95 > 0 {
-		fmt.Printf("; p95 required PU while pinned = %d (min %d)", s.RequiredPUAtMinP95, s.SpecMinPU)
+		fmt.Printf(", workload floor while pinned (p95) = %d PU", s.RequiredPUAtMinP95)
 	}
-	fmt.Printf("; %.0f of %.0f exceeded minutes at the min\n", s.TargetExceededAtMinMinutes, s.TargetExceededMinutes)
-	for _, advice := range s.MinPUAdvice() {
-		fmt.Printf("  -> %s\n", advice)
-	}
+	fmt.Println()
+	assessment := s.AssessMinPU()
+	fmt.Printf("  lower? %s\n", assessment.Lower)
+	fmt.Printf("  raise? %s\n", assessment.Raise)
 }
 
 func formatP99(s *simulator.CPUStats) string {

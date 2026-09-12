@@ -303,24 +303,47 @@ func (a *aggregator) summary(start, end time.Time, events []Event) Summary {
 	return s
 }
 
-// MinPUAdvice turns the run's min-PU signals into glanceable directional
-// hints about spec.processingUnits.min. Both hints can apply at once (an
-// over-provisioned floor that still takes spikes from the min); the slice is
-// empty when the min rarely binds and no overshoot starts from it.
-func (s Summary) MinPUAdvice() []string {
-	var advice []string
-	if s.MinPinnedPercent >= 30 && s.RequiredPUAtMinP95 > 0 &&
-		float64(s.RequiredPUAtMinP95) <= float64(s.SpecMinPU)/GuidelineMaxPUChangeFactor {
-		advice = append(advice, fmt.Sprintf(
-			"min PU could go lower: the min (%d), not the workload (p95 required %d while pinned), sets the cost for %.0f%% of the run — test lower -min-pu candidates (verify storage limits and spike headroom first)",
-			s.SpecMinPU, s.RequiredPUAtMinP95, s.MinPinnedPercent))
+// MinPUAssessment is a decision-ready reading of the run's min-PU signals:
+// one verdict per direction, always populated, so "should the min move?" is
+// answerable at a glance instead of from raw counters.
+type MinPUAssessment struct {
+	Lower string `json:"lower"`
+	Raise string `json:"raise"`
+}
+
+// AssessMinPU derives the two directional verdicts about
+// spec.processingUnits.min. Both directions can be actionable at once (an
+// over-provisioned floor that still takes spikes from the min).
+func (s Summary) AssessMinPU() MinPUAssessment {
+	var a MinPUAssessment
+
+	switch {
+	case s.MinPinnedPercent < 5:
+		a.Lower = fmt.Sprintf("not indicated: min rarely binds (pinned %.0f%% of the run), lowering it changes little", s.MinPinnedPercent)
+	case s.RequiredPUAtMinP95 == 0:
+		a.Lower = "no signal: never pinned with usable CPU data"
+	case s.RequiredPUAtMinP95 >= s.SpecMinPU:
+		a.Lower = fmt.Sprintf("not indicated: while pinned the workload already needs the min (p95 required %d >= min %d)",
+			s.RequiredPUAtMinP95, s.SpecMinPU)
+	default:
+		a.Lower = fmt.Sprintf("possible down to ~%d PU: workload floor while pinned (p95) is %d vs min %d, and the min sets the cost %.0f%% of the run — test -min-pu around the floor; verify the storage floor and spike headroom first",
+			s.RequiredPUAtMinP95, s.RequiredPUAtMinP95, s.SpecMinPU, s.MinPinnedPercent)
 	}
-	if s.TargetExceededMinutes > 0 && s.TargetExceededAtMinMinutes >= s.TargetExceededMinutes/2 {
-		advice = append(advice, fmt.Sprintf(
-			"spikes start from the min: %.0f of %.0f minutes above target were observed at the min — raising the min or pre-scaling with a schedule would absorb them",
-			s.TargetExceededAtMinMinutes, s.TargetExceededMinutes))
+
+	switch {
+	case s.TargetExceededMinutes == 0:
+		a.Raise = "not indicated: no time above target"
+	case s.TargetExceededAtMinMinutes >= s.TargetExceededMinutes/2:
+		a.Raise = fmt.Sprintf("consider raising or pre-scaling: %.0f of %.0f minutes above target (%.0f%%) are observed at the min — spikes start from the floor",
+			s.TargetExceededAtMinMinutes, s.TargetExceededMinutes,
+			s.TargetExceededAtMinMinutes/s.TargetExceededMinutes*100)
+	default:
+		a.Raise = fmt.Sprintf("not indicated: only %.0f of %.0f minutes above target (%.0f%%) start at the min — raising it would not absorb the overshoot",
+			s.TargetExceededAtMinMinutes, s.TargetExceededMinutes,
+			s.TargetExceededAtMinMinutes/s.TargetExceededMinutes*100)
 	}
-	return advice
+
+	return a
 }
 
 func cpuStats(values []float64) *CPUStats {

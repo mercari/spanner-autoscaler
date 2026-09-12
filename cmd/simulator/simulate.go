@@ -160,16 +160,17 @@ func writeTextReport(w io.Writer, name string, result *simulator.Result, common 
 	if s.SimTotalCPU != nil {
 		fmt.Fprintf(w, "  sim total CPU:     %s\n", formatCPUStats(s.SimTotalCPU))
 	}
-	fmt.Fprintf(w, "  above target:      %.0f minutes\n", s.TargetExceededMinutes)
+	days := s.End.Sub(s.Start).Hours() / 24
+	perDay := ""
+	if days >= 1 {
+		perDay = fmt.Sprintf(" (%.0f/day)", s.TargetExceededMinutes/days)
+	}
+	fmt.Fprintf(w, "  above target:      %.0f minutes%s\n", s.TargetExceededMinutes, perDay)
 	fmt.Fprintf(w, "  low confidence:    %.0f minutes (recorded CPU >= %.0f%%)\n", s.LowConfidenceMinutes, common.lowConfidenceCPU)
 	fmt.Fprintf(w, "  pinned at min PU:  %.0f minutes (%.0f%% of the run)\n", s.MinPinnedMinutes, s.MinPinnedPercent)
-	if s.RequiredPUAtMinP95 > 0 {
-		fmt.Fprintf(w, "  min PU signals:    p95 required PU while pinned = %d (min %d); %.0f of %.0f exceeded minutes at the min\n",
-			s.RequiredPUAtMinP95, s.SpecMinPU, s.TargetExceededAtMinMinutes, s.TargetExceededMinutes)
-	}
-	for _, advice := range s.MinPUAdvice() {
-		fmt.Fprintf(w, "  hint:              %s\n", advice)
-	}
+	assessment := s.AssessMinPU()
+	fmt.Fprintf(w, "  min PU (lower?):   %s\n", assessment.Lower)
+	fmt.Fprintf(w, "  min PU (raise?):   %s\n", assessment.Raise)
 	if len(result.Events) > 0 {
 		fmt.Fprintf(w, "  first events:\n")
 		for i, e := range result.Events {
