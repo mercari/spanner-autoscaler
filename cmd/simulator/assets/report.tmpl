@@ -67,7 +67,7 @@
 <body>
 <style>{{.CSS}}</style>
 <h1>Simulation report</h1>
-<p class="sub">{{.Name}} — {{.Period}} ({{.Points}} points) — backtest of recorded metrics, not a forecast</p>
+<p class="sub">{{.Period}} ({{.Points}} points)</p>
 {{template "kpis" .KPIs}}
 {{template "verdict" .Verdict}}
 {{range .Charts}}{{template "linechart" .}}{{end}}
@@ -84,7 +84,7 @@
 <body>
 <style>{{.CSS}}</style>
 <h1>Recommendation report</h1>
-<p class="sub">{{.Name}} — {{.Sub}} — backtest of recorded metrics, not a forecast</p>
+<p class="sub">{{.Sub}}</p>
 {{template "conclusion" .Conclusion}}
 {{template "kpis" .KPIs}}
 {{template "scatter" .Scatter}}

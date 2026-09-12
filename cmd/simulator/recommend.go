@@ -143,7 +143,7 @@ func runRecommend(args []string) error {
 		if err != nil {
 			return err
 		}
-		if err := writeRecommendHTML(f, *configPath, current, baseResult.Summary, candidates); err != nil {
+		if err := writeRecommendHTML(f, current, baseResult.Summary, candidates); err != nil {
 			f.Close()
 			return err
 		}

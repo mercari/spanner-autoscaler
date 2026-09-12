@@ -124,7 +124,6 @@ type candidateRowView struct {
 type simulatePage struct {
 	CSS     template.CSS
 	JS      template.JS
-	Name    string
 	Period  string
 	Points  int
 	KPIs    []kpiView
@@ -136,7 +135,6 @@ type simulatePage struct {
 type recommendPage struct {
 	CSS        template.CSS
 	JS         template.JS
-	Name       string
 	Sub        string
 	Conclusion conclusionView
 	KPIs       []kpiView
@@ -151,14 +149,13 @@ type recommendPage struct {
 // the recorded-vs-simulated PU timeline (emphasis form: the simulation in the
 // accent hue, the recording as gray context), the simulated CPU timeline with
 // target reference lines, the min-PU assessment, and the scale-event table.
-func writeSimulateHTML(w io.Writer, name string, result *simulator.Result, targetHigh, targetTotal int) error {
+func writeSimulateHTML(w io.Writer, result *simulator.Result, targetHigh, targetTotal int) error {
 	s := result.Summary
 	days := max(s.End.Sub(s.Start).Hours()/24, 1)
 
 	page := simulatePage{
 		CSS:    reportCSS,
 		JS:     reportJS,
-		Name:   name,
 		Period: s.Start.UTC().Format("2006-01-02 15:04") + " .. " + s.End.UTC().Format("2006-01-02 15:04"),
 		Points: s.DataPoints,
 		KPIs: []kpiView{
@@ -222,7 +219,7 @@ func writeSimulateHTML(w io.Writer, name string, result *simulator.Result, targe
 // (feasible candidates in the accent hue, infeasible as gray context, the
 // base config as the orange reference), the min-PU assessments, and the full
 // candidate table with rejection reasons as the table view.
-func writeRecommendHTML(w io.Writer, name string, current map[string]string, base simulator.Summary, candidates []simulator.Candidate) error {
+func writeRecommendHTML(w io.Writer, current map[string]string, base simulator.Summary, candidates []simulator.Candidate) error {
 	feasibleCount := 0
 	for _, c := range candidates {
 		if c.Feasible {
@@ -231,9 +228,8 @@ func writeRecommendHTML(w io.Writer, name string, current map[string]string, bas
 	}
 
 	page := recommendPage{
-		CSS:  reportCSS,
-		JS:   reportJS,
-		Name: name,
+		CSS: reportCSS,
+		JS:  reportJS,
 		Sub: fmt.Sprintf("%d candidates (%d feasible) against %d recorded points, %s .. %s",
 			len(candidates), feasibleCount, base.DataPoints,
 			base.Start.UTC().Format("2006-01-02"), base.End.UTC().Format("2006-01-02")),
