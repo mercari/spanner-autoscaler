@@ -62,3 +62,4 @@ summary { cursor: pointer; color: var(--text-secondary); }
 .conclusion .effect { color: var(--text-secondary); }
 .infeasible { color: var(--text-secondary); }
 .reason { color: var(--text-secondary); font-size: 12px; }
+tr.recommended td { font-weight: 600; }

@@ -92,9 +92,9 @@
 {{range .Verdicts}}{{template "verdict" .}}{{end}}
 <h2>All candidates</h2>
 <table>
-<tr><th>candidate</th><th>saved%</th><th>Δ saved</th><th>above target</th><th>Δ</th><th>gaps&lt;10m</th><th>steps&gt;2x</th><th>p99 hi-CPU</th><th>status</th></tr>
-{{range .Rows}}{{if .Error}}<tr class="infeasible"><td>{{.Label}}</td><td colspan="7"></td><td>error: {{.Error}}</td></tr>
-{{else}}<tr{{if .Infeasible}} class="infeasible"{{end}}><td>{{.Label}}</td><td>{{.Saved}}</td><td>{{.DSaved}}</td><td>{{.Exceeded}}</td><td>{{.DExceeded}}</td><td>{{.Gaps}}</td><td>{{.Steps}}</td><td>{{.P99}}</td><td class="reason">{{.Status}}</td></tr>
+<tr><th>#</th><th>candidate</th><th>saved%</th><th>Δ saved</th><th>above target</th><th>Δ</th><th>gaps&lt;10m</th><th>steps&gt;2x</th><th>p99 hi-CPU</th><th>status</th></tr>
+{{range .Rows}}{{if .Error}}<tr class="infeasible"><td>{{.Rank}}</td><td>{{.Label}}</td><td colspan="7"></td><td>error: {{.Error}}</td></tr>
+{{else}}<tr{{if .Infeasible}} class="infeasible"{{end}}{{if .Recommended}} class="recommended"{{end}}><td>{{.Rank}}</td><td>{{.Label}}</td><td>{{.Saved}}</td><td>{{.DSaved}}</td><td>{{.Exceeded}}</td><td>{{.DExceeded}}</td><td>{{.Gaps}}</td><td>{{.Steps}}</td><td>{{.P99}}</td><td class="reason">{{.Status}}</td></tr>
 {{end}}{{end}}</table>
 <script>{{.JS}}</script>
 </body>
