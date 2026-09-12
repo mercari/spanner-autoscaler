@@ -381,14 +381,17 @@ func GroupEquivalent(candidates []Candidate) [][]int {
 }
 
 // lessRisky orders near-equal-cost candidates. The first key is the
-// scale-down aggressiveness (the resolved step size at the base minimum):
-// frequent large downsizes carry costs the simulation cannot measure — split
-// rebalancing and tail latency during resizes — so a gentler scale-down wins
-// even when its measured overshoot is slightly higher. Ties fall through to
-// the measured risk: minutes above target, scale gaps under ten minutes,
-// changed parameters, and finally cost.
+// scale-down rate — the PU the configuration can shed per minute (resolved
+// step size at the base minimum divided by the scale-down interval), so a
+// larger step at a long interval still counts as gentler than a small step
+// fired every few minutes. Frequent downsizing carries costs the simulation
+// cannot measure — split rebalancing and tail latency during resizes — so
+// the gentler configuration wins even when its measured overshoot is
+// slightly higher. Ties fall through to the measured risk: minutes above
+// target, scale gaps under ten minutes, changed parameters, and finally
+// cost.
 func lessRisky(current map[string]string, refPU int, a, b *Candidate) bool {
-	if sa, sb := scaledownAggressiveness(refPU, a), scaledownAggressiveness(refPU, b); sa != sb {
+	if sa, sb := scaledownRate(refPU, a), scaledownRate(refPU, b); sa != sb {
 		return sa < sb
 	}
 	if a.Summary.TargetExceededMinutes != b.Summary.TargetExceededMinutes {
@@ -403,14 +406,22 @@ func lessRisky(current map[string]string, refPU int, a, b *Candidate) bool {
 	return a.Summary.SimPUHours < b.Summary.SimPUHours
 }
 
-// scaledownAggressiveness resolves the candidate's scaledownStepSize at a
-// shared reference PU so percentage and fixed steps compare on one scale. A
-// candidate without a resolved configuration compares as neutral (0).
-func scaledownAggressiveness(refPU int, c *Candidate) int {
+// scaledownRate is the candidate's scale-down speed in PU per minute: the
+// scaledownStepSize resolved at a shared reference PU (so percentage and
+// fixed steps compare on one scale) divided by the effective scale-down
+// interval. A spec that leaves the interval unset resolves against
+// DefaultScaleDownInterval; a candidate without a resolved configuration
+// compares as neutral (0).
+func scaledownRate(refPU int, c *Candidate) float64 {
 	if c.Autoscaler == nil || refPU <= 0 {
 		return 0
 	}
-	return scaling.ResolveStepSize(&c.Autoscaler.Spec.ScaleConfig.ScaledownStepSize, refPU, scaling.StepDirectionScaledown)
+	step := scaling.ResolveStepSize(&c.Autoscaler.Spec.ScaleConfig.ScaledownStepSize, refPU, scaling.StepDirectionScaledown)
+	interval := DurationValueOr(c.Autoscaler.Spec.ScaleConfig.ScaledownInterval, DefaultScaleDownInterval).Duration
+	if interval <= 0 {
+		return float64(step)
+	}
+	return float64(step) / interval.Minutes()
 }
 
 // changedParameterCount counts the overrides that differ from the current
