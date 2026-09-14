@@ -85,8 +85,8 @@ func TestRecommendConstraintFiltersCandidates(t *testing.T) {
 	// The min-1000 candidate settles at 2000 PU (the desired-PU rounding
 	// stops there for target 30), where the simulated CPU is 20% — above a
 	// 15% p99 cap. The min-5000 candidate stays at 8%.
-	cap := 15.0
-	candidates, err := Recommend(base, space, Constraints{MaxSimCPUP99: &cap}, points)
+	p99Cap := 15.0
+	candidates, err := Recommend(base, space, Constraints{MaxSimCPUP99: &p99Cap}, points)
 	if err != nil {
 		t.Fatalf("Recommend: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestRecommendConstraintFiltersCandidates(t *testing.T) {
 	}
 	if candidates[1].Feasible {
 		t.Errorf("candidate %s should be infeasible under p99 cap %.0f",
-			DescribeOverrides(candidates[1].Overrides), cap)
+			DescribeOverrides(candidates[1].Overrides), p99Cap)
 	}
 }
 

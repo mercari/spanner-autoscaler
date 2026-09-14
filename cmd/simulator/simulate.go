@@ -56,12 +56,12 @@ func (c *commonFlags) loadPoints() ([]simulator.Point, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	return simulator.LoadCSV(f)
 }
 
 func (c *commonFlags) simulate(configPath string, points []simulator.Point) (*simulator.Result, error) {
-	data, err := os.ReadFile(configPath)
+	data, err := os.ReadFile(configPath) //nolint:gosec // G304: the path comes from a CLI flag
 	if err != nil {
 		return nil, err
 	}
@@ -90,7 +90,7 @@ func (c *commonFlags) cost(puHours float64) float64 {
 // configTargets re-reads the manifest for the CPU targets so the HTML report
 // can draw them as reference lines.
 func configTargets(configPath string) (targetHigh, targetTotal int, err error) {
-	data, err := os.ReadFile(configPath)
+	data, err := os.ReadFile(configPath) //nolint:gosec // G304: the path comes from a CLI flag
 	if err != nil {
 		return 0, 0, err
 	}
@@ -136,7 +136,7 @@ func runSimulate(args []string) error {
 			return err
 		}
 		if err := result.WritePointsCSV(f); err != nil {
-			f.Close()
+			_ = f.Close()
 			return err
 		}
 		if err := f.Close(); err != nil {
@@ -154,13 +154,13 @@ func runSimulate(args []string) error {
 			return err
 		}
 		if err := writeSimulateHTML(f, result, targetHigh, targetTotal); err != nil {
-			f.Close()
+			_ = f.Close()
 			return err
 		}
 		if err := f.Close(); err != nil {
 			return err
 		}
-		fmt.Fprintf(os.Stderr, "wrote HTML report to %s\n", *htmlPath)
+		_, _ = fmt.Fprintf(os.Stderr, "wrote HTML report to %s\n", *htmlPath)
 	}
 
 	switch common.format {
@@ -180,6 +180,7 @@ func runSimulate(args []string) error {
 	}
 }
 
+//nolint:errcheck // best-effort terminal output
 func writeTextReport(w io.Writer, name string, result *simulator.Result, common *commonFlags) {
 	s := result.Summary
 	fmt.Fprintf(w, "Simulation of %s\n", name)
@@ -227,6 +228,12 @@ func formatCPUStats(s *simulator.CPUStats) string {
 	return fmt.Sprintf("mean %.1f%%  p50 %.1f%%  p95 %.1f%%  p99 %.1f%%  max %.1f%%", s.Mean, s.P50, s.P95, s.P99, s.Max)
 }
 
+// compareRow pairs one replayed configuration with its summary.
+type compareRow struct {
+	Config  string            `json:"config"`
+	Summary simulator.Summary `json:"summary"`
+}
+
 // stringSlice is a repeatable string flag.
 type stringSlice []string
 
@@ -255,43 +262,45 @@ func runCompare(args []string) error {
 		return err
 	}
 
-	type row struct {
-		Config  string            `json:"config"`
-		Summary simulator.Summary `json:"summary"`
-	}
-	rows := make([]row, 0, len(configPaths))
+	rows := make([]compareRow, 0, len(configPaths))
 	for _, path := range configPaths {
 		result, err := common.simulate(path, points)
 		if err != nil {
 			return err
 		}
-		rows = append(rows, row{Config: path, Summary: result.Summary})
+		rows = append(rows, compareRow{Config: path, Summary: result.Summary})
 	}
 
 	switch common.format {
 	case "json":
 		return json.NewEncoder(os.Stdout).Encode(rows)
 	case "text":
-		tw := tabwriter.NewWriter(os.Stdout, 2, 8, 2, ' ', 0)
-		fmt.Fprintln(tw, "CONFIG\tPU-HOURS\tSAVED%\tUPS\tDOWNS\tP95 HI-CPU\tP95 TOTAL-CPU\t>TARGET MIN\tLOW-CONF MIN")
-		fmt.Fprintf(tw, "(recorded)\t%.1f\t\t\t\t\t\t\t\n", rows[0].Summary.ActualPUHours)
-		for _, r := range rows {
-			fmt.Fprintf(tw, "%s\t%.1f\t%.1f\t%d\t%d\t%s\t%s\t%.0f\t%.0f\n",
-				r.Config,
-				r.Summary.SimPUHours,
-				r.Summary.PUHoursSavedPercent,
-				r.Summary.ScaleUps,
-				r.Summary.ScaleDowns,
-				formatP95(r.Summary.SimHighPriorityCPU),
-				formatP95(r.Summary.SimTotalCPU),
-				r.Summary.TargetExceededMinutes,
-				r.Summary.LowConfidenceMinutes,
-			)
-		}
-		return tw.Flush()
+		return writeCompareTable(rows)
 	default:
 		return fmt.Errorf("unknown format %q", common.format)
 	}
+}
+
+//nolint:errcheck // best-effort terminal output; Flush reports the write errors
+func writeCompareTable(rows []compareRow) error {
+	tw := tabwriter.NewWriter(os.Stdout, 2, 8, 2, ' ', 0)
+	fmt.Fprintln(tw, "CONFIG\tPU-HOURS\tSAVED%\tUPS\tDOWNS\tP95 HI-CPU\tP95 TOTAL-CPU\t>TARGET MIN\tLOW-CONF MIN")
+	fmt.Fprintf(tw, "(recorded)\t%.1f\t\t\t\t\t\t\t\n", rows[0].Summary.ActualPUHours)
+	for i := range rows {
+		r := &rows[i]
+		fmt.Fprintf(tw, "%s\t%.1f\t%.1f\t%d\t%d\t%s\t%s\t%.0f\t%.0f\n",
+			r.Config,
+			r.Summary.SimPUHours,
+			r.Summary.PUHoursSavedPercent,
+			r.Summary.ScaleUps,
+			r.Summary.ScaleDowns,
+			formatP95(r.Summary.SimHighPriorityCPU),
+			formatP95(r.Summary.SimTotalCPU),
+			r.Summary.TargetExceededMinutes,
+			r.Summary.LowConfidenceMinutes,
+		)
+	}
+	return tw.Flush()
 }
 
 func formatP95(s *simulator.CPUStats) string {

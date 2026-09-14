@@ -293,12 +293,14 @@ func RecommendedIndex(base Summary, current map[string]string, candidates []Cand
 	}
 
 	cheapest := -1
+	cheapestCost := 0.0
 	for i := range candidates {
 		if !candidates[i].Feasible {
 			continue
 		}
-		if cheapest == -1 || candidates[i].Summary.SimPUHours < candidates[cheapest].Summary.SimPUHours {
+		if cheapest == -1 || candidates[i].Summary.SimPUHours < cheapestCost {
 			cheapest = i
+			cheapestCost = candidates[i].Summary.SimPUHours
 		}
 	}
 	if cheapest == -1 {
@@ -312,12 +314,14 @@ func RecommendedIndex(base Summary, current map[string]string, candidates []Cand
 		return eligible(c) && (maxChanges <= 0 || changedParameterCount(current, *c) <= maxChanges)
 	}
 	poolBest := -1
+	poolBestCost := 0.0
 	for i := range candidates {
 		if !inPool(&candidates[i]) {
 			continue
 		}
-		if poolBest == -1 || candidates[i].Summary.SimPUHours < candidates[poolBest].Summary.SimPUHours {
+		if poolBest == -1 || candidates[i].Summary.SimPUHours < poolBestCost {
 			poolBest = i
+			poolBestCost = candidates[i].Summary.SimPUHours
 		}
 	}
 	if poolBest == -1 {
@@ -359,7 +363,8 @@ func GroupEquivalent(candidates []Candidate) [][]int {
 	}
 	index := map[outcome]int{}
 	var groups [][]int
-	for i, c := range candidates {
+	for i := range candidates {
+		c := &candidates[i]
 		key := outcome{
 			simPUHours: c.Summary.SimPUHours,
 			exceeded:   c.Summary.TargetExceededMinutes,
