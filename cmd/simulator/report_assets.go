@@ -22,8 +22,9 @@ import (
 
 // The report's markup, styles, and tooltip script live under assets/ as
 // regular files (so prose linters and editors treat them as HTML/CSS/JS);
-// go:embed compiles them into the binary, keeping the generated report a
-// single self-contained HTML file with no runtime file dependencies.
+// the go:embed directives compile them into the binary, keeping the
+// generated report a single self-contained HTML file with no runtime file
+// dependencies.
 //
 // reportCSS defines the palette slots as CSS custom properties for both
 // modes; the chart markup only ever references roles (var(--series-1), …).
@@ -40,8 +41,10 @@ var reportCSSText string
 //go:embed assets/report.js
 var reportJSText string
 
+var reportTemplates = template.Must(template.New("report").Parse(reportTemplateText))
+
+//nolint:gosec // G203: static assets compiled into the binary, not user input
 var (
-	reportTemplates = template.Must(template.New("report").Parse(reportTemplateText))
-	reportCSS       = template.CSS(reportCSSText)
-	reportJS        = template.JS(reportJSText) //nolint:gosec // static asset compiled into the binary
+	reportCSS = template.CSS(reportCSSText)
+	reportJS  = template.JS(reportJSText)
 )

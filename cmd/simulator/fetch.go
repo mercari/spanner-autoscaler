@@ -20,6 +20,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"maps"
 	"math"
 	"os"
@@ -77,26 +78,33 @@ func runFetch(args []string) error {
 	if err != nil {
 		return fmt.Errorf("creating Cloud Monitoring client (are Application Default Credentials configured?): %w", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	points, err := fetchPoints(ctx, client, *project, *instance, start, end)
 	if err != nil {
 		return err
 	}
 
-	w := os.Stdout
+	var w io.Writer = os.Stdout
+	var f *os.File
 	if *out != "" {
-		f, err := os.Create(*out)
-		if err != nil {
+		if f, err = os.Create(*out); err != nil {
 			return err
 		}
-		defer f.Close()
 		w = f
 	}
 	if err := simulator.WriteCSV(w, points); err != nil {
+		if f != nil {
+			_ = f.Close()
+		}
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "fetched %d points (%s .. %s)\n", len(points), start.Format(time.RFC3339), end.Format(time.RFC3339))
+	if f != nil {
+		if err := f.Close(); err != nil {
+			return err
+		}
+	}
+	_, _ = fmt.Fprintf(os.Stderr, "fetched %d points (%s .. %s)\n", len(points), start.Format(time.RFC3339), end.Format(time.RFC3339))
 	return nil
 }
 

@@ -78,15 +78,8 @@ func runRecommend(args []string) error {
 	if *maxP99 > 0 {
 		constraints.MaxSimCPUP99 = maxP99
 	}
-	switch *instanceConfig {
-	case "regional":
-		constraints.MaxHighPriorityCPU = simulator.RecommendedHighPriorityCPURegional
-	case "multi-region":
-		constraints.MaxHighPriorityCPU = simulator.RecommendedHighPriorityCPUMultiRegion
-	case "none":
-		// Guideline disabled.
-	default:
-		return fmt.Errorf("unknown -instance-config %q (want regional, multi-region, or none)", *instanceConfig)
+	if err := applyInstanceConfigGuideline(&constraints, *instanceConfig); err != nil {
+		return err
 	}
 
 	points, err := common.loadPoints()
@@ -107,7 +100,7 @@ func runRecommend(args []string) error {
 		space.FillGuidelineStepCandidates(sa, common.scaleUpInterval, common.scaleDownInterval)
 		if len(space.MinPUs) == 0 {
 			space.MinPUs = simulator.MinPUCandidates(sa, points)
-			fmt.Fprintf(os.Stderr, "auto-generated -min-pu candidates from the workload's required-PU percentiles: %v\n", space.MinPUs)
+			_, _ = fmt.Fprintf(os.Stderr, "auto-generated -min-pu candidates from the workload's required-PU percentiles: %v\n", space.MinPUs)
 		}
 	}
 
@@ -126,18 +119,8 @@ func runRecommend(args []string) error {
 		return fmt.Errorf("%s: %w", *configPath, err)
 	}
 
-	zero := 0
-	switch *puChangeGuideline {
-	case "base":
-		constraints.MaxScaleStepViolations = &baseResult.Summary.ScaleStepViolations
-		constraints.MaxShortScaleGaps = &baseResult.Summary.ScaleGapsUnder10Min
-	case "strict":
-		constraints.MaxScaleStepViolations = &zero
-		constraints.MaxShortScaleGaps = &zero
-	case "none":
-		// Guideline disabled.
-	default:
-		return fmt.Errorf("unknown -pu-change-guideline %q (want base, strict, or none)", *puChangeGuideline)
+	if err := applyPUChangeGuideline(&constraints, *puChangeGuideline, &baseResult.Summary); err != nil {
+		return err
 	}
 
 	candidates, err := simulator.Recommend(base, space, constraints, points)
@@ -174,13 +157,13 @@ func runRecommend(args []string) error {
 			return err
 		}
 		if err := writeRecommendHTML(f, current, displayCurrent, baseResult.Summary, candidates, *savingsTolerance, *maxChanges, topResult, topHigh, topTotal); err != nil {
-			f.Close()
+			_ = f.Close()
 			return err
 		}
 		if err := f.Close(); err != nil {
 			return err
 		}
-		fmt.Fprintf(os.Stderr, "wrote HTML report to %s\n", *htmlPath)
+		_, _ = fmt.Fprintf(os.Stderr, "wrote HTML report to %s\n", *htmlPath)
 	}
 
 	switch common.format {
@@ -205,6 +188,41 @@ func runRecommend(args []string) error {
 	default:
 		return fmt.Errorf("unknown format %q", common.format)
 	}
+}
+
+// applyInstanceConfigGuideline sets the Google-recommended high-priority CPU
+// ceiling for the given instance configuration.
+func applyInstanceConfigGuideline(constraints *simulator.Constraints, instanceConfig string) error {
+	switch instanceConfig {
+	case "regional":
+		constraints.MaxHighPriorityCPU = simulator.RecommendedHighPriorityCPURegional
+	case "multi-region":
+		constraints.MaxHighPriorityCPU = simulator.RecommendedHighPriorityCPUMultiRegion
+	case "none":
+		// Guideline disabled.
+	default:
+		return fmt.Errorf("unknown -instance-config %q (want regional, multi-region, or none)", instanceConfig)
+	}
+	return nil
+}
+
+// applyPUChangeGuideline caps the PU-change guideline counters: at the base
+// replay's own values (mode base), at zero (strict), or not at all (none).
+func applyPUChangeGuideline(constraints *simulator.Constraints, mode string, base *simulator.Summary) error {
+	zero := 0
+	switch mode {
+	case "base":
+		constraints.MaxScaleStepViolations = &base.ScaleStepViolations
+		constraints.MaxShortScaleGaps = &base.ScaleGapsUnder10Min
+	case "strict":
+		constraints.MaxScaleStepViolations = &zero
+		constraints.MaxShortScaleGaps = &zero
+	case "none":
+		// Guideline disabled.
+	default:
+		return fmt.Errorf("unknown -pu-change-guideline %q (want base, strict, or none)", mode)
+	}
+	return nil
 }
 
 // searchSpaceFlags carries the raw CLI list values for buildSearchSpace.
@@ -338,10 +356,11 @@ func furtherOptionLine(current map[string]string, recommended, further simulator
 		further.Summary.TargetExceededMinutes-recommended.Summary.TargetExceededMinutes)
 }
 
+//nolint:errcheck // best-effort terminal output
 func writeRecommendTable(current, displayCurrent map[string]string, base simulator.Summary, candidates []simulator.Candidate, savingsTolerance float64, maxChanges int, common *commonFlags, top int, showInfeasible bool) {
 	feasibleCount := 0
-	for _, c := range candidates {
-		if c.Feasible {
+	for i := range candidates {
+		if candidates[i].Feasible {
 			feasibleCount++
 		}
 	}
@@ -420,7 +439,7 @@ func writeRecommendTable(current, displayCurrent map[string]string, base simulat
 			c.Summary.ScaleStepViolations,
 			c.Summary.ScaleGapsUnder10Min, c.Summary.ScaleGapsUnder10Min-base.ScaleGapsUnder10Min)
 	}
-	tw.Flush()
+	_ = tw.Flush()
 
 	if len(rejections) > 0 {
 		fmt.Println("\nwhy infeasible:")

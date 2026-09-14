@@ -168,16 +168,26 @@ func writeSimulateHTML(w io.Writer, result *simulator.Result, targetHigh, target
 		Period: s.Start.UTC().Format("2006-01-02 15:04") + " .. " + s.End.UTC().Format("2006-01-02 15:04"),
 		Points: s.DataPoints,
 		KPIs: []kpiView{
-			{"PU-hours saved", fmt.Sprintf("%.1f%%", s.PUHoursSavedPercent),
-				fmt.Sprintf("recorded %s → simulated %s", commaInt(int(s.ActualPUHours)), commaInt(int(s.SimPUHours)))},
-			{"above target", fmt.Sprintf("%.0f min", s.TargetExceededMinutes),
-				fmt.Sprintf("%.1f min/day", s.TargetExceededMinutes/days)},
-			{"pinned at min PU", fmt.Sprintf("%.0f%%", s.MinPinnedPercent),
-				fmt.Sprintf("workload floor p95 %s PU", commaInt(s.RequiredPUAtMinP95))},
-			{"scale events", fmt.Sprintf("%d ↑ / %d ↓", s.ScaleUps, s.ScaleDowns),
-				fmt.Sprintf("%d steps >2x, %d gaps <10m", s.ScaleStepViolations, s.ScaleGapsUnder10Min)},
-			{"low confidence", fmt.Sprintf("%.0f min", s.LowConfidenceMinutes),
-				"recorded CPU above the model threshold"},
+			{
+				"PU-hours saved", fmt.Sprintf("%.1f%%", s.PUHoursSavedPercent),
+				fmt.Sprintf("recorded %s → simulated %s", commaInt(int(s.ActualPUHours)), commaInt(int(s.SimPUHours))),
+			},
+			{
+				"above target", fmt.Sprintf("%.0f min", s.TargetExceededMinutes),
+				fmt.Sprintf("%.1f min/day", s.TargetExceededMinutes/days),
+			},
+			{
+				"pinned at min PU", fmt.Sprintf("%.0f%%", s.MinPinnedPercent),
+				fmt.Sprintf("workload floor p95 %s PU", commaInt(s.RequiredPUAtMinP95)),
+			},
+			{
+				"scale events", fmt.Sprintf("%d ↑ / %d ↓", s.ScaleUps, s.ScaleDowns),
+				fmt.Sprintf("%d steps >2x, %d gaps <10m", s.ScaleStepViolations, s.ScaleGapsUnder10Min),
+			},
+			{
+				"low confidence", fmt.Sprintf("%.0f min", s.LowConfidenceMinutes),
+				"recorded CPU above the model threshold",
+			},
 		},
 		Verdict: buildVerdict("this config", s),
 	}
@@ -207,8 +217,8 @@ func writeSimulateHTML(w io.Writer, result *simulator.Result, targetHigh, target
 // simulated behavior, not only from aggregate numbers.
 func writeRecommendHTML(w io.Writer, current, displayCurrent map[string]string, base simulator.Summary, candidates []simulator.Candidate, savingsTolerance float64, maxChanges int, topResult *simulator.Result, topTargetHigh, topTargetTotal int) error {
 	feasibleCount := 0
-	for _, c := range candidates {
-		if c.Feasible {
+	for i := range candidates {
+		if candidates[i].Feasible {
 			feasibleCount++
 		}
 	}
@@ -586,7 +596,8 @@ func buildScatter(current map[string]string, base simulator.Summary, candidates 
 			fmt.Sprintf("above target %.0f min", base.TargetExceededMinutes),
 		}},
 	}}
-	for _, c := range candidates {
+	for i := range candidates {
+		c := &candidates[i]
 		if c.Error != "" {
 			continue
 		}
