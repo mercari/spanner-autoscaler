@@ -149,7 +149,7 @@ func runRecommend(args []string) error {
 	displayCurrent := simulator.CurrentParameterDisplay(sa, common.scaleUpInterval, common.scaleDownInterval)
 
 	if *htmlPath != "" {
-		// Re-run the top feasible candidate to chart its full time series in
+		// Re-run the recommended candidate to chart its full time series in
 		// the report — the aggregate numbers alone do not show how the PU and
 		// CPU would have moved under the recommended configuration.
 		var topResult *simulator.Result
@@ -452,7 +452,7 @@ func writeRecommendTable(current, displayCurrent map[string]string, base simulat
 	}
 }
 
-// printMinPUAssessment surfaces whether processingUnits.min should move — the
+// printMinPUAssessment surfaces whether processingUnits.min should move,
 // which the ranking table alone does not answer.
 func printMinPUAssessment(label string, s simulator.Summary) {
 	fmt.Printf("\nmin PU assessment (%s): min %d, pinned %.0f%% of the run", label, s.SpecMinPU, s.MinPinnedPercent)

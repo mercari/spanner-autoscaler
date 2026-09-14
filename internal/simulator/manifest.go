@@ -82,8 +82,6 @@ func LoadManifests(data []byte) (*spannerv1beta1.SpannerAutoscaler, []*spannerv1
 		return nil, nil, fmt.Errorf("no SpannerAutoscaler resource found in manifests")
 	}
 
-	// Reuse the production defaulting webhook so the simulated spec matches
-	// the in-cluster object.
 	if err := (&webhookv1beta1.SpannerAutoscalerCustomDefaulter{}).Default(context.Background(), autoscaler); err != nil {
 		return nil, nil, fmt.Errorf("applying SpannerAutoscaler defaults: %w", err)
 	}
