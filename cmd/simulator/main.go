@@ -24,9 +24,10 @@ limitations under the License.
 //
 // Subcommands:
 //
-//	fetch     download CPU / processing-units metrics from Cloud Monitoring into a CSV
-//	simulate  replay one configuration against a metrics CSV
-//	compare   replay several configurations against the same metrics CSV
+//	fetch      download CPU / processing-units metrics from Cloud Monitoring into a CSV
+//	simulate   replay one configuration against a metrics CSV
+//	compare    replay several configurations against the same metrics CSV
+//	recommend  grid-search configuration candidates and rank the safe ones by cost
 package main
 
 import (

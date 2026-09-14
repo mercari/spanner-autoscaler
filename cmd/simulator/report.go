@@ -202,7 +202,7 @@ func writeSimulateHTML(w io.Writer, result *simulator.Result, targetHigh, target
 // (feasible candidates in the accent hue, infeasible as gray context, the
 // base config as the orange reference), the min-PU assessments, and the full
 // candidate table with rejection reasons as the table view.
-// topResult, when non-nil, is a full re-run of the top feasible candidate; its
+// topResult, when non-nil, is a full re-run of the recommended candidate; its
 // PU/CPU timelines are embedded so the recommendation can be judged from the
 // simulated behavior, not only from aggregate numbers.
 func writeRecommendHTML(w io.Writer, current, displayCurrent map[string]string, base simulator.Summary, candidates []simulator.Candidate, savingsTolerance float64, maxChanges int, topResult *simulator.Result, topTargetHigh, topTargetTotal int) error {

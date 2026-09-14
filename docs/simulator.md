@@ -76,18 +76,18 @@ $ ./bin/simulator help
 
    A candidate is recommended only when it satisfies every constraint and
    costs less than the current configuration's own replay; otherwise the
-   conclusion says to keep the current configuration. The recommendation is
-   staged: `-max-changes` (default 1) restricts it to candidates changing
-   that many parameters at once — adopt one change, observe, re-run against
-   fresh metrics for the next one. Among candidates whose savings are within
-   `-savings-tolerance` percentage points of the best (default 2.0), the
-   least risky wins: the lowest scale-down rate first (the resolved step
-   size divided by the scale-down interval, so a larger step at a long
-   interval still counts as gentler than a small step fired every few
-   minutes; resize churn is a cost the simulation cannot measure), then the
-   measured risk counters. A candidate that saves more than the tolerance
-   beyond the recommendation appears as a "further option" to try after the
-   recommended change has proven out.
+   conclusion says to keep the current configuration.
+
+   The recommendation is staged: `-max-changes` (default 1) restricts it to
+   candidates changing that many parameters at once — adopt one change,
+   observe, re-run against fresh metrics for the next one. Among candidates
+   whose savings are within `-savings-tolerance` percentage points of the
+   best (default 2.0), the least risky wins: the lowest scale-down rate
+   first (step size ÷ interval, the PU shed per minute — resize churn is a
+   cost the simulation cannot measure), then the measured risk counters. A
+   candidate that saves more than the tolerance beyond the recommendation
+   appears as a "further option" to try after the recommended change has
+   proven out.
 
 ## Constraints and guidelines
 
