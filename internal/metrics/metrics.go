@@ -142,45 +142,32 @@ func (c *client) GetInstanceMetrics(ctx context.Context, metricType MetricType, 
 
 	log.V(1).Info("getting monitoring time series data")
 
-	var filter string
-	switch metricType {
-	case MetricTypeTotal:
-		filter = fmt.Sprintf(metricsFilterFormatTotal, c.instanceID)
-	default: // MetricTypeHighPriority
-		filter = fmt.Sprintf(metricsFilterFormatHighPriority, c.instanceID)
+	it := c.monitoringMetricClient.ListTimeSeries(ctx, c.buildListTimeSeriesRequest(metricType, now))
+
+	var series []*monitoringpb.TimeSeries
+	for {
+		ts, err := it.Next()
+		if errors.Is(err, iterator.Done) {
+			break
+		}
+		if err != nil {
+			log.Error(err, "unable to get metrics list time series response with iterator")
+			return nil, err
+		}
+		series = append(series, ts)
 	}
 
-	nowUTC := now.UTC()
-	req := &monitoringpb.ListTimeSeriesRequest{
-		Name:   fmt.Sprintf("projects/%s", c.projectID),
-		Filter: filter,
-		Interval: &monitoringpb.TimeInterval{
-			StartTime: &timestamp.Timestamp{
-				Seconds: nowUTC.Add(-c.term).Unix(),
-			},
-			EndTime: &timestamp.Timestamp{
-				Seconds: nowUTC.Unix(),
-			},
-		},
-		Aggregation: &monitoringpb.Aggregation{
-			AlignmentPeriod:    &duration.Duration{Seconds: 60},
-			PerSeriesAligner:   monitoringpb.Aggregation_ALIGN_MEAN,
-			CrossSeriesReducer: monitoringpb.Aggregation_REDUCE_SUM,
-		},
-		View: monitoringpb.ListTimeSeriesRequest_FULL,
-	}
-
-	it := c.monitoringMetricClient.ListTimeSeries(ctx, req)
-
-	resp, err := it.Next()
-	if err == iterator.Done {
+	if len(series) == 0 {
 		log.V(1).Info("could not get any time series metrics")
 		return nil, errors.New("no such spanner instance metrics")
 	}
-	if err != nil {
-		log.Error(err, "unable to get metrics list time series response with iterator")
+	if len(series) > 1 {
+		err := fmt.Errorf("expected a single aggregated time series, got %d", len(series))
+		log.Error(err, "Aggregation did not reduce the metric to a single time series", "series", len(series))
 		return nil, err
 	}
+
+	resp := series[0]
 
 	log.V(1).Info("got time series data points", "points", resp.GetPoints())
 
@@ -198,6 +185,44 @@ func (c *client) GetInstanceMetrics(ctx context.Context, metricType MetricType, 
 		result.CurrentHighPriorityCPUUtilization = cpuPercent
 	}
 	return result, nil
+}
+
+func (c *client) buildListTimeSeriesRequest(metricType MetricType, now time.Time) *monitoringpb.ListTimeSeriesRequest {
+	var filter string
+	switch metricType {
+	case MetricTypeTotal:
+		filter = fmt.Sprintf(metricsFilterFormatTotal, c.instanceID)
+	default: // MetricTypeHighPriority
+		filter = fmt.Sprintf(metricsFilterFormatHighPriority, c.instanceID)
+	}
+
+	nowUTC := now.UTC()
+
+	return &monitoringpb.ListTimeSeriesRequest{
+		Name:   fmt.Sprintf("projects/%s", c.projectID),
+		Filter: filter,
+		Interval: &monitoringpb.TimeInterval{
+			StartTime: &timestamp.Timestamp{
+				Seconds: nowUTC.Add(-c.term).Unix(),
+			},
+			EndTime: &timestamp.Timestamp{
+				Seconds: nowUTC.Unix(),
+			},
+		},
+		Aggregation: &monitoringpb.Aggregation{
+			AlignmentPeriod:    &duration.Duration{Seconds: 60},
+			PerSeriesAligner:   monitoringpb.Aggregation_ALIGN_MEAN,
+			CrossSeriesReducer: monitoringpb.Aggregation_REDUCE_SUM,
+			GroupByFields:      []string{"resource.label.location"},
+		},
+		// Each region of a multi-region instance carries the full compute capacity, so the busiest region is the constraint.
+		SecondaryAggregation: &monitoringpb.Aggregation{
+			AlignmentPeriod:    &duration.Duration{Seconds: 60},
+			PerSeriesAligner:   monitoringpb.Aggregation_ALIGN_MEAN,
+			CrossSeriesReducer: monitoringpb.Aggregation_REDUCE_MAX,
+		},
+		View: monitoringpb.ListTimeSeriesRequest_FULL,
+	}
 }
 
 func firstPointAsPercent(points []*monitoringpb.Point) (percent int, err error) {
