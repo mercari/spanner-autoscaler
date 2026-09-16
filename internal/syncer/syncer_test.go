@@ -227,7 +227,7 @@ func Test_syncer_getInstanceInfo(t *testing.T) {
 			}
 
 			ctx := context.Background()
-			gotInstance, gotInstanceMetrics, err := s.getInstanceInfo(ctx, metrics.MetricTypeHighPriority)
+			gotInstance, gotInstanceMetrics, err := s.getInstanceInfo(ctx, metrics.MetricTypeHighPriority, nil)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("getInstanceInfo() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -252,7 +252,7 @@ type recordingMetricsClient struct {
 	calls map[metrics.MetricType]time.Time
 }
 
-func (c *recordingMetricsClient) GetInstanceMetrics(_ context.Context, metricType metrics.MetricType, now time.Time) (*metrics.InstanceMetrics, error) {
+func (c *recordingMetricsClient) GetInstanceMetrics(_ context.Context, metricType metrics.MetricType, now time.Time, _ []time.Duration) (*metrics.InstanceMetrics, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.calls == nil {
@@ -283,7 +283,7 @@ func Test_syncer_getInstanceInfoDual_sharesBaseTime(t *testing.T) {
 		clock: testingclock.NewFakeClock(fakeTime),
 	}
 
-	if _, _, _, err := s.getInstanceInfoDual(context.Background()); err != nil {
+	if _, _, _, err := s.getInstanceInfoDual(context.Background(), nil); err != nil {
 		t.Fatalf("getInstanceInfoDual() error: %v", err)
 	}
 

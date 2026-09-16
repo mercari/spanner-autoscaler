@@ -107,6 +107,7 @@ _Validation:_
 - Enum: [HighPriority Total Both]
 
 _Appears in:_
+- [CPUWindowMetric](#cpuwindowmetric)
 - [SpannerAutoscalerStatus](#spannerautoscalerstatus)
 
 | Field | Description |
@@ -114,6 +115,28 @@ _Appears in:_
 | `HighPriority` | CPUMetricTypeHighPriority uses spanner.googleapis.com/instance/cpu/utilization_by_priority<br />with priority=high filter.<br /> |
 | `Total` | CPUMetricTypeTotal uses spanner.googleapis.com/instance/cpu/utilization (all priorities).<br /> |
 | `Both` | CPUMetricTypeBoth indicates that both highPriority and total metrics are being synced<br />simultaneously (dual CPU scaling mode).<br /> |
+
+
+#### CPUWindowMetric
+
+
+
+CPUWindowMetric holds the aggregates of one CPU metric over one declared
+metric window. CPU values are integer percentages, truncated the same way
+as the status current* CPU fields.
+
+
+
+_Appears in:_
+- [SpannerAutoscalerStatus](#spannerautoscalerstatus)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `metric` _[CPUMetricType](#cpumetrictype)_ | The CPU metric the aggregates were computed from: `HighPriority` or `Total`. |  | Enum: [HighPriority Total Both] <br /> |
+| `window` _string_ | The window the aggregates cover, exactly as declared in<br />spec.scaleConfig.metricWindows (e.g. "15m"). |  |  |
+| `min` _integer_ | Minimum 1-minute CPU utilization (percent) within the window. |  |  |
+| `avg` _integer_ | Average 1-minute CPU utilization (percent) within the window. |  |  |
+| `max` _integer_ | Maximum 1-minute CPU utilization (percent) within the window. |  |  |
 
 
 #### ComputeType
@@ -232,6 +255,10 @@ _Appears in:_
 | `scaledownAllowedTimes` _string array_ | Scale down is allowed only during the time periods specified in standard cron format.<br />Multiple cron expressions can be specified to handle complex time ranges including periods that cross midnight.<br />If not specified, scale down is allowed at any time.<br />Examples:<br />  - ["* 2-4 * * *"] allows scale down from 2:00 AM to 4:59 AM daily<br />  - ["* 23 * * *", "* 0-5 * * *"] allows scale down from 11:00 PM to 5:59 AM daily (crossing midnight) |  | Optional: \{\} <br /> |
 | `scaledownNotAllowedTimes` _string array_ | Scale down is NOT allowed during the time periods specified in standard cron format.<br />Multiple cron expressions can be specified to handle complex time ranges including periods that cross midnight.<br />If not specified, scale down is allowed at any time (unless scaledownAllowedTimes is specified).<br />Cannot be used together with scaledownAllowedTimes - only one of the two fields can be specified.<br />Examples:<br />  - ["* 9-17 * * 1-5"] prevents scale down during business hours (9:00 AM to 5:59 PM on weekdays)<br />  - ["* 12-13 * * 1-5", "* 18-19 * * 1-5"] prevents scale down during lunch and evening peak hours |  | Optional: \{\} <br /> |
 | `targetCPUUtilization` _[TargetCPUUtilization](#targetcpuutilization)_ | The CPU utilization which the autoscaling will try to achieve. Ref: [Spanner CPU utilization](https://cloud.google.com/spanner/docs/cpu-utilization#task-priority) |  |  |
+| `metricWindows` _string array_ | Time windows over which the 1-minute CPU utilization series is aggregated on every sync.<br />For each window and each configured CPU metric, min/avg/max aggregates are computed and<br />exposed to `scalingRules` CEL expressions as `cpu.<metric>.\{min,avg,max\}<window>`<br />(for example `cpu.highPriority.min15m` with `metricWindows: ["15m"]`).<br />Each entry must be a whole number of minutes or hours such as "15m" or "1h",<br />at most "1h". At most 4 windows can be declared. |  | MaxItems: 4 <br />Optional: \{\} <br /> |
+| `scalingRules` _[ScalingRule](#scalingrule) array_ | Additional scale-up trigger rules written in CEL (Common Expression Language), evaluated<br />on every reconcile alongside the built-in target-CPU logic. When a rule condition holds,<br />its `scaleUp` amount is added to the current processing units and the result competes with<br />the built-in desired value (the larger one wins). Rules can never bypass the hard guards:<br />min/max range, scale-up interval, and valid processing-unit steps still apply.<br />Example: raise processing units by 25% when the high-priority CPU has stayed at or above<br />50% for the last 15 minutes (requires `metricWindows: ["15m"]`):<br />  scalingRules:<br />    - when: "cpu.highPriority.min15m >= 50"<br />      scaleUp: "25%" |  | Optional: \{\} <br /> |
+| `scaleupCondition` _string_ | A CEL expression that gates scale-up: when set, a scale-up (whether driven by the<br />built-in target-CPU logic or by `scalingRules`) is applied only while this expression<br />evaluates to true. It is ANDed with the existing guards (scale-up interval, min/max<br />range) and can never force a scale-up by itself. The variables are the same as in<br />`scalingRules[].when`. If evaluation fails, the gate fails open (the scale-up is<br />allowed) so that an expression error cannot starve the instance of capacity, and a<br />warning Event is emitted. |  | Optional: \{\} <br /> |
+| `scaledownCondition` _string_ | A CEL expression that gates scale-down: when set, a scale-down is applied only while<br />this expression evaluates to true. It is ANDed with the existing guards (scale-down<br />interval, scaledownAllowedTimes / scaledownNotAllowedTimes, min/max range) and can<br />never force a scale-down by itself. The variables are the same as in<br />`scalingRules[].when`. Useful to allow scale-down only when it is provably safe, e.g.<br />`cpu.total.max30m < 20` (requires `metricWindows: ["30m"]`) instead of disabling<br />scale-down outright. If evaluation fails, the gate fails closed (the scale-down is<br />denied) and a warning Event is emitted. |  | Optional: \{\} <br /> |
 
 
 #### ScaleConfigNodes
@@ -266,6 +293,24 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `min` _integer_ | Minimum number of Processing Units for the autoscaling range |  | MultipleOf: 100 <br /> |
 | `max` _integer_ | Maximum number of Processing Units for the autoscaling range |  | MultipleOf: 100 <br /> |
+
+
+#### ScalingRule
+
+
+
+ScalingRule triggers an extra scale-up when a CEL condition holds.
+See the CRD reference for the list of variables available in `when`.
+
+
+
+_Appears in:_
+- [ScaleConfig](#scaleconfig)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `when` _string_ | A CEL expression that must evaluate to a boolean. Available variables include<br />`current` (current processing units), `desired` (the built-in logic's desired<br />processing units), `minPU` / `maxPU` (effective range after schedules),<br />`cpu.highPriority` / `cpu.total` (latest 1-minute CPU %, only for configured metrics),<br />`cpu.<metric>.\{min,avg,max\}<window>` (aggregates declared via `metricWindows`),<br />`target.highPriority` / `target.total` (configured targets),<br />`now` / `lastScaleTime` (timestamps), and `activeSchedules` (names of active schedules).<br />If evaluation fails, the rule is skipped (fail-safe) and a warning Event is emitted. |  |  |
+| `scaleUp` _[IntOrString](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.22/#intorstring-intstr-util)_ | How many processing units to add to the current processing units when the condition<br />holds. Either a fixed number of processing units (e.g. 3000) or a percentage of the<br />current processing units (e.g. "25%"; at most "100%", i.e. doubling). The result is<br />rounded up to a valid processing-unit value and clamped to the min/max range. |  |  |
 
 
 #### Schedule
@@ -398,6 +443,7 @@ _Appears in:_
 | `currentHighPriorityCPUUtilization` _integer_ | High priority CPU utilization of the busiest region, represented as a percentage.<br />Within one region the utilization of every database and of system tasks is summed;<br />for a multi-region instance the regions are then reduced to their maximum, because<br />each region is provisioned with the full compute capacity of the instance and the<br />busiest region is what constrains it. For a single-region instance this is simply<br />the high priority CPU utilization of the instance.<br />In dual CPU scaling mode (both highPriority and total configured), this value is<br />fetched concurrently with currentTotalCPUUtilization. Because Cloud Monitoring<br />ingests the underlying metrics (utilization_by_priority and utilization) independently,<br />the two fields may briefly reflect different alignment windows and the relation<br />currentTotalCPUUtilization >= currentHighPriorityCPUUtilization is not guaranteed<br />on every sync. The autoscaling decision uses both values independently and takes<br />the larger required processing units, so the transient inconsistency does not cause<br />over-scaling down. |  |  |
 | `currentTotalCPUUtilization` _integer_ | Total CPU utilization (all priorities) of the busiest region, represented as a percentage.<br />Aggregated the same way as currentHighPriorityCPUUtilization.<br />This field is populated only when spec.scaleConfig.targetCPUUtilization.total is specified.<br />See the note on currentHighPriorityCPUUtilization for the consistency caveat in dual mode. |  |  |
 | `currentCPUMetricType` _[CPUMetricType](#cpumetrictype)_ | CurrentCPUMetricType is the CPU metric type that was used in the last sync cycle.<br />The controller uses this to detect metric-type switches and skip scaling until<br />the status reflects the newly configured metric type. |  | Enum: [HighPriority Total Both] <br /> |
+| `currentCPUWindowMetrics` _[CPUWindowMetric](#cpuwindowmetric) array_ | Min/avg/max aggregates of the 1-minute CPU utilization series over each window<br />declared in spec.scaleConfig.metricWindows, rebuilt on every sync. These are the<br />values exposed to the CEL expressions in spec.scaleConfig.scalingRules and the<br />scale-up/scale-down conditions. An entry is omitted while the metric series does<br />not yet cover the whole window (e.g. right after instance creation); CEL<br />expressions are then skipped fail-safe until the data catches up. |  | Optional: \{\} <br /> |
 | `activeManualScaling` _[ActiveManualScaling](#activemanualscaling)_ | ActiveManualScaling references the `SpannerManualScaling` resource that<br />is currently overriding this autoscaler's processing units. Empty when<br />normal (CPU- and schedule-driven) autoscaling is in effect. |  | Optional: \{\} <br /> |
 
 

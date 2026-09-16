@@ -175,6 +175,21 @@ func Run(cfg Config, points []Point) (*Result, error) {
 	}
 	agg := newAggregator(flags, lowConfidenceCPU, targetHigh, targetTotal, sa.Spec.ScaleConfig.ProcessingUnits.Min)
 
+	// Rebuild the metric-window aggregates each tick from the simulated CPU
+	// series, mirroring what the controller's metrics client computes from
+	// the Cloud Monitoring point series, so CEL scaling rules and gate
+	// conditions replay exactly as they would run in production.
+	ws := newWindowState(sa.Spec.ScaleConfig.MetricWindows)
+	celErrors := 0
+	countCELError := func(err error) {
+		// The warm-up period before a window has enough data is expected on
+		// every replay (production skips evaluation the same way); only count
+		// errors that would persist.
+		if err != nil && !errors.Is(err, scaling.ErrWindowDataNotReady) {
+			celErrors++
+		}
+	}
+
 	for i, p := range points {
 		now := p.Time
 		dt := tickDuration(points, i)
@@ -212,15 +227,24 @@ func Run(cfg Config, points []Point) (*Result, error) {
 		sa.Status.CurrentProcessingUnits = simPU
 		sa.Status.CurrentlyActiveSchedules = active
 		setStatusCPU(sa, flags, simHigh, simTotal)
+		ws.add(now, simHigh, simTotal)
+		sa.Status.CurrentCPUWindowMetrics = ws.windowMetrics(flags)
 
 		minPU, maxPU, _, _ := scaling.DesiredPURange(*sa)
 		sa.Status.DesiredMinPUs = minPU
 		sa.Status.DesiredMaxPUs = maxPU
 
-		desired := scaling.DesiredProcessingUnits(*sa)
-		decision, err := scaling.Decide(sa, desired, now, scaleUpInterval, scaleDownInterval)
+		builtinDesired := scaling.DesiredProcessingUnits(*sa)
+		desired, ruleOutcomes := scaling.EvaluateScalingRules(sa, builtinDesired, now)
+		for _, oc := range ruleOutcomes {
+			countCELError(oc.Err)
+		}
+		decision, gates, err := scaling.Decide(sa, desired, now, scaleUpInterval, scaleDownInterval)
 		if err != nil {
 			return nil, fmt.Errorf("invalid scale-down time restriction configuration: %w", err)
+		}
+		for _, gate := range gates {
+			countCELError(gate.Err)
 		}
 
 		puBefore := simPU
@@ -240,7 +264,103 @@ func Run(cfg Config, points []Point) (*Result, error) {
 	}
 
 	result.Summary = agg.summary(points[0].Time, points[len(points)-1].Time, result.Events)
+	result.Summary.CELErrors = celErrors
 	return result, nil
+}
+
+// cpuSample is one tick's simulated CPU observation retained for window
+// aggregation. CPU values are percentages; nil means the metric was not
+// simulated at that tick.
+type cpuSample struct {
+	t     time.Time
+	high  *float64
+	total *float64
+}
+
+// windowState keeps the recent simulated CPU samples needed to compute the
+// spec.scaleConfig.metricWindows aggregates at every tick.
+type windowState struct {
+	windows   []string
+	durations []time.Duration
+	maxWindow time.Duration
+	samples   []cpuSample // ascending by time
+}
+
+func newWindowState(specWindows []string) *windowState {
+	ws := &windowState{}
+	ws.windows, ws.durations = scaling.ValidMetricWindowDurations(specWindows)
+	for _, d := range ws.durations {
+		ws.maxWindow = max(ws.maxWindow, d)
+	}
+	return ws
+}
+
+func (ws *windowState) add(t time.Time, high, total *float64) {
+	if len(ws.durations) == 0 {
+		return
+	}
+	ws.samples = append(ws.samples, cpuSample{t: t, high: high, total: total})
+	// Drop samples older than the largest window (anchored at the newest
+	// sample, matching the production aggregation).
+	cutoff := t.Add(-ws.maxWindow)
+	firstKept := 0
+	for firstKept < len(ws.samples) && !ws.samples[firstKept].t.After(cutoff) {
+		firstKept++
+	}
+	ws.samples = ws.samples[firstKept:]
+}
+
+// windowMetrics computes the status window aggregates from the retained
+// samples with the same semantics as the production metrics client: each
+// window is anchored at the newest sample, covers samples strictly newer
+// than (newest - window), and is only reported once it holds a full
+// window's worth of 1-minute samples for the metric. CPU percentages are
+// truncated to integers exactly like the status current* CPU fields.
+func (ws *windowState) windowMetrics(flags spannerv1beta1.CPUMetricFlags) []spannerv1beta1.CPUWindowMetric {
+	if len(ws.durations) == 0 || len(ws.samples) == 0 {
+		return nil
+	}
+	newest := ws.samples[len(ws.samples)-1].t
+
+	var metrics []spannerv1beta1.CPUWindowMetric
+	for i, d := range ws.durations {
+		cutoff := newest.Add(-d)
+		expected := int(d / time.Minute)
+
+		var highs, totals []float64
+		for _, s := range ws.samples {
+			if !s.t.After(cutoff) {
+				continue
+			}
+			if s.high != nil {
+				highs = append(highs, *s.high)
+			}
+			if s.total != nil {
+				totals = append(totals, *s.total)
+			}
+		}
+		if flags&spannerv1beta1.CPUMetricFlagHighPriority != 0 && len(highs) >= expected {
+			metrics = append(metrics, windowMetric(spannerv1beta1.CPUMetricTypeHighPriority, ws.windows[i], highs))
+		}
+		if flags&spannerv1beta1.CPUMetricFlagTotal != 0 && len(totals) >= expected {
+			metrics = append(metrics, windowMetric(spannerv1beta1.CPUMetricTypeTotal, ws.windows[i], totals))
+		}
+	}
+	return metrics
+}
+
+func windowMetric(metric spannerv1beta1.CPUMetricType, window string, values []float64) spannerv1beta1.CPUWindowMetric {
+	var sum float64
+	for _, v := range values {
+		sum += v
+	}
+	return spannerv1beta1.CPUWindowMetric{
+		Metric: metric,
+		Window: window,
+		Min:    int(slices.Min(values)),
+		Avg:    int(sum / float64(len(values))),
+		Max:    int(slices.Max(values)),
+	}
 }
 
 // prepareSchedules parses cron expressions and durations of the schedules

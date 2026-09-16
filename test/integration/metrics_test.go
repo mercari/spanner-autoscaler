@@ -41,7 +41,7 @@ func TestMetricsClient_GetInstanceMetrics_Static(t *testing.T) {
 		t.Fatalf("failed to create metrics client: %v", err)
 	}
 
-	got, err := c.GetInstanceMetrics(ctx, metrics.MetricTypeHighPriority, time.Now())
+	got, err := c.GetInstanceMetrics(ctx, metrics.MetricTypeHighPriority, time.Now(), nil)
 	if err != nil {
 		t.Fatalf("GetInstanceMetrics() error: %v", err)
 	}
@@ -202,8 +202,53 @@ func TestMetricsClient_GetInstanceMetrics_NotFound(t *testing.T) {
 		t.Fatalf("failed to create metrics client: %v", err)
 	}
 
-	_, err = c.GetInstanceMetrics(ctx, metrics.MetricTypeHighPriority, time.Now())
+	_, err = c.GetInstanceMetrics(ctx, metrics.MetricTypeHighPriority, time.Now(), nil)
 	if err == nil {
 		t.Fatal("GetInstanceMetrics() expected error for unconfigured instance, got nil")
+	}
+}
+
+// TestMetricsClient_GetInstanceMetrics_WindowAggregates verifies the
+// metricWindows plumbing end-to-end against the monitoring emulator: the
+// emulator synthesizes a per-minute point series over the requested interval
+// and the client aggregates it into min/avg/max per window.
+func TestMetricsClient_GetInstanceMetrics_WindowAggregates(t *testing.T) {
+	const (
+		projectID  = "metrics-window-project"
+		instanceID = "metrics-window-instance"
+	)
+
+	body, _ := json.Marshal(map[string]float64{"high_priority": 0.55})
+	adminPUT(t, fmt.Sprintf("/metrics/%s/%s", projectID, instanceID), body)
+	t.Cleanup(func() { adminDELETE(t, fmt.Sprintf("/metrics/%s/%s", projectID, instanceID)) })
+
+	ctx := t.Context()
+	c, err := metrics.NewClient(ctx, projectID, instanceID,
+		metrics.WithEndpoint(monitoringGRPCAddr()),
+	)
+	if err != nil {
+		t.Fatalf("failed to create metrics client: %v", err)
+	}
+
+	windows := []time.Duration{15 * time.Minute, time.Hour}
+	got, err := c.GetInstanceMetrics(ctx, metrics.MetricTypeHighPriority, time.Now(), windows)
+	if err != nil {
+		t.Fatalf("GetInstanceMetrics() error: %v", err)
+	}
+
+	if got.CurrentHighPriorityCPUUtilization != 55 {
+		t.Errorf("CurrentHighPriorityCPUUtilization = %d, want 55", got.CurrentHighPriorityCPUUtilization)
+	}
+	if len(got.WindowAggregates) != len(windows) {
+		t.Fatalf("WindowAggregates = %+v, want one entry per requested window %v", got.WindowAggregates, windows)
+	}
+	for i, agg := range got.WindowAggregates {
+		if agg.Window != windows[i] {
+			t.Errorf("WindowAggregates[%d].Window = %s, want %s", i, agg.Window, windows[i])
+		}
+		// Static mode yields a constant series, so min == avg == max == 55.
+		if agg.Min != 55 || agg.Avg != 55 || agg.Max != 55 {
+			t.Errorf("WindowAggregates[%d] = %+v, want min/avg/max all 55", i, agg)
+		}
 	}
 }

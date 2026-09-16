@@ -10,6 +10,7 @@ require (
 	github.com/go-logr/logr v1.4.3
 	github.com/golang/protobuf v1.5.4
 	github.com/golangci/golangci-lint/v2 v2.12.2
+	github.com/google/cel-go v0.29.0
 	github.com/google/go-cmp v0.7.0
 	github.com/google/uuid v1.6.0
 	github.com/netresearch/go-cron v0.15.0
@@ -161,7 +162,6 @@ require (
 	github.com/golangci/rowserrcheck v0.0.0-20260419091836-c5f79b8a11ba // indirect
 	github.com/golangci/swaggoswag v0.0.0-20250504205917-77f2aca3143e // indirect
 	github.com/golangci/unconvert v0.0.0-20250410112200-a129a6e6413e // indirect
-	github.com/google/cel-go v0.29.0 // indirect
 	github.com/google/gnostic-models v0.7.1 // indirect
 	github.com/google/pprof v0.0.0-20260402051712-545e8a4df936 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect

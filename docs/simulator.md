@@ -139,3 +139,12 @@ combinations that behave identically on the recording fold into it as
   used for the search (for example, the previous month) and check the
   storage floor: the minimum processing units must also cover the
   database's storage requirement.
+- CEL scaling rules (`spec.scaleConfig.scalingRules`) and the
+  `scaleupCondition` / `scaledownCondition` gates replay with production
+  semantics: the metric-window aggregates (`metricWindows`) are recomputed
+  from the simulated CPU series at every tick, including the warm-up period
+  during which a window has too little data and expressions are skipped
+  fail-safe. `summary.celErrors` counts expression evaluations that failed
+  outside the warm-up — non-zero means the same manifest would also error in
+  production (rules skipped, gates falling back to their fail-safe
+  direction), so fix the expressions before applying.

@@ -134,15 +134,8 @@ func DesiredPUFromCPU(currentCPU, targetCPU int, sa spannerv1beta1.SpannerAutosc
 	}
 
 	// keep the scaling between the specified min/max range
-	minPU := sa.Spec.ScaleConfig.ProcessingUnits.Min
-	maxPU := sa.Spec.ScaleConfig.ProcessingUnits.Max
-	// fetch min/max range from status, in case any schedules have updated the range
-	if sa.Status.DesiredMinPUs > 0 {
-		minPU = sa.Status.DesiredMinPUs
-	}
-	if sa.Status.DesiredMaxPUs > 0 {
-		maxPU = sa.Status.DesiredMaxPUs
-	}
+	// (status overrides spec, in case any schedules have updated the range)
+	minPU, maxPU := effectiveRange(&sa)
 	if desiredPU < minPU {
 		desiredPU = minPU
 	}
@@ -221,42 +214,72 @@ const (
 	// DecisionSkipScaleDownWindow means a scale-down is wanted but the
 	// current time is outside the allowed scale-down windows.
 	DecisionSkipScaleDownWindow
+	// DecisionSkipScaleUpGate means a scale-up is wanted but the
+	// spec.scaleConfig.scaleupCondition CEL gate evaluated to false.
+	DecisionSkipScaleUpGate
+	// DecisionSkipScaleDownGate means a scale-down is wanted but the
+	// spec.scaleConfig.scaledownCondition CEL gate evaluated to false (or
+	// failed to evaluate — the scale-down gate fails closed).
+	DecisionSkipScaleDownGate
 )
 
 // Decide reports whether desiredPU may be applied at now, reproducing the
 // guard conditions of the controller's needUpdateProcessingUnits: equal-value
 // short circuit, per-direction cooldown intervals since
-// sa.Status.LastScaleTime, and the scale-down time-window restrictions.
-// defaultScaleUpInterval / defaultScaleDownInterval are the controller-level
-// defaults used when the spec does not override them.
+// sa.Status.LastScaleTime, the scale-down time-window restrictions, and the
+// per-direction CEL gates (spec.scaleConfig.scaleupCondition /
+// scaledownCondition). defaultScaleUpInterval / defaultScaleDownInterval are
+// the controller-level defaults used when the spec does not override them.
+//
+// The returned GateOutcome slice reports every gate that was evaluated (at
+// most one per call), including gates that allowed the change but reported an
+// evaluation error via their fail-safe direction; callers surface those
+// errors as Events.
 //
 // A non-nil error indicates an invalid time-restriction configuration; the
 // returned Decision is DecisionSkipScaleDownWindow in that case (the change
 // must not be applied).
-func Decide(sa *spannerv1beta1.SpannerAutoscaler, desiredPU int, now time.Time, defaultScaleUpInterval, defaultScaleDownInterval time.Duration) (Decision, error) {
+func Decide(sa *spannerv1beta1.SpannerAutoscaler, desiredPU int, now time.Time, defaultScaleUpInterval, defaultScaleDownInterval time.Duration) (Decision, []GateOutcome, error) {
 	currentPU := sa.Status.CurrentProcessingUnits
+	var gates []GateOutcome
 
 	switch {
 	case desiredPU == currentPU:
-		return DecisionSkipSame, nil
+		return DecisionSkipSame, nil, nil
 
 	case currentPU < desiredPU && now.Before(sa.Status.LastScaleTime.Time.Add(DurationOr(sa.Spec.ScaleConfig.ScaleupInterval, defaultScaleUpInterval))):
-		return DecisionSkipScaleUpInterval, nil
+		return DecisionSkipScaleUpInterval, nil, nil
 
 	case desiredPU < currentPU && now.Before(sa.Status.LastScaleTime.Time.Add(DurationOr(sa.Spec.ScaleConfig.ScaledownInterval, defaultScaleDownInterval))):
-		return DecisionSkipScaleDownInterval, nil
+		return DecisionSkipScaleDownInterval, nil, nil
 
 	case desiredPU < currentPU:
 		allowed, err := IsScaledownAllowed(sa.Spec.ScaleConfig.ScaledownAllowedTimes, sa.Spec.ScaleConfig.ScaledownNotAllowedTimes, now)
 		if err != nil {
-			return DecisionSkipScaleDownWindow, err
+			return DecisionSkipScaleDownWindow, nil, err
 		}
 		if !allowed {
-			return DecisionSkipScaleDownWindow, nil
+			return DecisionSkipScaleDownWindow, nil, nil
+		}
+		if expr := sa.Spec.ScaleConfig.ScaledownCondition; expr != "" {
+			gate := evaluateGate(sa, GateFieldScaledown, expr, desiredPU, now, false)
+			gates = append(gates, gate)
+			if !gate.Allowed {
+				return DecisionSkipScaleDownGate, gates, nil
+			}
+		}
+
+	case currentPU < desiredPU:
+		if expr := sa.Spec.ScaleConfig.ScaleupCondition; expr != "" {
+			gate := evaluateGate(sa, GateFieldScaleup, expr, desiredPU, now, true)
+			gates = append(gates, gate)
+			if !gate.Allowed {
+				return DecisionSkipScaleUpGate, gates, nil
+			}
 		}
 	}
 
-	return DecisionScale, nil
+	return DecisionScale, gates, nil
 }
 
 // DurationOr returns customDuration when set, defaultDuration otherwise.

@@ -361,3 +361,92 @@ spec:
 		t.Errorf("schedules = %+v; want one named morning-batch", schedules)
 	}
 }
+
+func TestRunScalingRule_SustainedCPU(t *testing.T) {
+	// Built-in logic sees 55% against a 70% target and never scales; the
+	// trigger rule fires once the CPU has stayed >= 50% for 15 minutes.
+	sa := newAutoscaler(1000, 10000, 70)
+	sa.Spec.ScaleConfig.MetricWindows = []string{"15m"}
+	sa.Spec.ScaleConfig.ScalingRules = []spannerv1beta1.ScalingRule{
+		{When: "cpu.highPriority.min15m >= 50", ScaleUp: intstr.FromString("100%")},
+	}
+
+	start := time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC)
+	// Workload 550: 55% CPU at 1000 PU.
+	points := constantWorkloadPoints(start, 30, 1000, 550)
+
+	result, err := Run(Config{Autoscaler: sa}, points)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// The window needs 15 one-minute samples, so the rule can first fire at
+	// the 15th tick (start + 14m). Doubling to 2000 halves the CPU to 27.5%,
+	// which immediately drops min15m below 50, so it fires exactly once.
+	if len(result.Events) != 1 {
+		t.Fatalf("events = %+v; want exactly one rule-driven scale-up", result.Events)
+	}
+	e := result.Events[0]
+	wantTime := start.Add(14 * time.Minute)
+	if e.FromPU != 1000 || e.ToPU != 2000 || !e.Time.Equal(wantTime) {
+		t.Errorf("event = %+v; want 1000→2000 at %v (after 15 sustained minutes)", e, wantTime)
+	}
+	if result.Summary.CELErrors != 0 {
+		t.Errorf("CELErrors = %d; want 0 (window warm-up is not an error)", result.Summary.CELErrors)
+	}
+}
+
+func TestRunScaledownCondition_GatesUntilWindowProvesQuiet(t *testing.T) {
+	// An oversized instance at 8% CPU. The gate allows scale-down only once
+	// the last 15 minutes prove quiet; during the window warm-up it fails
+	// closed, so the first scale-down shifts from the first tick to the 15th.
+	sa := newAutoscaler(1000, 10000, 40)
+	sa.Spec.ScaleConfig.ScaledownStepSize = intstr.FromInt(1000)
+	sa.Spec.ScaleConfig.MetricWindows = []string{"15m"}
+	sa.Spec.ScaleConfig.ScaledownCondition = "cpu.highPriority.max15m < 10"
+
+	start := time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC)
+	// Workload 400: 8% CPU at 5000 PU.
+	points := constantWorkloadPoints(start, 20, 5000, 400)
+
+	result, err := Run(Config{Autoscaler: sa}, points)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if len(result.Events) == 0 {
+		t.Fatal("no scale-down happened; the gate should open once the window is quiet")
+	}
+	e := result.Events[0]
+	wantTime := start.Add(14 * time.Minute)
+	if e.FromPU != 5000 || e.ToPU != 4000 || !e.Time.Equal(wantTime) {
+		t.Errorf("first event = %+v; want 5000→4000 at %v (gate closed during warm-up)", e, wantTime)
+	}
+	if result.Summary.CELErrors != 0 {
+		t.Errorf("CELErrors = %d; want 0 (window warm-up is not an error)", result.Summary.CELErrors)
+	}
+}
+
+func TestRunScalingRule_BrokenExpressionIsCounted(t *testing.T) {
+	// A rule referencing a window that is not declared cannot compile; the
+	// replay must skip it fail-safe (no scaling) and report it via CELErrors.
+	sa := newAutoscaler(1000, 10000, 70)
+	sa.Spec.ScaleConfig.MetricWindows = []string{"15m"}
+	sa.Spec.ScaleConfig.ScalingRules = []spannerv1beta1.ScalingRule{
+		{When: "cpu.highPriority.min30m >= 50", ScaleUp: intstr.FromString("100%")},
+	}
+
+	start := time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC)
+	points := constantWorkloadPoints(start, 20, 1000, 550)
+
+	result, err := Run(Config{Autoscaler: sa}, points)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(result.Events) != 0 {
+		t.Errorf("events = %+v; want none (broken rule is skipped)", result.Events)
+	}
+	if result.Summary.CELErrors == 0 {
+		t.Error("CELErrors = 0; want > 0 for a rule that cannot compile")
+	}
+}

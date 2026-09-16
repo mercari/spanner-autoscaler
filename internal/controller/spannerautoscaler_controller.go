@@ -491,7 +491,9 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 		}
 	}
 
-	desiredProcessingUnits := calcDesiredProcessingUnits(sa)
+	builtinDesiredProcessingUnits := calcDesiredProcessingUnits(sa)
+	desiredProcessingUnits, ruleOutcomes := scaling.EvaluateScalingRules(&sa, builtinDesiredProcessingUnits, r.clock.Now())
+	r.reportRuleOutcomes(log, &sa, builtinDesiredProcessingUnits, ruleOutcomes)
 
 	if now := r.clock.Now(); r.needUpdateProcessingUnits(log, &sa, desiredProcessingUnits, now) {
 		// Targets are *int because a single-mode spec leaves one of them nil.
@@ -540,7 +542,7 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 		}
 		observability.RecordScaleEvent(labels,
 			sa.Status.CurrentProcessingUnits, desiredProcessingUnits,
-			scaleDriver(&sa, desiredProcessingUnits),
+			scaleDriver(&sa, desiredProcessingUnits, builtinDesiredProcessingUnits),
 		)
 
 		r.recorder.Eventf(&sa, corev1.EventTypeNormal, "Updated",
@@ -821,10 +823,26 @@ func (r *SpannerAutoscalerReconciler) needUpdateProcessingUnits(log logr.Logger,
 	currentProcessingUnits := sa.Status.CurrentProcessingUnits
 	labels := observability.LabelsForAutoscaler(sa)
 
-	decision, err := scaling.Decide(sa, desiredProcessingUnits, now, r.scaleUpInterval, r.scaleDownInterval)
+	decision, gates, err := scaling.Decide(sa, desiredProcessingUnits, now, r.scaleUpInterval, r.scaleDownInterval)
 	if err != nil {
 		log.Error(err, "invalid scale down time restriction configuration")
 		return false
+	}
+
+	// Surface gate evaluation errors even when the gate's fail-safe direction
+	// let the change through (scale-up gates fail open): the expression is
+	// broken and the operator should fix it.
+	for _, gate := range gates {
+		if gate.Err == nil {
+			continue
+		}
+		log.Error(gate.Err, "failed to evaluate CEL gate condition",
+			"field", gate.Field,
+			"allowedByFailSafe", gate.Allowed,
+		)
+		r.recorder.Eventf(sa, corev1.EventTypeWarning, "ScalingConditionError",
+			"failed to evaluate spec.scaleConfig.%s (fail-safe: %s): %s",
+			gate.Field, failSafeLabel(gate.Allowed), gate.Err.Error())
 	}
 
 	switch decision {
@@ -870,9 +888,67 @@ func (r *SpannerAutoscalerReconciler) needUpdateProcessingUnits(log logr.Logger,
 		)
 		observability.RecordScaleSkipped(labels, observability.SkipReasonScaleDownWindow)
 		return false
+
+	case scaling.DecisionSkipScaleUpGate:
+		log.Info("scale up is not allowed by scaleupCondition",
+			"now", now.String(),
+			"currentPU", currentProcessingUnits,
+			"desiredPU", desiredProcessingUnits,
+			"scaleupCondition", sa.Spec.ScaleConfig.ScaleupCondition,
+		)
+		observability.RecordScaleSkipped(labels, observability.SkipReasonScaleUpGate)
+		return false
+
+	case scaling.DecisionSkipScaleDownGate:
+		log.Info("scale down is not allowed by scaledownCondition",
+			"now", now.String(),
+			"currentPU", currentProcessingUnits,
+			"desiredPU", desiredProcessingUnits,
+			"scaledownCondition", sa.Spec.ScaleConfig.ScaledownCondition,
+		)
+		observability.RecordScaleSkipped(labels, observability.SkipReasonScaleDownGate)
+		return false
 	}
 
 	return true
+}
+
+// failSafeLabel names the direction a gate takes when its expression cannot
+// be evaluated, for use in Events.
+func failSafeLabel(allowed bool) string {
+	if allowed {
+		return "change allowed"
+	}
+	return "change denied"
+}
+
+// reportRuleOutcomes logs and emits Events for the evaluation of
+// spec.scaleConfig.scalingRules: a warning Event per failed rule (the rule is
+// skipped fail-safe) and an info log per triggered rule. The event recorder
+// aggregates repeated identical events, so per-reconcile emission does not
+// flood the event stream while a rule stays broken or active.
+func (r *SpannerAutoscalerReconciler) reportRuleOutcomes(log logr.Logger, sa *spannerv1beta1.SpannerAutoscaler, builtinDesired int, outcomes []scaling.RuleOutcome) {
+	for _, oc := range outcomes {
+		switch {
+		case oc.Err != nil:
+			log.Error(oc.Err, "failed to evaluate scaling rule; rule skipped",
+				"ruleIndex", oc.Index,
+				"when", oc.When,
+			)
+			r.recorder.Eventf(sa, corev1.EventTypeWarning, "ScalingRuleError",
+				"failed to evaluate spec.scaleConfig.scalingRules[%d].when (rule skipped): %s",
+				oc.Index, oc.Err.Error())
+
+		case oc.Triggered:
+			log.V(1).Info("scaling rule triggered",
+				"ruleIndex", oc.Index,
+				"when", oc.When,
+				"candidatePU", oc.CandidatePU,
+				"builtinDesiredPU", builtinDesired,
+				"currentPU", sa.Status.CurrentProcessingUnits,
+			)
+		}
+	}
 }
 
 // calcDesiredProcessingUnits calculates the values needed to keep CPU utilization below TargetCPU.
@@ -889,17 +965,23 @@ func calcDesiredPUFromCPU(currentCPU, targetCPU int, sa spannerv1beta1.SpannerAu
 }
 
 // scaleDriver attributes the chosen desired PU to one of the available
-// drivers (CPU metric or schedule). Used by RecordScaleEvent to label
-// the scale_events_total counter. The attribution is best-effort and not
-// load-bearing for control flow: in particular, scale-down events caused
+// drivers (CPU metric, schedule, or scaling rule). Used by RecordScaleEvent
+// to label the scale_events_total counter. The attribution is best-effort and
+// not load-bearing for control flow: in particular, scale-down events caused
 // by the upper schedule bound shrinking are still reported as CPU-driven
 // since no symmetric Status field tracks the upper schedule contribution
 // separately.
-func scaleDriver(sa *spannerv1beta1.SpannerAutoscaler, after int) string {
+func scaleDriver(sa *spannerv1beta1.SpannerAutoscaler, after, builtinDesired int) string {
 	// Schedule attribution: the desired value sits on a min floor that the
 	// user's spec.processingUnits.min alone would not have created.
 	if sa.Status.DesiredMinPUs > sa.Spec.ScaleConfig.ProcessingUnits.Min && after == sa.Status.DesiredMinPUs {
 		return observability.DriverSchedule
+	}
+
+	// Rule attribution: a triggered scalingRules entry outbid the built-in
+	// logic's desired value.
+	if after > builtinDesired && len(sa.Spec.ScaleConfig.ScalingRules) > 0 {
+		return observability.DriverScalingRule
 	}
 
 	switch sa.Spec.ScaleConfig.TargetCPUUtilization.ActiveMetricFlags() {
