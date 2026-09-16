@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -77,7 +78,7 @@ func TestBuildListTimeSeriesRequest(t *testing.T) {
 				t.Errorf("Aggregation.CrossSeriesReducer = %v, want %v", got, want)
 			}
 			// Without this grouping the per-region series of a multi-region instance are summed.
-			if got, want := agg.GetGroupByFields(), []string{"resource.label.location"}; len(got) != 1 || got[0] != want[0] {
+			if got, want := agg.GetGroupByFields(), []string{"resource.label.location"}; !slices.Equal(got, want) {
 				t.Errorf("Aggregation.GroupByFields = %v, want %v", got, want)
 			}
 

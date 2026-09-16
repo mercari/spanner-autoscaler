@@ -163,7 +163,7 @@ func (c *client) GetInstanceMetrics(ctx context.Context, metricType MetricType, 
 	}
 	if len(series) > 1 {
 		err := fmt.Errorf("expected a single aggregated time series, got %d", len(series))
-		log.Error(err, "Aggregation did not reduce the metric to a single time series", "series", len(series))
+		log.Error(err, "aggregation did not reduce the metric to a single time series")
 		return nil, err
 	}
 
