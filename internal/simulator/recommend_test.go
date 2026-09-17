@@ -506,6 +506,32 @@ func TestRecommendGapConstraintRejectsMissingMetric(t *testing.T) {
 	}
 }
 
+func TestRecommendNoneAllowedTimesClearsBlocklist(t *testing.T) {
+	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	points := constantWorkloadPoints(start, 10, 5000, 400)
+
+	sa := newAutoscaler(5000, 10000, 30)
+	sa.Spec.ScaleConfig.ScaledownNotAllowedTimes = []string{"0 9 * * *"}
+	space := SearchSpace{ScaledownAllowedTimes: [][]string{{}}} // "none" = unrestricted
+
+	candidates, err := Recommend(Config{Autoscaler: sa}, space, Constraints{}, points)
+	if err != nil {
+		t.Fatalf("Recommend: %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("candidates = %d; want 1", len(candidates))
+	}
+	c := candidates[0]
+	if got := c.Overrides[OverrideScaledownAllowedTimes]; got != "none" {
+		t.Errorf("override = %q; want %q", got, "none")
+	}
+	// The "none" candidate claims unrestricted scale-down; the blocklist must
+	// not survive into the replayed spec.
+	if got := c.Autoscaler.Spec.ScaleConfig.ScaledownNotAllowedTimes; len(got) != 0 {
+		t.Errorf("ScaledownNotAllowedTimes = %v; want cleared for the none candidate", got)
+	}
+}
+
 func TestGroupEquivalent(t *testing.T) {
 	mkSummary := func(cost float64) Summary { return Summary{SimPUHours: cost} }
 	candidates := []Candidate{

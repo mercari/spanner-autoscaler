@@ -370,14 +370,15 @@ func setStatusCPU(sa *spannerv1beta1.SpannerAutoscaler, flags spannerv1beta1.CPU
 }
 
 // tickDuration returns how long point i's PU stays in effect: the gap to the
-// next point, or the previous gap for the last point (one minute for a
-// single-point series).
+// next point, or one aligned minute for the last point. The last point must
+// not reuse a larger previous gap — that would invent a missing span after
+// the recording ends.
 func tickDuration(points []Point, i int) time.Duration {
 	switch {
 	case i+1 < len(points):
 		return points[i+1].Time.Sub(points[i].Time)
 	case i > 0:
-		return points[i].Time.Sub(points[i-1].Time)
+		return min(points[i].Time.Sub(points[i-1].Time), time.Minute)
 	default:
 		return time.Minute
 	}

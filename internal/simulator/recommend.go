@@ -693,10 +693,10 @@ func buildDimensions(space SearchSpace) [][]override {
 			apply: func(sa *spannerv1beta1.SpannerAutoscaler) {
 				sa.Spec.ScaleConfig.ScaledownAllowedTimes = v
 				// The two restriction styles are mutually exclusive; replacing
-				// the allowlist drops any blocklist from the base config.
-				if len(v) > 0 {
-					sa.Spec.ScaleConfig.ScaledownNotAllowedTimes = nil
-				}
+				// the allowlist drops any blocklist from the base config —
+				// including the empty ("none" = unrestricted) candidate, which
+				// would otherwise replay with the blocklist still in effect.
+				sa.Spec.ScaleConfig.ScaledownNotAllowedTimes = nil
 			},
 		})
 	}
