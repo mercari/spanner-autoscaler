@@ -151,6 +151,19 @@ func (*SpannerAutoscalerCustomValidator) ValidateDelete(_ context.Context, obj *
 	return nil, nil
 }
 
+// ValidateSpec exposes the admission-time spec validation to non-webhook
+// callers (the simulator validates generated candidates against the same
+// rules a kubectl apply would hit) without the webhook's logging.
+func ValidateSpec(r *spannerv1beta1.SpannerAutoscaler) error {
+	allErrs := validateSpec(r)
+	if len(allErrs) == 0 {
+		return nil
+	}
+	return apierrors.NewInvalid(
+		schema.GroupKind{Group: "spanner.mercari.com", Kind: "SpannerAutoscaler"},
+		r.Name, allErrs)
+}
+
 func validateSpec(r *spannerv1beta1.SpannerAutoscaler) (allErrs field.ErrorList) {
 	if err := validateAuthentication(r); err != nil {
 		allErrs = append(allErrs, err)
