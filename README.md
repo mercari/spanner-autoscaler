@@ -155,6 +155,14 @@ spec:
 
 Available variables: `current`, `desired`, `minPU`, `maxPU`, `cpu.highPriority` / `cpu.total` (latest values, only for configured metrics), `cpu.<metric>.{min,avg,max}<window>`, `target.highPriority` / `target.total`, `now` / `lastScaleTime` (timestamps; `now.getHours("Asia/Tokyo") >= 13` works), and `activeSchedules` (names of active `SpannerAutoscaleSchedule`s).
 
+The aggregations are deliberately limited to min/avg/max. Percentiles (p95/p99) are not provided: the underlying metric is sampled every 60 seconds and windows are capped at 1h, so one window holds at most 60 points — at that sample size a nearest-rank p99 always equals max, and p95 differs from max only for windows of 20 minutes or more (and even at 1h it is just "max ignoring the top 3 minutes"). Offering them would create variables that look more statistical than they are. Conditions that seem to need percentiles can usually be composed from the existing aggregates, since CEL supports arithmetic across variables:
+
+- Stability (small spread): `cpu.total.max30m - cpu.total.min30m < 10`
+- Rising load (trend): `cpu.highPriority > cpu.highPriority.avg15m + 10`, or a short window against a long one: `cpu.highPriority.avg5m > cpu.highPriority.avg1h + 15`
+- "Mostly above" with tolerance for a brief dip (where `min15m >= 50` would reset on a single quiet minute): `cpu.highPriority.avg15m >= 47` — one 1-minute dip to 0% lowers a 15m average by only ~3 points
+
+If a condition genuinely cannot be composed this way (the most likely candidate is an exact "at least M of the last N minutes above X"), adding an aggregation kind is a small, backward-compatible change — file an issue with the concrete rule.
+
 Safety properties:
 
 - Expressions are compiled and type-checked by the admission webhook, so typos, references to undeclared windows, and references to CPU metrics without a configured target are rejected at `kubectl apply` time.
