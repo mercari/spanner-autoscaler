@@ -274,6 +274,99 @@ func TestRunGapHoldsPU(t *testing.T) {
 	}
 }
 
+func TestRunMissingSpanCountsAsGap(t *testing.T) {
+	start := time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC)
+	points := constantWorkloadPoints(start, 2, 1000, 50)
+	// A one-hour hole in the recording: the next two points resume at +61m.
+	points = append(points,
+		constantWorkloadPoints(start.Add(61*time.Minute), 2, 1000, 50)...)
+
+	result, err := Run(Config{Autoscaler: newAutoscaler(1000, 10000, 30)}, points)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	s := result.Summary
+	// The missing 59 minutes count as gap time, not as observation.
+	if s.GapMinutes != 59 {
+		t.Errorf("GapMinutes = %.1f; want 59", s.GapMinutes)
+	}
+	// PU-hours cover only the four observed minutes at 1000 PU.
+	want := 1000.0 * 4 / 60
+	if diff := s.SimPUHours - want; diff < -0.01 || diff > 0.01 {
+		t.Errorf("SimPUHours = %.2f; want %.2f (observed minutes only)", s.SimPUHours, want)
+	}
+	if s.TargetExceededMinutes != 0 {
+		t.Errorf("TargetExceededMinutes = %.1f; want 0", s.TargetExceededMinutes)
+	}
+}
+
+func TestRunScheduleIgnoresOtherNamespace(t *testing.T) {
+	sa := newAutoscaler(1000, 10000, 30)
+	schedule := &spannerv1beta1.SpannerAutoscaleSchedule{
+		ObjectMeta: metav1.ObjectMeta{Name: "morning-batch", Namespace: "other"},
+		Spec: spannerv1beta1.SpannerAutoscaleScheduleSpec{
+			TargetResource:            "test",
+			AdditionalProcessingUnits: 2000,
+			Schedule: spannerv1beta1.Schedule{
+				Cron:     "0 9 * * *",
+				Duration: "2h",
+			},
+		},
+	}
+
+	start := time.Date(2026, 9, 1, 8, 50, 0, 0, time.UTC)
+	points := constantWorkloadPoints(start, 30, 1000, 50)
+
+	result, err := Run(Config{
+		Autoscaler: sa,
+		Schedules:  []*spannerv1beta1.SpannerAutoscaleSchedule{schedule},
+	}, points)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	// The controller only binds schedules in the autoscaler's own namespace;
+	// a name match across namespaces must not raise the minimum.
+	if len(result.Events) != 0 {
+		t.Errorf("events = %+v; want none for a schedule in another namespace", result.Events)
+	}
+}
+
+func TestRunSparsePointsSkipExpiredSchedule(t *testing.T) {
+	sa := newAutoscaler(1000, 10000, 30)
+	schedule := &spannerv1beta1.SpannerAutoscaleSchedule{
+		ObjectMeta: metav1.ObjectMeta{Name: "morning-batch", Namespace: "default"},
+		Spec: spannerv1beta1.SpannerAutoscaleScheduleSpec{
+			TargetResource:            "test",
+			AdditionalProcessingUnits: 2000,
+			Schedule: spannerv1beta1.Schedule{
+				Cron:     "0 9 * * *",
+				Duration: "2h",
+			},
+		},
+	}
+
+	// Only two points, jumping clean over the 09:00-11:00 window: the fire
+	// observed at 12:00 already ended and must not activate.
+	points := []Point{
+		{Time: time.Date(2026, 9, 1, 8, 50, 0, 0, time.UTC), ProcessingUnits: 1000, HighPriorityCPU: new(5.0)},
+		{Time: time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC), ProcessingUnits: 1000, HighPriorityCPU: new(5.0)},
+	}
+
+	result, err := Run(Config{
+		Autoscaler: sa,
+		Schedules:  []*spannerv1beta1.SpannerAutoscaleSchedule{schedule},
+	}, points)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(result.Events) != 0 {
+		t.Errorf("events = %+v; want none for a schedule window that ended before the tick", result.Events)
+	}
+	if got := result.Points[1].SimPU; got != 1000 {
+		t.Errorf("SimPU at 12:00 = %d; want 1000", got)
+	}
+}
+
 func TestCSVRoundTrip(t *testing.T) {
 	start := time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC)
 	points := []Point{

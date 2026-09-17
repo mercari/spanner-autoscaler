@@ -432,6 +432,80 @@ func TestDescribeChangesAndDisplay(t *testing.T) {
 	}
 }
 
+func TestCurrentParameterValuesNotAllowedTimesAndAbsentTargets(t *testing.T) {
+	sa := newAutoscaler(1000, 10000, 30) // total CPU target left unset
+	sa.Spec.ScaleConfig.ScaledownNotAllowedTimes = []string{"0 9 * * *", "0 21 * * *"}
+
+	values := CurrentParameterValues(sa, time.Minute, 55*time.Minute)
+	// A not-allowed-times restriction must not render as "none" (unrestricted),
+	// and switching to an allow-list must register as a change.
+	if got, want := values[OverrideScaledownAllowedTimes], "notAllowedTimes:0 9 * * *;0 21 * * *"; got != want {
+		t.Errorf("scaledownAllowedTimes = %q; want %q", got, want)
+	}
+	if got, want := values[OverrideTargetTotalCPU], "none"; got != want {
+		t.Errorf("targetTotalCPU = %q; want %q", got, want)
+	}
+	if got, want := values[OverrideTargetHighPriorityCPU], "30"; got != want {
+		t.Errorf("targetHighPriorityCPU = %q; want %q", got, want)
+	}
+	// Enabling an absent target counts toward the change budget.
+	c := Candidate{Overrides: map[string]string{OverrideTargetTotalCPU: "80"}}
+	if got := changedParameterCount(values, c); got != 1 {
+		t.Errorf("changedParameterCount(enable total target) = %d; want 1", got)
+	}
+}
+
+func TestRecommendedIndexKeepsCurrentWhenOverChangeBudget(t *testing.T) {
+	base := Summary{SimPUHours: 10000, PUHoursSavedPercent: 0}
+	current := map[string]string{OverrideMinPU: "20000", OverrideScaledownStepSize: "10%"}
+	// The only candidate cheaper than base changes two parameters.
+	candidates := []Candidate{{
+		Feasible: true,
+		Overrides: map[string]string{
+			OverrideMinPU:             "15000",
+			OverrideScaledownStepSize: "20%",
+		},
+		Summary: Summary{SimPUHours: 9000, PUHoursSavedPercent: 10},
+	}}
+
+	recIdx, furtherIdx, reason := RecommendedIndex(base, current, candidates, 1.0, 1)
+	if recIdx != -1 || furtherIdx != -1 {
+		t.Errorf("RecommendedIndex = (%d, %d); want keep-current when nothing fits the change budget", recIdx, furtherIdx)
+	}
+	if !strings.Contains(reason, "changes more than 1 parameter") {
+		t.Errorf("keepReason = %q; want it to explain the change budget", reason)
+	}
+}
+
+func TestRecommendGapConstraintRejectsMissingMetric(t *testing.T) {
+	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	// High-priority CPU only: enabling a total-CPU target turns every tick
+	// into a data gap.
+	points := constantWorkloadPoints(start, 60, 5000, 400)
+
+	base := Config{Autoscaler: newAutoscaler(5000, 10000, 30)}
+	space := SearchSpace{TargetTotalCPUs: []int{80}}
+	constraints := Constraints{MaxGapMinutes: new(0.0)}
+
+	candidates, err := Recommend(base, space, constraints, points)
+	if err != nil {
+		t.Fatalf("Recommend: %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("candidates = %d; want 1", len(candidates))
+	}
+	c := candidates[0]
+	if c.Feasible {
+		t.Fatalf("candidate feasible = true; want infeasible when the enabled metric is absent from the recording")
+	}
+	found := slices.ContainsFunc(c.InfeasibleReasons, func(r string) bool {
+		return strings.Contains(r, "data gaps")
+	})
+	if !found {
+		t.Errorf("InfeasibleReasons = %v; want a data-gap reason", c.InfeasibleReasons)
+	}
+}
+
 func TestGroupEquivalent(t *testing.T) {
 	mkSummary := func(cost float64) Summary { return Summary{SimPUHours: cost} }
 	candidates := []Candidate{

@@ -10,17 +10,28 @@ import (
 // spec expressions over and over — the controller on every reconcile's
 // scale-down window check, the simulator on every replayed minute — and
 // parsing dominates those hot paths. Parsed schedules are immutable (Next is
-// a pure computation), so sharing them across goroutines is safe. Entries are
-// never evicted: the key space is the set of cron expressions appearing in
-// specs, which is small and stable.
-var parseCache sync.Map // string -> cronpkg.Schedule
+// a pure computation), so sharing them across goroutines is safe.
+//
+// The keys come from CR specs, so the cache is bounded: churning specs must
+// not grow the controller's memory without limit. The working set is a
+// handful of expressions, so on overflow the whole cache is dropped rather
+// than tracking recency.
+const parseCacheMaxEntries = 1024
+
+var (
+	parseCacheMu sync.RWMutex
+	parseCache   = make(map[string]cronpkg.Schedule)
+)
 
 // Parse parses a cron expression with support for both CRON_TZ format and standard cron format.
 // Returns a Schedule that can be used for execution, or an error if the expression is invalid.
 // For validation-only use cases, simply ignore the returned Schedule and check the error.
 func Parse(cronExpr string) (cronpkg.Schedule, error) {
-	if cached, ok := parseCache.Load(cronExpr); ok {
-		return cached.(cronpkg.Schedule), nil
+	parseCacheMu.RLock()
+	cached, ok := parseCache[cronExpr]
+	parseCacheMu.RUnlock()
+	if ok {
+		return cached, nil
 	}
 	schedule, err := cronpkg.MustNewParser(DefaultOptions).Parse(cronExpr)
 	if err != nil {
@@ -28,6 +39,11 @@ func Parse(cronExpr string) (cronpkg.Schedule, error) {
 		// caching them would only grow the map.
 		return nil, err
 	}
-	parseCache.Store(cronExpr, schedule)
+	parseCacheMu.Lock()
+	if len(parseCache) >= parseCacheMaxEntries {
+		clear(parseCache)
+	}
+	parseCache[cronExpr] = schedule
+	parseCacheMu.Unlock()
 	return schedule, nil
 }

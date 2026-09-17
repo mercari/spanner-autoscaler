@@ -178,6 +178,13 @@ func Run(cfg Config, points []Point) (*Result, error) {
 	for i, p := range points {
 		now := p.Time
 		dt := tickDuration(points, i)
+		// Points are one-minute aligned; a larger gap to the next point means
+		// missing samples, not sixty minutes of the current observation.
+		// Attribute at most one minute to this tick and the rest to gap time.
+		if dt > time.Minute {
+			agg.observeMissingSpan((dt - time.Minute).Minutes())
+			dt = time.Minute
+		}
 
 		// Expired entries are dropped the same way the scheduler's cleanup
 		// does: an entry stays active through its EndTime and is removed on
@@ -252,6 +259,11 @@ func prepareSchedules(sa *spannerv1beta1.SpannerAutoscaler, schedules []*spanner
 		if sas.Spec.TargetResource != "" && sa.Name != "" && sas.Spec.TargetResource != sa.Name {
 			continue
 		}
+		// The controller only binds schedules to autoscalers in the same
+		// namespace.
+		if sas.Namespace != "" && sa.Namespace != "" && sas.Namespace != sa.Namespace {
+			continue
+		}
 		parsed, err := cron.Parse(sas.Spec.Schedule.Cron)
 		if err != nil {
 			return nil, fmt.Errorf("schedule %q: invalid cron %q: %w", sas.Name, sas.Spec.Schedule.Cron, err)
@@ -287,10 +299,16 @@ func fireSchedules(schedules []scheduleRuntime, active []spannerv1beta1.ActiveSc
 		if lastFire.IsZero() {
 			continue
 		}
+		endTime := lastFire.Add(sr.duration)
+		// Sparse points can jump past an entire schedule window; a fire whose
+		// window already ended must not activate at the current tick.
+		if endTime.Before(now) {
+			continue
+		}
 		entry := spannerv1beta1.ActiveSchedule{
 			ScheduleName: sr.name,
 			AdditionalPU: sr.additionalPU,
-			EndTime:      metav1.Time{Time: lastFire.Add(sr.duration)},
+			EndTime:      metav1.Time{Time: endTime},
 			MaxPUPolicy:  sr.maxPUPolicy,
 		}
 		if idx := slices.IndexFunc(active, func(as spannerv1beta1.ActiveSchedule) bool {

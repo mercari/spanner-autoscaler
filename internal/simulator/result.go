@@ -237,6 +237,13 @@ func (a *aggregator) observeGap(p Point, simPU int, dt time.Duration) {
 	a.gapMinutes += dt.Minutes()
 }
 
+// observeMissingSpan records wall-clock time not covered by any point. The
+// span contributes to GapMinutes only: with no samples there is nothing to
+// attribute to PU-hours or target-exceeded time.
+func (a *aggregator) observeMissingSpan(minutes float64) {
+	a.gapMinutes += minutes
+}
+
 func (a *aggregator) observeCommon(p Point, simPU int, dt time.Duration) {
 	a.dataPoints++
 	a.totalMinutes += dt.Minutes()
