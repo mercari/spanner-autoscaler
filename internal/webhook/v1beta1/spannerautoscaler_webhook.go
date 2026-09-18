@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -333,16 +334,25 @@ func validateCELScaleConfig(r *spannerv1beta1.SpannerAutoscaler) (allErrs field.
 	if len(sc.MetricWindows) > scaling.MaxMetricWindows {
 		allErrs = append(allErrs, field.TooMany(windowsPath, len(sc.MetricWindows), scaling.MaxMetricWindows))
 	}
-	seen := make(map[string]bool, len(sc.MetricWindows))
+	// Deduplicate by parsed duration, not by spelling: "60m" and "1h" declare
+	// the same window, and the syncer maps computed aggregates back to one
+	// spelling — the other's CEL variables would never be populated.
+	seen := make(map[time.Duration]string, len(sc.MetricWindows))
 	for i, w := range sc.MetricWindows {
-		if _, err := scaling.ParseMetricWindow(w); err != nil {
+		d, err := scaling.ParseMetricWindow(w)
+		if err != nil {
 			allErrs = append(allErrs, field.Invalid(windowsPath.Index(i), w, err.Error()))
 			continue
 		}
-		if seen[w] {
-			allErrs = append(allErrs, field.Duplicate(windowsPath.Index(i), w))
+		if prev, ok := seen[d]; ok {
+			msg := w
+			if prev != w {
+				msg = fmt.Sprintf("%s (same duration as %q)", w, prev)
+			}
+			allErrs = append(allErrs, field.Duplicate(windowsPath.Index(i), msg))
+			continue
 		}
-		seen[w] = true
+		seen[d] = w
 	}
 
 	flags := sc.TargetCPUUtilization.ActiveMetricFlags()

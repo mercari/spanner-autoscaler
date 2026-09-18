@@ -334,6 +334,92 @@ func TestDecide_Gates(t *testing.T) {
 	}
 }
 
+func TestRuleCandidatePUPercentNeverExceedsDouble(t *testing.T) {
+	sa := celTestAutoscaler()
+	sa.Spec.ScaleConfig.ProcessingUnits = spannerv1beta1.ScaleConfigPUs{Min: 100, Max: 10000}
+	sa.Status.CurrentProcessingUnits = 600
+
+	// 600 + 100% = 1200, which is not a valid PU value; rounding up to 2000
+	// would be a 3.33x resize while "100%" is documented as at most doubling.
+	if got := ruleCandidatePU(sa, intstr.FromString("100%")); got != 1000 {
+		t.Errorf("ruleCandidatePU(600, 100%%) = %d; want 1000 (largest valid value within 2x)", got)
+	}
+	// A fixed amount is an explicit request, not bounded by the 2x promise.
+	if got := ruleCandidatePU(sa, intstr.FromInt(3000)); got != 4000 {
+		t.Errorf("ruleCandidatePU(600, +3000) = %d; want 4000 (round up)", got)
+	}
+	// No rounding overshoot: 1000 + 100% = 2000 stays exact.
+	sa.Status.CurrentProcessingUnits = 1000
+	if got := ruleCandidatePU(sa, intstr.FromString("100%")); got != 2000 {
+		t.Errorf("ruleCandidatePU(1000, 100%%) = %d; want 2000", got)
+	}
+}
+
+func TestEvaluateScalingRulesPartialWindowData(t *testing.T) {
+	// Two declared windows, but only 15m aggregates are in status: a rule
+	// reading the 15m window must evaluate, a rule reading the 1h window must
+	// be skipped with ErrWindowDataNotReady.
+	sa := celTestAutoscaler()
+	sa.Spec.ScaleConfig.MetricWindows = []string{"15m", "1h"}
+	sa.Spec.ScaleConfig.ScalingRules = []spannerv1beta1.ScalingRule{
+		{When: "cpu.highPriority.min15m >= 50", ScaleUp: intstr.FromString("25%")},
+		{When: "cpu.highPriority.min1h >= 50", ScaleUp: intstr.FromString("25%")},
+	}
+
+	desired, outcomes := EvaluateScalingRules(sa, 3000, time.Now())
+	if len(outcomes) != 2 {
+		t.Fatalf("outcomes = %d; want 2", len(outcomes))
+	}
+	if outcomes[0].Err != nil || !outcomes[0].Triggered {
+		t.Errorf("15m rule = %+v; want triggered with no error while only the 1h window is filling", outcomes[0])
+	}
+	if !errors.Is(outcomes[1].Err, ErrWindowDataNotReady) {
+		t.Errorf("1h rule error = %v; want ErrWindowDataNotReady", outcomes[1].Err)
+	}
+	if desired != 4000 {
+		t.Errorf("desired = %d; want 4000 (3000 + 25%%, rounded up)", desired)
+	}
+}
+
+func TestEvaluateScalingRulesSkipsOnMetricTypeMismatch(t *testing.T) {
+	// After a targetCPUUtilization metric change, status still carries the
+	// previous metric's values until the next sync; rules must not evaluate
+	// against them.
+	sa := celTestAutoscaler()
+	sa.Spec.ScaleConfig.MetricWindows = nil
+	sa.Spec.ScaleConfig.TargetCPUUtilization = spannerv1beta1.TargetCPUUtilization{Total: new(80)}
+	sa.Status.CurrentCPUMetricType = spannerv1beta1.CPUMetricTypeHighPriority
+	sa.Spec.ScaleConfig.ScalingRules = []spannerv1beta1.ScalingRule{
+		{When: "cpu.total >= 0", ScaleUp: intstr.FromString("25%")},
+	}
+
+	desired, outcomes := EvaluateScalingRules(sa, 3000, time.Now())
+	if desired != 3000 {
+		t.Errorf("desired = %d; want unchanged 3000", desired)
+	}
+	if len(outcomes) != 1 || !errors.Is(outcomes[0].Err, ErrWindowDataNotReady) {
+		t.Errorf("outcomes = %+v; want a single ErrWindowDataNotReady skip", outcomes)
+	}
+}
+
+func TestRoundDownToValidPU(t *testing.T) {
+	for _, tt := range []struct{ in, want int }{
+		{0, 0},
+		{99, 0},
+		{100, 100},
+		{950, 900},
+		{1000, 1000},
+		{1200, 1000},
+		{1999, 1000},
+		{2000, 2000},
+		{2999, 2000},
+	} {
+		if got := roundDownToValidPU(tt.in); got != tt.want {
+			t.Errorf("roundDownToValidPU(%d) = %d; want %d", tt.in, got, tt.want)
+		}
+	}
+}
+
 func TestRoundUpToValidPU(t *testing.T) {
 	tests := []struct {
 		in, want int

@@ -308,6 +308,12 @@ func (s *syncer) syncResource(ctx context.Context) error {
 	if err != nil {
 		s.recorder.Eventf(&sa, corev1.EventTypeWarning, "FailedSpannerAPICall", "%s", err.Error())
 		log.Error(err, "unable to get instance info")
+		// Invalidate the window aggregates: leaving them in status would let
+		// later reconciles evaluate CEL rules and gates against pre-outage
+		// data (e.g. a stale quiet window passing a scale-down gate). Cleared
+		// aggregates make evaluation skip fail-safe instead, and the next
+		// successful sync fully recomputes them from its own query.
+		s.invalidateWindowMetrics(ctx, log)
 		return err
 	}
 
@@ -406,6 +412,27 @@ func metricsTypeToCPUMetricType(t metrics.MetricType) spannerv1beta1.CPUMetricTy
 		return spannerv1beta1.CPUMetricTypeTotal
 	default: // metrics.MetricTypeHighPriority
 		return spannerv1beta1.CPUMetricTypeHighPriority
+	}
+}
+
+// invalidateWindowMetrics clears status.currentCPUWindowMetrics after a
+// failed metrics fetch, so CEL rules and gates skip fail-safe instead of
+// evaluating pre-outage aggregates. Best-effort: a failure here is logged and
+// the original fetch error stays the sync outcome.
+func (s *syncer) invalidateWindowMetrics(ctx context.Context, log logr.Logger) {
+	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		var sa spannerv1beta1.SpannerAutoscaler
+		if err := s.ctrlClient.Get(ctx, s.namespacedName, &sa); err != nil {
+			return ctrlclient.IgnoreNotFound(err)
+		}
+		if len(sa.Status.CurrentCPUWindowMetrics) == 0 {
+			return nil
+		}
+		sa.Status.CurrentCPUWindowMetrics = nil
+		return s.ctrlClient.Status().Update(ctx, &sa)
+	})
+	if err != nil {
+		log.Error(err, "unable to invalidate window aggregates after a failed metrics fetch")
 	}
 }
 

@@ -1,6 +1,10 @@
 package v1alpha1
 
 import (
+	"encoding/json"
+	"fmt"
+	"maps"
+
 	"github.com/mercari/spanner-autoscaler/api/v1beta1"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -11,6 +15,28 @@ import (
 )
 
 var log = ctrllog.Log.WithName("spannerautoscaler-v1alpha1.converter")
+
+// preservedFieldsAnnotation carries the v1beta1-only CEL scaling fields
+// across a conversion to v1alpha1, which cannot represent them. Without it, a
+// client that reads the object as v1alpha1 and writes it back would silently
+// strip metricWindows, scalingRules, and both gate conditions from the stored
+// v1beta1 object. ConvertFrom stores the fields here; ConvertTo restores them
+// and removes the annotation.
+const preservedFieldsAnnotation = "spanner.mercari.com/v1beta1-cel-scale-config"
+
+// preservedCELScaleConfig is the annotation payload: the ScaleConfig fields
+// that exist only in v1beta1.
+type preservedCELScaleConfig struct {
+	MetricWindows      []string              `json:"metricWindows,omitempty"`
+	ScalingRules       []v1beta1.ScalingRule `json:"scalingRules,omitempty"`
+	ScaleupCondition   string                `json:"scaleupCondition,omitempty"`
+	ScaledownCondition string                `json:"scaledownCondition,omitempty"`
+}
+
+func (p preservedCELScaleConfig) empty() bool {
+	return len(p.MetricWindows) == 0 && len(p.ScalingRules) == 0 &&
+		p.ScaleupCondition == "" && p.ScaledownCondition == ""
+}
 
 func (src *SpannerAutoscaler) ConvertTo(dstRaw conversion.Hub) error {
 	log.V(2).Info("begin conversion from v1alpha1 to v1beta1", "src", src)
@@ -72,6 +98,22 @@ func (src *SpannerAutoscaler) ConvertTo(dstRaw conversion.Hub) error {
 
 	// Copy the resource metadata
 	dst.ObjectMeta = src.ObjectMeta
+
+	// Restore the v1beta1-only CEL fields a previous ConvertFrom preserved,
+	// then drop the annotation: the hub object carries the real fields.
+	if raw, ok := src.Annotations[preservedFieldsAnnotation]; ok {
+		var preserved preservedCELScaleConfig
+		if err := json.Unmarshal([]byte(raw), &preserved); err != nil {
+			return fmt.Errorf("invalid %s annotation: %w", preservedFieldsAnnotation, err)
+		}
+		dst.Spec.ScaleConfig.MetricWindows = preserved.MetricWindows
+		dst.Spec.ScaleConfig.ScalingRules = preserved.ScalingRules
+		dst.Spec.ScaleConfig.ScaleupCondition = preserved.ScaleupCondition
+		dst.Spec.ScaleConfig.ScaledownCondition = preserved.ScaledownCondition
+
+		dst.Annotations = maps.Clone(dst.Annotations)
+		delete(dst.Annotations, preservedFieldsAnnotation)
+	}
 
 	// Copy the resource status
 	if !src.Status.LastScaleTime.IsZero() {
@@ -143,6 +185,27 @@ func (dst *SpannerAutoscaler) ConvertFrom(srcRaw conversion.Hub) error {
 
 	// Copy the resource metadata
 	dst.ObjectMeta = src.ObjectMeta
+
+	// v1alpha1 cannot represent the CEL scaling fields; preserve them in an
+	// annotation so a v1alpha1 read-modify-write round trip does not strip
+	// them from the stored object.
+	preserved := preservedCELScaleConfig{
+		MetricWindows:      src.Spec.ScaleConfig.MetricWindows,
+		ScalingRules:       src.Spec.ScaleConfig.ScalingRules,
+		ScaleupCondition:   src.Spec.ScaleConfig.ScaleupCondition,
+		ScaledownCondition: src.Spec.ScaleConfig.ScaledownCondition,
+	}
+	if !preserved.empty() {
+		raw, err := json.Marshal(preserved)
+		if err != nil {
+			return fmt.Errorf("marshaling %s annotation: %w", preservedFieldsAnnotation, err)
+		}
+		dst.Annotations = maps.Clone(dst.Annotations)
+		if dst.Annotations == nil {
+			dst.Annotations = map[string]string{}
+		}
+		dst.Annotations[preservedFieldsAnnotation] = string(raw)
+	}
 
 	// Copy the resource status
 	dst.Status.LastScaleTime = &metav1.Time{Time: src.Status.LastScaleTime.Time}

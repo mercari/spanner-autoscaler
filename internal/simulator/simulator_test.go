@@ -409,6 +409,42 @@ func TestLoadCSVRejectsNonFiniteValues(t *testing.T) {
 	}
 }
 
+func TestRunCountsWindowGapsAfterWarmUp(t *testing.T) {
+	sa := newAutoscaler(1000, 10000, 70)
+	sa.Spec.ScaleConfig.MetricWindows = []string{"10m"}
+	sa.Spec.ScaleConfig.ScalingRules = []spannerv1beta1.ScalingRule{
+		// Never triggers; it exists so the 10m window is evaluated each tick.
+		{When: "cpu.highPriority.min10m >= 101", ScaleUp: intstr.FromString("25%")},
+	}
+
+	start := time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC)
+	points := constantWorkloadPoints(start, 40, 1000, 50)
+
+	// Baseline: warm-up alone (the first ticks before the window holds ten
+	// samples) must not count as CEL errors.
+	result, err := Run(Config{Autoscaler: sa}, points)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Summary.CELErrors != 0 {
+		t.Fatalf("CELErrors = %d; want 0 for warm-up only", result.Summary.CELErrors)
+	}
+
+	// A mid-replay metric outage empties the window after warm-up completed;
+	// production would skip the rules the same way, and the summary must
+	// report it instead of staying at zero.
+	for i := 20; i < 25; i++ {
+		points[i].HighPriorityCPU = nil
+	}
+	result, err = Run(Config{Autoscaler: sa}, points)
+	if err != nil {
+		t.Fatalf("Run (with gap): %v", err)
+	}
+	if result.Summary.CELErrors == 0 {
+		t.Error("CELErrors = 0; want > 0 for a window emptied by a post-warm-up gap")
+	}
+}
+
 func TestCSVRoundTrip(t *testing.T) {
 	start := time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC)
 	points := []Point{

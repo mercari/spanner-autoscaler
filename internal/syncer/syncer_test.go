@@ -19,6 +19,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	testingclock "k8s.io/utils/clock/testing"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
+	fakeclient "sigs.k8s.io/controller-runtime/pkg/client/fake"
 	ctrlenvtest "sigs.k8s.io/controller-runtime/pkg/envtest"
 	ctrlzap "sigs.k8s.io/controller-runtime/pkg/log/zap"
 
@@ -182,6 +183,41 @@ func Test_syncer_syncResource(t *testing.T) {
 				t.Fatalf("(-wantInstance, +got)\n%s", diff)
 			}
 		})
+	}
+}
+
+func Test_syncer_invalidateWindowMetrics(t *testing.T) {
+	sa := &spannerv1beta1.SpannerAutoscaler{
+		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+		Status: spannerv1beta1.SpannerAutoscalerStatus{
+			CurrentProcessingUnits: 1000,
+			CurrentCPUWindowMetrics: []spannerv1beta1.CPUWindowMetric{
+				{Metric: spannerv1beta1.CPUMetricTypeHighPriority, Window: "15m", Min: 10, Avg: 12, Max: 15},
+			},
+		},
+	}
+	c := fakeclient.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&spannerv1beta1.SpannerAutoscaler{}).
+		WithObjects(sa).
+		Build()
+	s := &syncer{
+		ctrlClient:     c,
+		namespacedName: types.NamespacedName{Namespace: "default", Name: "test"},
+	}
+
+	s.invalidateWindowMetrics(context.Background(), logr.Discard())
+
+	var got spannerv1beta1.SpannerAutoscaler
+	if err := c.Get(context.Background(), s.namespacedName, &got); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(got.Status.CurrentCPUWindowMetrics) != 0 {
+		t.Errorf("CurrentCPUWindowMetrics = %v; want cleared after a failed metrics fetch", got.Status.CurrentCPUWindowMetrics)
+	}
+	// The rest of the status must survive the invalidation.
+	if got.Status.CurrentProcessingUnits != 1000 {
+		t.Errorf("CurrentProcessingUnits = %d; want 1000", got.Status.CurrentProcessingUnits)
 	}
 }
 

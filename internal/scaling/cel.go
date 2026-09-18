@@ -34,12 +34,14 @@ import (
 // adversarial expression; both should fail rather than stall the reconcile.
 const celCostLimit = 1_000_000
 
-// ErrWindowDataNotReady is wrapped by evaluation errors reported while
-// status.currentCPUWindowMetrics does not yet cover every window declared in
-// spec.scaleConfig.metricWindows (right after resource creation, controller
-// restart with a young instance, or a metrics ingestion gap). CEL evaluation
-// is skipped fail-safe until the data catches up.
-var ErrWindowDataNotReady = errors.New("metric window aggregates not yet available")
+// ErrWindowDataNotReady is wrapped by evaluation errors reported while the
+// status data a CEL expression reads is not yet available: a window aggregate
+// the expression references is missing from status.currentCPUWindowMetrics
+// (right after resource creation, controller restart with a young instance,
+// or a metrics ingestion gap), or status still reflects a previous
+// targetCPUUtilization configuration after a metric-type change. CEL
+// evaluation is skipped fail-safe until the data catches up.
+var ErrWindowDataNotReady = errors.New("CPU metric data for CEL evaluation not yet available")
 
 // celEnvCache memoizes CEL environments keyed by the (metric flags, windows)
 // pair they were derived from, and celProgramCache memoizes compiled
@@ -128,32 +130,51 @@ func celEnv(flags spannerv1beta1.CPUMetricFlags, windows []string) (*cel.Env, er
 	return env, nil
 }
 
+// celProgram pairs a compiled CEL program with the set of variable names its
+// expression references, so evaluation can tell whether a missing status
+// binding actually matters to this expression.
+type celProgram struct {
+	prg  cel.Program
+	refs map[string]bool
+}
+
 // compiledProgram compiles expr against the environment derived from flags
 // and windows, verifying that it evaluates to a boolean. Compiled programs
 // are cached; compile errors are not (they are rare spec typos).
-func compiledProgram(flags spannerv1beta1.CPUMetricFlags, windows []string, expr string) (cel.Program, error) {
+func compiledProgram(flags spannerv1beta1.CPUMetricFlags, windows []string, expr string) (celProgram, error) {
 	key := celEnvKey(flags, windows) + "\x00" + expr
 	if cached, ok := celProgramCache.Load(key); ok {
-		return cached.(cel.Program), nil
+		return cached.(celProgram), nil
 	}
 
 	env, err := celEnv(flags, windows)
 	if err != nil {
-		return nil, err
+		return celProgram{}, err
 	}
 	ast, iss := env.Compile(expr)
 	if iss.Err() != nil {
-		return nil, fmt.Errorf("compiling CEL expression: %w", iss.Err())
+		return celProgram{}, fmt.Errorf("compiling CEL expression: %w", iss.Err())
 	}
 	if !ast.OutputType().IsExactType(cel.BoolType) {
-		return nil, fmt.Errorf("CEL expression must evaluate to a boolean, got %s", ast.OutputType())
+		return celProgram{}, fmt.Errorf("CEL expression must evaluate to a boolean, got %s", ast.OutputType())
 	}
 	prg, err := env.Program(ast, cel.EvalOptions(cel.OptOptimize), cel.CostLimit(celCostLimit))
 	if err != nil {
-		return nil, fmt.Errorf("building CEL program: %w", err)
+		return celProgram{}, fmt.Errorf("building CEL program: %w", err)
 	}
-	celProgramCache.Store(key, prg)
-	return prg, nil
+
+	// The checker resolved every identifier; references with a name and no
+	// overloads are variable reads (overload entries are function calls).
+	refs := make(map[string]bool)
+	for _, ref := range ast.NativeRep().ReferenceMap() {
+		if ref.Name != "" && len(ref.OverloadIDs) == 0 {
+			refs[ref.Name] = true
+		}
+	}
+
+	cp := celProgram{prg: prg, refs: refs}
+	celProgramCache.Store(key, cp)
+	return cp, nil
 }
 
 // CompileCondition compiles a spec CEL expression (a scalingRules[].when or a
@@ -170,20 +191,34 @@ func CompileCondition(flags spannerv1beta1.CPUMetricFlags, windows []string, exp
 // celActivation builds the CEL variable bindings from the resource state.
 // builtinDesired is bound to `desired`: for trigger rules it is the built-in
 // logic's desired PU, for gates it is the desired PU about to be applied.
-// It returns an error wrapping ErrWindowDataNotReady when any declared
-// (metric, window) aggregate is missing from status, so callers skip
-// evaluation fail-safe instead of evaluating against stale zeros.
-func celActivation(sa *spannerv1beta1.SpannerAutoscaler, builtinDesired int, now time.Time) (map[string]any, error) {
+//
+// A declared (metric, window) aggregate missing from status does not fail the
+// whole activation: the variable is reported in missing instead, and
+// evaluation fails — wrapping ErrWindowDataNotReady — only for expressions
+// that actually reference it, so a rule using the latest CPU value or a short
+// window keeps working while a longer window is still filling.
+//
+// The error return is reserved for state no expression can evaluate against:
+// after a targetCPUUtilization metric change, status still carries the
+// previous metric's values until the next sync (the same situation in which
+// the built-in logic holds the current PU), so evaluation is skipped
+// fail-safe entirely.
+func celActivation(sa *spannerv1beta1.SpannerAutoscaler, builtinDesired int, now time.Time) (act map[string]any, missing []string, err error) {
 	flags := sa.Spec.ScaleConfig.TargetCPUUtilization.ActiveMetricFlags()
 	windows := ValidMetricWindows(sa.Spec.ScaleConfig.MetricWindows)
 	minPU, maxPU := effectiveRange(sa)
+
+	if expected := flags.ToCPUMetricType(); sa.Status.CurrentCPUMetricType != expected {
+		return nil, nil, fmt.Errorf("%w: status CPU metric type %q does not yet match the configured %q",
+			ErrWindowDataNotReady, sa.Status.CurrentCPUMetricType, expected)
+	}
 
 	scheduleNames := make([]string, 0, len(sa.Status.CurrentlyActiveSchedules))
 	for _, as := range sa.Status.CurrentlyActiveSchedules {
 		scheduleNames = append(scheduleNames, as.ScheduleName)
 	}
 
-	act := map[string]any{
+	act = map[string]any{
 		"current":         sa.Status.CurrentProcessingUnits,
 		"desired":         builtinDesired,
 		"minPU":           minPU,
@@ -208,7 +243,10 @@ func celActivation(sa *spannerv1beta1.SpannerAutoscaler, builtinDesired int, now
 		for _, w := range windows {
 			wm, ok := findWindowMetric(sa.Status.CurrentCPUWindowMetrics, m.metric, w)
 			if !ok {
-				return nil, fmt.Errorf("%w: metric %s window %s", ErrWindowDataNotReady, m.metric, w)
+				for _, agg := range windowAggregations {
+					missing = append(missing, fmt.Sprintf("cpu.%s.%s%s", m.segment, agg.name, w))
+				}
+				continue
 			}
 			for _, agg := range windowAggregations {
 				act[fmt.Sprintf("cpu.%s.%s%s", m.segment, agg.name, w)] = agg.value(wm)
@@ -216,7 +254,7 @@ func celActivation(sa *spannerv1beta1.SpannerAutoscaler, builtinDesired int, now
 		}
 	}
 
-	return act, nil
+	return act, missing, nil
 }
 
 func findWindowMetric(metrics []spannerv1beta1.CPUWindowMetric, metric spannerv1beta1.CPUMetricType, window string) (spannerv1beta1.CPUWindowMetric, bool) {
@@ -228,12 +266,17 @@ func findWindowMetric(metrics []spannerv1beta1.CPUWindowMetric, metric spannerv1
 	return spannerv1beta1.CPUWindowMetric{}, false
 }
 
-func evaluateBool(flags spannerv1beta1.CPUMetricFlags, windows []string, expr string, act map[string]any) (bool, error) {
-	prg, err := compiledProgram(flags, windows, expr)
+func evaluateBool(flags spannerv1beta1.CPUMetricFlags, windows []string, expr string, act map[string]any, missing []string) (bool, error) {
+	cp, err := compiledProgram(flags, windows, expr)
 	if err != nil {
 		return false, err
 	}
-	val, _, err := prg.Eval(act)
+	for _, name := range missing {
+		if cp.refs[name] {
+			return false, fmt.Errorf("%w: %s", ErrWindowDataNotReady, name)
+		}
+	}
+	val, _, err := cp.prg.Eval(act)
 	if err != nil {
 		return false, fmt.Errorf("evaluating CEL expression: %w", err)
 	}
@@ -282,7 +325,7 @@ func EvaluateScalingRules(sa *spannerv1beta1.SpannerAutoscaler, builtinDesired i
 
 	flags := sa.Spec.ScaleConfig.TargetCPUUtilization.ActiveMetricFlags()
 	windows := ValidMetricWindows(sa.Spec.ScaleConfig.MetricWindows)
-	act, actErr := celActivation(sa, builtinDesired, now)
+	act, missing, actErr := celActivation(sa, builtinDesired, now)
 
 	desired := builtinDesired
 	outcomes := make([]RuleOutcome, 0, len(rules))
@@ -293,7 +336,7 @@ func EvaluateScalingRules(sa *spannerv1beta1.SpannerAutoscaler, builtinDesired i
 			outcomes = append(outcomes, oc)
 			continue
 		}
-		triggered, err := evaluateBool(flags, windows, rule.When, act)
+		triggered, err := evaluateBool(flags, windows, rule.When, act, missing)
 		if err != nil {
 			oc.Err = err
 			outcomes = append(outcomes, oc)
@@ -321,6 +364,13 @@ func ruleCandidatePU(sa *spannerv1beta1.SpannerAutoscaler, scaleUp intstr.IntOrS
 		return current
 	}
 	candidate := roundUpToValidPU(current + amount)
+	// A percentage is documented as at most doubling (100% maximum); rounding
+	// up to a valid PU value must not overshoot that promise. At 600 PU,
+	// "100%" computes 1200 and would otherwise round up to 2000 — a 3.33x
+	// resize. Round down to the largest valid value within 2x instead.
+	if scaleUp.Type == intstr.String && candidate > 2*current {
+		candidate = roundDownToValidPU(2 * current)
+	}
 	minPU, maxPU := effectiveRange(sa)
 	return min(max(candidate, minPU), maxPU)
 }
@@ -336,6 +386,22 @@ func roundUpToValidPU(pu int) int {
 		return ((pu + 99) / 100) * 100
 	}
 	return ((pu + 999) / 1000) * 1000
+}
+
+// roundDownToValidPU rounds pu down to the nearest valid Spanner
+// processing-unit value: a multiple of 100 up to 1000, a multiple of 1000
+// above.
+func roundDownToValidPU(pu int) int {
+	if pu <= 0 {
+		return 0
+	}
+	if pu < 1000 {
+		return (pu / 100) * 100
+	}
+	if pu < 2000 {
+		return 1000
+	}
+	return (pu / 1000) * 1000
 }
 
 // effectiveRange returns the autoscaling range in effect: the spec range,
@@ -379,11 +445,11 @@ type GateOutcome struct {
 func evaluateGate(sa *spannerv1beta1.SpannerAutoscaler, field, expr string, desiredPU int, now time.Time, failOpen bool) GateOutcome {
 	flags := sa.Spec.ScaleConfig.TargetCPUUtilization.ActiveMetricFlags()
 	windows := ValidMetricWindows(sa.Spec.ScaleConfig.MetricWindows)
-	act, err := celActivation(sa, desiredPU, now)
+	act, missing, err := celActivation(sa, desiredPU, now)
 	if err != nil {
 		return GateOutcome{Field: field, Allowed: failOpen, Err: err}
 	}
-	allowed, err := evaluateBool(flags, windows, expr, act)
+	allowed, err := evaluateBool(flags, windows, expr, act, missing)
 	if err != nil {
 		return GateOutcome{Field: field, Allowed: failOpen, Err: err}
 	}

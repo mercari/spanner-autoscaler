@@ -337,3 +337,50 @@ var _ = Describe("ConvertFrom", func() {
 })
 
 func intPtr(i int) *int { return &i }
+
+var _ = Describe("CEL scale-config round trip via v1alpha1", func() {
+	newHub := func() *v1beta1.SpannerAutoscaler {
+		return &v1beta1.SpannerAutoscaler{
+			ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+			Spec: v1beta1.SpannerAutoscalerSpec{
+				TargetInstance: v1beta1.TargetInstance{ProjectID: "project", InstanceID: "instance"},
+				ScaleConfig: v1beta1.ScaleConfig{
+					ComputeType:          v1beta1.ComputeTypePU,
+					ProcessingUnits:      v1beta1.ScaleConfigPUs{Min: 1000, Max: 10000},
+					TargetCPUUtilization: v1beta1.TargetCPUUtilization{HighPriority: intPtr(50)},
+				},
+			},
+		}
+	}
+
+	It("preserves metricWindows, scalingRules, and gate conditions across a v1beta1 -> v1alpha1 -> v1beta1 round trip", func() {
+		hub := newHub()
+		hub.Spec.ScaleConfig.MetricWindows = []string{"15m"}
+		hub.Spec.ScaleConfig.ScalingRules = []v1beta1.ScalingRule{
+			{When: "cpu.highPriority.min15m >= 50", ScaleUp: intstr.FromString("25%")},
+		}
+		hub.Spec.ScaleConfig.ScaleupCondition = "cpu.highPriority >= 40"
+		hub.Spec.ScaleConfig.ScaledownCondition = "cpu.highPriority.max15m < 20"
+
+		spoke := &SpannerAutoscaler{}
+		Expect(spoke.ConvertFrom(hub)).To(Succeed())
+		Expect(spoke.Annotations).To(HaveKey(preservedFieldsAnnotation))
+		// The hub object passed in must not be mutated.
+		Expect(hub.Annotations).To(BeNil())
+
+		restored := &v1beta1.SpannerAutoscaler{}
+		Expect(spoke.ConvertTo(restored)).To(Succeed())
+		Expect(restored.Spec.ScaleConfig.MetricWindows).To(Equal(hub.Spec.ScaleConfig.MetricWindows))
+		Expect(restored.Spec.ScaleConfig.ScalingRules).To(Equal(hub.Spec.ScaleConfig.ScalingRules))
+		Expect(restored.Spec.ScaleConfig.ScaleupCondition).To(Equal(hub.Spec.ScaleConfig.ScaleupCondition))
+		Expect(restored.Spec.ScaleConfig.ScaledownCondition).To(Equal(hub.Spec.ScaleConfig.ScaledownCondition))
+		// The hub object carries the real fields; the carrier annotation must not survive.
+		Expect(restored.Annotations).NotTo(HaveKey(preservedFieldsAnnotation))
+	})
+
+	It("adds no annotation when no CEL field is set", func() {
+		spoke := &SpannerAutoscaler{}
+		Expect(spoke.ConvertFrom(newHub())).To(Succeed())
+		Expect(spoke.Annotations).NotTo(HaveKey(preservedFieldsAnnotation))
+	})
+})

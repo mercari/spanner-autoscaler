@@ -81,6 +81,16 @@ func TestValidateCELScaleConfig(t *testing.T) {
 			wantErrPart: "Duplicate",
 		},
 		{
+			// "60m" and "1h" parse to the same duration; the syncer maps
+			// aggregates back to one spelling, so the other's CEL variables
+			// would never be populated.
+			name: "duplicate window with different spelling",
+			mutate: func(sc *spannerv1beta1.ScaleConfig) {
+				sc.MetricWindows = []string{"60m", "1h"}
+			},
+			wantErrPart: "Duplicate",
+		},
+		{
 			name: "too many windows",
 			mutate: func(sc *spannerv1beta1.ScaleConfig) {
 				sc.MetricWindows = []string{"5m", "10m", "15m", "30m", "1h"}

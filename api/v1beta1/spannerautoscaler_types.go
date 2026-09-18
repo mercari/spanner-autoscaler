@@ -218,7 +218,10 @@ type ScalingRule struct {
 	// How many processing units to add to the current processing units when the condition
 	// holds. Either a fixed number of processing units (e.g. 3000) or a percentage of the
 	// current processing units (e.g. "25%"; at most "100%", i.e. doubling). The result is
-	// rounded up to a valid processing-unit value and clamped to the min/max range.
+	// rounded to a valid processing-unit value and clamped to the min/max range; a
+	// percentage never resolves beyond twice the current processing units, even when
+	// rounding up would cross that line (e.g. "100%" at 600 processing units resolves
+	// to 1000, not 2000).
 	ScaleUp intstr.IntOrString `json:"scaleUp"`
 }
 

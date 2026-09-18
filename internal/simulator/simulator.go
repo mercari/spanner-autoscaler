@@ -40,6 +40,7 @@ package simulator
 import (
 	"errors"
 	"fmt"
+	"math/bits"
 	"slices"
 	"time"
 
@@ -180,14 +181,22 @@ func Run(cfg Config, points []Point) (*Result, error) {
 	// the Cloud Monitoring point series, so CEL scaling rules and gate
 	// conditions replay exactly as they would run in production.
 	ws := newWindowState(sa.Spec.ScaleConfig.MetricWindows)
+	// The warm-up period before every declared window first holds enough data
+	// is expected on every replay (production skips evaluation the same way),
+	// so window-readiness errors are not counted until then. After warm-up
+	// they are real: an ingestion gap that empties a window would skip rules
+	// in production too, and the summary must say so.
+	expectedWindowMetrics := len(scaling.ValidMetricWindows(sa.Spec.ScaleConfig.MetricWindows)) * bits.OnesCount(uint(flags))
+	warmedUp := expectedWindowMetrics == 0
 	celErrors := 0
 	countCELError := func(err error) {
-		// The warm-up period before a window has enough data is expected on
-		// every replay (production skips evaluation the same way); only count
-		// errors that would persist.
-		if err != nil && !errors.Is(err, scaling.ErrWindowDataNotReady) {
-			celErrors++
+		if err == nil {
+			return
 		}
+		if !warmedUp && errors.Is(err, scaling.ErrWindowDataNotReady) {
+			return
+		}
+		celErrors++
 	}
 
 	for i, p := range points {
@@ -236,6 +245,9 @@ func Run(cfg Config, points []Point) (*Result, error) {
 		setStatusCPU(sa, flags, simHigh, simTotal)
 		ws.add(now, simHigh, simTotal)
 		sa.Status.CurrentCPUWindowMetrics = ws.windowMetrics(flags)
+		if !warmedUp && len(sa.Status.CurrentCPUWindowMetrics) == expectedWindowMetrics {
+			warmedUp = true
+		}
 
 		minPU, maxPU, _, _ := scaling.DesiredPURange(*sa)
 		sa.Status.DesiredMinPUs = minPU
