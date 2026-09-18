@@ -492,6 +492,22 @@ Following are some other advanced methods which can also be used for GCP authent
 </details>
 
 
+## Configuration simulator
+
+`cmd/simulator` (`make build-simulator`) backtests `SpannerAutoscaler` configuration changes against metrics recorded by Cloud Monitoring: it replays the actual workload through the controller's own decision logic and reports what a candidate configuration would have cost and how it would have behaved. The results describe the recorded past under a different configuration, not a forecast of future traffic.
+
+```console
+$ make build-simulator
+# 1. Download the recorded metrics (four weeks or more recommended)
+$ ./bin/simulator fetch -project <project> -instance <instance> \
+    -start 2026-08-11T00:00:00Z -out metrics.csv
+# 2. Search for a cheaper configuration and write an HTML report
+$ ./bin/simulator recommend -metrics metrics.csv -config manifest.yaml \
+    -auto -max-exceeded-minutes 500 -html report.html
+```
+
+`recommend -auto` derives the candidate values from the recording itself, evaluates every combination under safety constraints (Google's recommended CPU maximums and compute-capacity change limits are built in), and proposes one staged change at a time together with its cost saving and risk deltas. See [docs/simulator.md](docs/simulator.md) for the full workflow (`fetch` / `simulate` / `compare` / `recommend`), the constraints, and how to read the reports.
+
 ## Metrics
 
 The controller exposes custom Prometheus metrics on the standard controller-runtime `/metrics` endpoint (bound to `--metrics-bind-address`, default `127.0.0.1:8080`). All business metrics carry the four identity labels `namespace`, `name`, `project_id`, `instance_id` so they can be sliced by either the Kubernetes resource identity or the target Spanner instance.
@@ -510,7 +526,7 @@ The endpoint can be scraped by Prometheus (`ServiceMonitor` / `PodMonitor`), the
 | `spanner_autoscaler_max_processing_units` | — | Configured `spec.scaleConfig.processingUnits.max`. |
 | `spanner_autoscaler_effective_min_processing_units` | — | Effective lower bound including additions from currently active schedules. |
 | `spanner_autoscaler_effective_max_processing_units` | — | Effective upper bound including additions from currently active schedules. |
-| `spanner_autoscaler_cpu_utilization` | `type=high_priority\|total` | Current CPU utilization percentage (0–100) per metric type. |
+| `spanner_autoscaler_cpu_utilization` | `type=high_priority\|total` | Current CPU utilization percentage (0–100) per metric type. For multi-region instances this is the busiest region. |
 | `spanner_autoscaler_cpu_utilization_target` | `type=high_priority\|total` | Configured target CPU utilization percentage. |
 | `spanner_autoscaler_instance_ready` | — | `1` when the Spanner instance state is `ready`, `0` otherwise. |
 | `spanner_autoscaler_active_schedules` | — | Number of `SpannerAutoscaleSchedule` entries currently in effect. |
@@ -600,6 +616,14 @@ To migrate:
 The `--config` flag has been removed (`ControllerManagerConfig` was dropped upstream in `controller-runtime` v0.19). Deployments still passing `--config=...` will fail to start with `flag provided but not defined: -config`.
 
 The values previously in `controller_manager_config.yaml` are now flag defaults in the binary (`--health-probe-bind-address=:8081`, `--metrics-bind-address=127.0.0.1:8080`, `--leader-elect=true`, `--leader-elect-id=54b82eb3.mercari.com`), so behavior is preserved. The `controller_manager_config.yaml` ConfigMap and the `manager_config_patch.yaml` kustomize patch have been deleted — remove any references in downstream overlays. To override the defaults, pass the flag in the manager Deployment's `args:` list (see `config/manager/manager.yaml`). CRDs are unchanged.
+
+### :warning: Migration from `0.8.x` to `0.9.x`:
+
+**Behavior change for multi-region instances.** The controller previously summed CPU utilization across all regions of a multi-region instance (`REDUCE_SUM` without grouping by location), so `status.currentHighPriorityCPUUtilization` / `status.currentTotalCPUUtilization` read roughly 1.4–2.1× the busiest region on a 3-region configuration such as `asia1`. The controller now aggregates per region and takes the busiest region, matching how Cloud Spanner documents CPU for multi-region instances (recommended maximum 45% high-priority CPU per region).
+
+To migrate:
+- Regional instances: no change in behavior.
+- Multi-region instances: the reported CPU drops to the true per-region value, so an existing `targetCPUUtilization` that was tuned against the inflated reading is now effectively looser. For example `highPriority: 65` on a 3-region instance previously kept each region at roughly 22–46%; after upgrading it lets the busiest region reach 65%, above Spanner's 45% guidance. Review the targets before upgrading, e.g. lower `highPriority` to 45 or below.
 
 ## License
 
