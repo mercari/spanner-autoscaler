@@ -8,10 +8,17 @@ func storeKey(project, instanceID string) string {
 }
 
 // CPUEntry holds per-metric CPU utilization values for a Spanner instance.
-// Either field may be nil if not configured for that metric kind.
+// Either scalar field may be nil if not configured for that metric kind.
+//
+// HighPriorityRegions/TotalRegions hold per-region values instead, for
+// simulating a multi-region instance; a scalar field and its regional
+// counterpart are mutually exclusive for the same metric kind (enforced by
+// the admin API, see validateStaticSetRequest in admin.go).
 type CPUEntry struct {
-	HighPriority *float64
-	Total        *float64
+	HighPriority        *float64
+	HighPriorityRegions map[string]float64
+	Total               *float64
+	TotalRegions        map[string]float64
 }
 
 func (e CPUEntry) get(kind MetricKind) (float64, bool) {
@@ -26,6 +33,30 @@ func (e CPUEntry) get(kind MetricKind) (float64, bool) {
 		}
 	}
 	return 0, false
+}
+
+// regions returns a region-name -> CPU-utilization map for kind. A scalar
+// value is reported as a single-entry map under the empty region key: with
+// only one entry, grouped and ungrouped reduction both yield that same
+// value, so callers can treat both forms uniformly.
+func (e CPUEntry) regions(kind MetricKind) (map[string]float64, bool) {
+	switch kind {
+	case MetricKindHighPriority:
+		if len(e.HighPriorityRegions) > 0 {
+			return e.HighPriorityRegions, true
+		}
+		if e.HighPriority != nil {
+			return map[string]float64{"": *e.HighPriority}, true
+		}
+	case MetricKindTotal:
+		if len(e.TotalRegions) > 0 {
+			return e.TotalRegions, true
+		}
+		if e.Total != nil {
+			return map[string]float64{"": *e.Total}, true
+		}
+	}
+	return nil, false
 }
 
 // StaticStore holds fixed CPU utilization values per Spanner instance.

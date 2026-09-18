@@ -114,6 +114,13 @@ type Summary struct {
 	ScaleGapsUnder10Min int `json:"scaleGapsUnder10Min"`
 	ScaleGapsUnder30Min int `json:"scaleGapsUnder30Min"`
 
+	// CELErrors counts scaling-rule and gate-condition evaluations that
+	// failed during the replay, excluding the expected warm-up period before
+	// the metric windows hold enough data. Non-zero means the same
+	// configuration would also error in production (rules skipped, gates
+	// falling back to their fail-safe direction).
+	CELErrors int `json:"celErrors,omitzero"`
+
 	// Min-PU signals, for judging whether processingUnits.min should move.
 	//
 	// SpecMinPU echoes the candidate's spec.processingUnits.min.

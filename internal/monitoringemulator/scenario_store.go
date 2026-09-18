@@ -78,10 +78,15 @@ type scenarioEntry struct {
 	startTime time.Time
 }
 
-// currentStep returns the step active at the current moment.
-// The scenario loops indefinitely.
-func (e *scenarioEntry) currentStep() ScenarioStep {
-	elapsed := time.Since(e.startTime) % e.total
+// stepAt returns the step active at time t. The scenario loops indefinitely
+// in both directions: times before startTime wrap backwards into the loop, so
+// a history query right after registration returns a consistent series
+// instead of no data.
+func (e *scenarioEntry) stepAt(t time.Time) ScenarioStep {
+	elapsed := t.Sub(e.startTime) % e.total
+	if elapsed < 0 {
+		elapsed += e.total
+	}
 	var cum time.Duration
 	for _, step := range e.steps {
 		cum += step.Duration.Duration
@@ -158,13 +163,18 @@ func validateScenarioStep(i int, step ScenarioStep) error {
 
 // Get returns the current active step for the instance, if a scenario is registered.
 func (s *ScenarioStore) Get(project, instanceID string) (ScenarioStep, bool) {
+	return s.StepAt(project, instanceID, time.Now())
+}
+
+// StepAt returns the step active at time t, if a scenario is registered.
+func (s *ScenarioStore) StepAt(project, instanceID string, t time.Time) (ScenarioStep, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	e, ok := s.data[storeKey(project, instanceID)]
 	if !ok {
 		return ScenarioStep{}, false
 	}
-	return e.currentStep(), true
+	return e.stepAt(t), true
 }
 
 // Delete removes the scenario for the given instance.

@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"time"
 )
@@ -28,15 +29,22 @@ func NewFakeClient(metrics *InstanceMetrics) *FakeClient {
 // GetInstanceMetrics implements Client.
 // It returns a copy of the stored metrics with only the field corresponding to
 // metricType populated, mirroring the real client's behavior and preventing the
-// other field from masking bugs caused by stale values. The now argument is
-// accepted to satisfy the Client interface and is otherwise ignored.
-func (c *FakeClient) GetInstanceMetrics(ctx context.Context, metricType MetricType, _ time.Time) (*InstanceMetrics, error) {
+// other field from masking bugs caused by stale values. The now and windows
+// arguments are accepted to satisfy the Client interface; the stored
+// WindowAggregates are returned as-is regardless of the requested windows.
+func (c *FakeClient) GetInstanceMetrics(ctx context.Context, metricType MetricType, _ time.Time, _ []time.Duration) (*InstanceMetrics, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	switch metricType {
 	case MetricTypeTotal:
-		return &InstanceMetrics{CurrentTotalCPUUtilization: c.metrics.CurrentTotalCPUUtilization}, nil
+		return &InstanceMetrics{
+			CurrentTotalCPUUtilization: c.metrics.CurrentTotalCPUUtilization,
+			WindowAggregates:           slices.Clone(c.metrics.WindowAggregates),
+		}, nil
 	default: // MetricTypeHighPriority
-		return &InstanceMetrics{CurrentHighPriorityCPUUtilization: c.metrics.CurrentHighPriorityCPUUtilization}, nil
+		return &InstanceMetrics{
+			CurrentHighPriorityCPUUtilization: c.metrics.CurrentHighPriorityCPUUtilization,
+			WindowAggregates:                  slices.Clone(c.metrics.WindowAggregates),
+		}, nil
 	}
 }

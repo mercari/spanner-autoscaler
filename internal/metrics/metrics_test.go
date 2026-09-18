@@ -7,6 +7,7 @@ import (
 	"time"
 
 	monitoringpb "cloud.google.com/go/monitoring/apiv3/v2/monitoringpb"
+	"github.com/golang/protobuf/ptypes/timestamp"
 )
 
 func TestBuildListTimeSeriesRequest(t *testing.T) {
@@ -44,7 +45,7 @@ func TestBuildListTimeSeriesRequest(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			c := &client{projectID: "my-project", instanceID: "my-instance", term: term}
 
-			req := c.buildListTimeSeriesRequest(tt.metricType, now)
+			req := c.buildListTimeSeriesRequest(tt.metricType, now, nil)
 
 			if got, want := req.GetName(), "projects/my-project"; got != want {
 				t.Errorf("Name = %q, want %q", got, want)
@@ -103,5 +104,75 @@ func TestBuildListTimeSeriesRequest(t *testing.T) {
 				t.Errorf("View = %v, want %v", got, want)
 			}
 		})
+	}
+}
+
+// makePoints builds a newest-first 1-minute point series ending at end, one
+// point per value (values[0] is the newest).
+func makePoints(end time.Time, values ...float64) []*monitoringpb.Point {
+	points := make([]*monitoringpb.Point, len(values))
+	for i, v := range values {
+		t := end.Add(-time.Duration(i) * time.Minute)
+		points[i] = &monitoringpb.Point{
+			Interval: &monitoringpb.TimeInterval{
+				StartTime: &timestamp.Timestamp{Seconds: t.Add(-time.Minute).Unix()},
+				EndTime:   &timestamp.Timestamp{Seconds: t.Unix()},
+			},
+			Value: &monitoringpb.TypedValue{
+				Value: &monitoringpb.TypedValue_DoubleValue{DoubleValue: v},
+			},
+		}
+	}
+	return points
+}
+
+func TestWindowAggregates(t *testing.T) {
+	end := time.Date(2026, 9, 16, 10, 0, 0, 0, time.UTC)
+
+	t.Run("full window anchored at newest point", func(t *testing.T) {
+		// 5 points, newest first: 60%, 55%, 50%, 45%, 40%.
+		points := makePoints(end, 0.60, 0.55, 0.50, 0.45, 0.40)
+		got := windowAggregates(points, []time.Duration{3 * time.Minute})
+		want := []WindowAggregate{{Window: 3 * time.Minute, Min: 50, Avg: 55, Max: 60}}
+		if !slices.Equal(got, want) {
+			t.Errorf("windowAggregates() = %+v, want %+v", got, want)
+		}
+	})
+
+	t.Run("window with too few points is omitted", func(t *testing.T) {
+		points := makePoints(end, 0.60, 0.55)
+		if got := windowAggregates(points, []time.Duration{3 * time.Minute}); len(got) != 0 {
+			t.Errorf("windowAggregates() = %+v, want empty for an uncovered window", got)
+		}
+	})
+
+	t.Run("multiple windows one series", func(t *testing.T) {
+		points := makePoints(end, 0.60, 0.20, 0.20, 0.20, 0.20)
+		got := windowAggregates(points, []time.Duration{2 * time.Minute, 5 * time.Minute})
+		want := []WindowAggregate{
+			{Window: 2 * time.Minute, Min: 20, Avg: 40, Max: 60},
+			{Window: 5 * time.Minute, Min: 20, Avg: 28, Max: 60},
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("windowAggregates() = %+v, want %+v", got, want)
+		}
+	})
+
+	t.Run("no windows requested", func(t *testing.T) {
+		if got := windowAggregates(makePoints(end, 0.60), nil); got != nil {
+			t.Errorf("windowAggregates() = %+v, want nil", got)
+		}
+	})
+}
+
+func TestBuildListTimeSeriesRequest_WindowTerm(t *testing.T) {
+	now := time.Date(2026, 9, 16, 10, 0, 0, 0, time.UTC)
+	c := &client{projectID: "my-project", instanceID: "my-instance", term: 10 * time.Minute}
+
+	req := c.buildListTimeSeriesRequest(MetricTypeHighPriority, now, []time.Duration{15 * time.Minute, time.Hour})
+	start := time.Unix(req.GetInterval().GetStartTime().GetSeconds(), 0)
+	// The largest window (1h) plus the base term (10m) for ingestion delay.
+	if want := now.Add(-(time.Hour + 10*time.Minute)); !start.Equal(want) {
+		t.Errorf("StartTime = %s, want %s", start, want)
 	}
 }
