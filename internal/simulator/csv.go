@@ -141,5 +141,11 @@ func parseCSVFloat(s string) (*float64, error) {
 	if err != nil {
 		return nil, err
 	}
+	// ParseFloat accepts NaN, infinities, and negatives; none is a valid
+	// measurement, and NaN in particular compares false against every
+	// threshold, so it would silently pass the simulation's constraints.
+	if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 {
+		return nil, fmt.Errorf("not a finite non-negative number")
+	}
 	return &v, nil
 }

@@ -512,32 +512,43 @@ func buildLineChart(title, unit string, times []int64, series []tsSeries, refs [
 	return view
 }
 
-// seriesPaths returns the min-max envelope (a closed band) and the mean line
-// as SVG path data. Gaps in the data lift the pen.
+// seriesPaths returns the min-max envelope and the mean line as SVG path
+// data. Gaps in the data lift the pen: each contiguous run of buckets becomes
+// its own closed envelope subpath, so the band never bridges a gap the mean
+// line skips.
 func seriesPaths(bs []tsBucket, xAt func(int) float64, yAt func(float64) float64) (band, line string) {
-	var upper, lower, mean strings.Builder
+	var bands, mean strings.Builder
+	var upper, lower []string
+	flush := func() {
+		if len(upper) == 0 {
+			return
+		}
+		bands.WriteString("M" + upper[0] + " ")
+		for _, p := range upper[1:] {
+			bands.WriteString("L" + p + " ")
+		}
+		// Lower edge walks back right-to-left to close the envelope.
+		for i := len(lower) - 1; i >= 0; i-- {
+			bands.WriteString("L" + lower[i] + " ")
+		}
+		bands.WriteString("Z ")
+		upper, lower = upper[:0], lower[:0]
+	}
 	pen := "M"
 	for i, b := range bs {
 		if !b.Has {
+			flush()
 			pen = "M"
 			continue
 		}
 		x := xAt(i)
 		fmt.Fprintf(&mean, "%s%.1f %.1f ", pen, x, yAt(b.Mean))
-		fmt.Fprintf(&upper, "%s%.1f %.1f ", pen, x, yAt(b.Max))
-		fmt.Fprintf(&lower, "L%.1f %.1f ", x, yAt(b.Min))
+		upper = append(upper, fmt.Sprintf("%.1f %.1f", x, yAt(b.Max)))
+		lower = append(lower, fmt.Sprintf("%.1f %.1f", x, yAt(b.Min)))
 		pen = "L"
 	}
-	if upper.Len() == 0 {
-		return "", ""
-	}
-	// Lower edge walks back right-to-left to close the envelope.
-	low := strings.Fields(lower.String())
-	var back strings.Builder
-	for i := len(low) - 2; i >= 0; i -= 2 {
-		fmt.Fprintf(&back, "%s %s ", strings.TrimPrefix(low[i], "L"), low[i+1])
-	}
-	return upper.String() + "L" + back.String() + "Z", mean.String()
+	flush()
+	return strings.TrimSpace(bands.String()), strings.TrimSpace(mean.String())
 }
 
 // chartJSON is the payload behind the crosshair tooltip. Marked template.JS:

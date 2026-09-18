@@ -29,6 +29,7 @@ import (
 
 	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
 	"github.com/mercari/spanner-autoscaler/internal/scaling"
+	webhookv1beta1 "github.com/mercari/spanner-autoscaler/internal/webhook/v1beta1"
 )
 
 // maxRecommendCombinations bounds the grid so a typo in a candidate list
@@ -84,6 +85,11 @@ type Constraints struct {
 	// that every candidate shares.
 	MaxScaleStepViolations *int
 	MaxShortScaleGaps      *int
+	// MaxGapMinutes, when non-nil, caps the candidate's data-gap minutes.
+	// Callers set it to the base replay's own gap time: a candidate that
+	// enables a metric the recording does not contain turns every tick into a
+	// gap and would otherwise sail through the constraints on no data.
+	MaxGapMinutes *float64
 }
 
 // Candidate is one evaluated configuration.
@@ -143,16 +149,26 @@ func CurrentParameterValues(sa *spannerv1beta1.SpannerAutoscaler, defaultScaleUp
 		OverrideScaledownInterval: DurationValueOr(sc.ScaledownInterval, defaultScaleDownInterval).Duration.String(),
 		OverrideScaleupInterval:   DurationValueOr(sc.ScaleupInterval, defaultScaleUpInterval).Duration.String(),
 	}
-	if len(sc.ScaledownAllowedTimes) > 0 {
+	switch {
+	case len(sc.ScaledownAllowedTimes) > 0:
 		current[OverrideScaledownAllowedTimes] = strings.Join(sc.ScaledownAllowedTimes, ";")
-	} else {
+	case len(sc.ScaledownNotAllowedTimes) > 0:
+		// The spec restricts scale-down through the complementary field;
+		// rendering "none" here would claim scale-down is unrestricted, and a
+		// candidate that switches to an allow-list must count as a change.
+		current[OverrideScaledownAllowedTimes] = "notAllowedTimes:" + strings.Join(sc.ScaledownNotAllowedTimes, ";")
+	default:
 		current[OverrideScaledownAllowedTimes] = "none"
 	}
 	if t := sc.TargetCPUUtilization.HighPriority; t != nil {
 		current[OverrideTargetHighPriorityCPU] = fmt.Sprintf("%d", *t)
+	} else {
+		current[OverrideTargetHighPriorityCPU] = "none"
 	}
 	if t := sc.TargetCPUUtilization.Total; t != nil {
 		current[OverrideTargetTotalCPU] = fmt.Sprintf("%d", *t)
+	} else {
+		current[OverrideTargetTotalCPU] = "none"
 	}
 	return current
 }
@@ -273,8 +289,9 @@ func Recommend(base Config, space SearchSpace, constraints Constraints, points [
 // Only feasible candidates cheaper than the base replay are considered.
 // When maxChanges > 0, the recommendation is restricted to candidates that
 // change at most that many parameters against the current configuration —
-// staged adoption: move one setting, observe, iterate — falling back to all
-// eligible candidates when none qualifies. Within the pool, candidates whose
+// staged adoption: move one setting, observe, iterate. When no eligible
+// candidate fits the change budget, nothing is recommended and keepReason
+// says so. Within the pool, candidates whose
 // savings are within savingsTolerancePt percentage points of the pool's best
 // count as equal on cost, and the least risky of them is recommended — see
 // lessRisky: the gentlest scale-down first, then the measured risk counters.
@@ -325,9 +342,7 @@ func RecommendedIndex(base Summary, current map[string]string, candidates []Cand
 		}
 	}
 	if poolBest == -1 {
-		// No candidate within the change budget; recommend from the full set.
-		poolBest = cheapest
-		inPool = eligible
+		return -1, -1, fmt.Sprintf("every candidate cheaper than the current configuration changes more than %d parameter(s) — keep the current configuration, or allow more changes per step", maxChanges)
 	}
 
 	minSaved := candidates[poolBest].Summary.PUHoursSavedPercent - savingsTolerancePt
@@ -454,8 +469,11 @@ func evaluate(base Config, combo []override, constraints Constraints, points []P
 
 	c := Candidate{Overrides: overrides, Autoscaler: sa}
 
-	if minPU, maxPU := sa.Spec.ScaleConfig.ProcessingUnits.Min, sa.Spec.ScaleConfig.ProcessingUnits.Max; minPU > maxPU {
-		c.Error = fmt.Sprintf("min PU %d exceeds max PU %d", minPU, maxPU)
+	// Reject combinations the admission webhook would refuse (min above max,
+	// invalid PU values or step sizes, out-of-range targets) before spending a
+	// replay on them; a recommendation nobody can apply is worthless.
+	if err := webhookv1beta1.ValidateSpec(sa); err != nil {
+		c.Error = err.Error()
 		return c
 	}
 
@@ -502,6 +520,9 @@ func infeasibleReasons(sa *spannerv1beta1.SpannerAutoscaler, s Summary, constrai
 	}
 	if m := constraints.MaxShortScaleGaps; m != nil && s.ScaleGapsUnder10Min > *m {
 		reasons = append(reasons, fmt.Sprintf("scale gaps <10m %d > %d allowed", s.ScaleGapsUnder10Min, *m))
+	}
+	if m := constraints.MaxGapMinutes; m != nil && s.GapMinutes > *m {
+		reasons = append(reasons, fmt.Sprintf("data gaps %.0fm > %.0fm in the base replay — a metric this candidate enables is missing from the recording", s.GapMinutes, *m))
 	}
 	return reasons
 }
@@ -672,10 +693,10 @@ func buildDimensions(space SearchSpace) [][]override {
 			apply: func(sa *spannerv1beta1.SpannerAutoscaler) {
 				sa.Spec.ScaleConfig.ScaledownAllowedTimes = v
 				// The two restriction styles are mutually exclusive; replacing
-				// the allowlist drops any blocklist from the base config.
-				if len(v) > 0 {
-					sa.Spec.ScaleConfig.ScaledownNotAllowedTimes = nil
-				}
+				// the allowlist drops any blocklist from the base config —
+				// including the empty ("none" = unrestricted) candidate, which
+				// would otherwise replay with the blocklist still in effect.
+				sa.Spec.ScaleConfig.ScaledownNotAllowedTimes = nil
 			},
 		})
 	}

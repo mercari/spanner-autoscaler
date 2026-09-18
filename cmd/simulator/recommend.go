@@ -122,6 +122,10 @@ func runRecommend(args []string) error {
 	if err := applyPUChangeGuideline(&constraints, *puChangeGuideline, &baseResult.Summary); err != nil {
 		return err
 	}
+	// A candidate must not have more data gaps than the base replay: enabling
+	// a metric the recording lacks would otherwise pass every constraint
+	// simply because nothing was simulated.
+	constraints.MaxGapMinutes = &baseResult.Summary.GapMinutes
 
 	candidates, err := simulator.Recommend(base, space, constraints, points)
 	if err != nil {

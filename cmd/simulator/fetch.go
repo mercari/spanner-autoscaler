@@ -164,9 +164,10 @@ func fetchPoints(ctx context.Context, client *monitoring.MetricClient, project, 
 	return points, nil
 }
 
-// listSeries issues a ListTimeSeries call with the same alignment the
-// controller uses (ALIGN_MEAN over 60s, REDUCE_SUM across series) and streams
-// every point of every returned series into visit.
+// listSeries issues a ListTimeSeries call with the same aggregation the
+// controller uses (ALIGN_MEAN over 60s, REDUCE_SUM per location, then
+// REDUCE_MAX across locations) and streams every point of every returned
+// series into visit.
 func listSeries(ctx context.Context, client *monitoring.MetricClient, project, filter string, start, end time.Time, visit func(time.Time, float64)) error {
 	req := &monitoringpb.ListTimeSeriesRequest{
 		Name:   "projects/" + project,
@@ -179,6 +180,13 @@ func listSeries(ctx context.Context, client *monitoring.MetricClient, project, f
 			AlignmentPeriod:    durationpb.New(60 * time.Second),
 			PerSeriesAligner:   monitoringpb.Aggregation_ALIGN_MEAN,
 			CrossSeriesReducer: monitoringpb.Aggregation_REDUCE_SUM,
+			GroupByFields:      []string{"resource.label.location"},
+		},
+		// Each region of a multi-region instance carries the full compute capacity, so the busiest region is the constraint.
+		SecondaryAggregation: &monitoringpb.Aggregation{
+			AlignmentPeriod:    durationpb.New(60 * time.Second),
+			PerSeriesAligner:   monitoringpb.Aggregation_ALIGN_MEAN,
+			CrossSeriesReducer: monitoringpb.Aggregation_REDUCE_MAX,
 		},
 		View: monitoringpb.ListTimeSeriesRequest_FULL,
 	}
