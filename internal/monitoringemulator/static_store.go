@@ -13,7 +13,7 @@ func storeKey(project, instanceID string) string {
 // HighPriorityRegions/TotalRegions hold per-region values instead, for
 // simulating a multi-region instance; a scalar field and its regional
 // counterpart are mutually exclusive for the same metric kind (enforced by
-// the admin API, see validateStaticSetRequest in admin.go).
+// the admin API, see staticEntryFromRequest in admin.go).
 type CPUEntry struct {
 	HighPriority        *float64
 	HighPriorityRegions map[string]float64
