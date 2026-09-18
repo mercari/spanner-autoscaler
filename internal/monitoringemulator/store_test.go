@@ -43,6 +43,68 @@ func TestStaticStore_NotFound(t *testing.T) {
 	}
 }
 
+func TestCPUEntry_Regions(t *testing.T) {
+	hp := 0.65
+	tests := []struct {
+		name   string
+		entry  CPUEntry
+		kind   MetricKind
+		want   map[string]float64
+		wantOK bool
+	}{
+		{
+			name:   "scalar value becomes a single-entry map",
+			entry:  CPUEntry{HighPriority: &hp},
+			kind:   MetricKindHighPriority,
+			want:   map[string]float64{"": 0.65},
+			wantOK: true,
+		},
+		{
+			name: "regional value is returned as-is",
+			entry: CPUEntry{HighPriorityRegions: map[string]float64{
+				"asia-northeast1": 0.31, "asia-northeast2": 0.14,
+			}},
+			kind: MetricKindHighPriority,
+			want: map[string]float64{
+				"asia-northeast1": 0.31, "asia-northeast2": 0.14,
+			},
+			wantOK: true,
+		},
+		{
+			name:   "neither scalar nor regional is not found",
+			entry:  CPUEntry{},
+			kind:   MetricKindHighPriority,
+			wantOK: false,
+		},
+		{
+			name:   "kind not configured on a mixed entry is not found",
+			entry:  CPUEntry{HighPriority: &hp},
+			kind:   MetricKindTotal,
+			wantOK: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := tt.entry.regions(tt.kind)
+			if ok != tt.wantOK {
+				t.Fatalf("regions() ok = %v, want %v", ok, tt.wantOK)
+			}
+			if !ok {
+				return
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("regions() = %v, want %v", got, tt.want)
+			}
+			for region, want := range tt.want {
+				if got[region] != want {
+					t.Errorf("regions()[%q] = %v, want %v", region, got[region], want)
+				}
+			}
+		})
+	}
+}
+
 func TestStaticStore_Delete(t *testing.T) {
 	s := NewStaticStore()
 	cpu := 0.5

@@ -103,8 +103,16 @@ func (s *MetricServiceServer) ListTimeSeries(
 	}
 
 	// Priority 3: StaticStore (static mode)
-	if cpu, ok := s.staticStore.Get(projectID, instanceID, kind); ok {
-		return buildResponse(cpu), nil
+	if entry, ok := s.staticStore.GetEntry(projectID, instanceID); ok {
+		regions, ok := entry.regions(kind)
+		if !ok {
+			return &monitoringpb.ListTimeSeriesResponse{}, nil
+		}
+		values, err := aggregate(regions, req.GetAggregation(), req.GetSecondaryAggregation())
+		if err != nil {
+			return nil, err
+		}
+		return buildResponse(values...), nil
 	}
 
 	// None configured: empty response causes "no such spanner instance metrics" in the caller.
@@ -134,25 +142,29 @@ func (s *MetricServiceServer) calcCPUFromWorkload(
 	return workload / currentPU, nil
 }
 
-func buildResponse(cpuUtilization float64) *monitoringpb.ListTimeSeriesResponse {
+// buildResponse builds one TimeSeries per given CPU utilization value.
+// Static mode may pass more than one value when the request's aggregation
+// groups regions without a secondary reduction; every other mode always
+// passes exactly one.
+func buildResponse(cpuUtilizations ...float64) *monitoringpb.ListTimeSeriesResponse {
 	now := time.Now()
-	return &monitoringpb.ListTimeSeriesResponse{
-		TimeSeries: []*monitoringpb.TimeSeries{
-			{
-				Points: []*monitoringpb.Point{
-					{
-						Interval: &monitoringpb.TimeInterval{
-							StartTime: timestamppb.New(now.Add(-time.Minute)),
-							EndTime:   timestamppb.New(now),
-						},
-						Value: &monitoringpb.TypedValue{
-							Value: &monitoringpb.TypedValue_DoubleValue{
-								DoubleValue: cpuUtilization,
-							},
+	series := make([]*monitoringpb.TimeSeries, len(cpuUtilizations))
+	for i, cpuUtilization := range cpuUtilizations {
+		series[i] = &monitoringpb.TimeSeries{
+			Points: []*monitoringpb.Point{
+				{
+					Interval: &monitoringpb.TimeInterval{
+						StartTime: timestamppb.New(now.Add(-time.Minute)),
+						EndTime:   timestamppb.New(now),
+					},
+					Value: &monitoringpb.TypedValue{
+						Value: &monitoringpb.TypedValue_DoubleValue{
+							DoubleValue: cpuUtilization,
 						},
 					},
 				},
 			},
-		},
+		}
 	}
+	return &monitoringpb.ListTimeSeriesResponse{TimeSeries: series}
 }
