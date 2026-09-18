@@ -761,8 +761,8 @@ func TestDispatchManualScaling_StatusConflictRequeues(t *testing.T) {
 	if !handled {
 		t.Error("handled should be true on conflict path so caller short-circuits")
 	}
-	if !res.Requeue { //nolint:staticcheck // production code returns Result{Requeue: true} for benign conflict.
-		t.Errorf("expected Requeue=true on status conflict; got %+v", res)
+	if res.RequeueAfter != conflictRequeueDelay {
+		t.Errorf("expected RequeueAfter=conflictRequeueDelay on status conflict; got %+v", res)
 	}
 }
 
@@ -822,7 +822,7 @@ func TestDispatchManualScaling_NoActiveFallsThrough(t *testing.T) {
 	if handled {
 		t.Error("handled should be false when no override exists")
 	}
-	if res.RequeueAfter != 0 || res.Requeue { //nolint:staticcheck // production code returns Result{Requeue: true} for benign conflict; the field is still supported in controller-runtime v0.24.
+	if res.RequeueAfter != 0 {
 		t.Errorf("no-active should not requeue; got %+v", res)
 	}
 }

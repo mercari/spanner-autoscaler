@@ -164,6 +164,10 @@ kind-load-docker-image: kind ## Load a local Docker image to the kind cluster fo
 build: manifests generate fmt vet ## Build manager binary.
 	go build -o bin/manager cmd/main.go
 
+.PHONY: build-simulator
+build-simulator: fmt vet ## Build the scaling-config simulator CLI.
+	go build -o bin/simulator ./cmd/simulator
+
 .PHONY: build-installer
 build-installer: manifests generate kustomize ## Generate a consolidated YAML with CRDs and deployment.
 	mkdir -p dist

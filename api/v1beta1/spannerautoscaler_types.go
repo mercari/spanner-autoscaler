@@ -338,7 +338,12 @@ type SpannerAutoscalerStatus struct {
 	// State of the Cloud Spanner instance
 	InstanceState InstanceState `json:"instanceState,omitempty"`
 
-	// Current average CPU utilization for high priority task, represented as a percentage.
+	// High priority CPU utilization of the busiest region, represented as a percentage.
+	// Within one region the utilization of every database and of system tasks is summed;
+	// for a multi-region instance the regions are then reduced to their maximum, because
+	// each region is provisioned with the full compute capacity of the instance and the
+	// busiest region is what constrains it. For a single-region instance this is simply
+	// the high priority CPU utilization of the instance.
 	// In dual CPU scaling mode (both highPriority and total configured), this value is
 	// fetched concurrently with currentTotalCPUUtilization. Because Cloud Monitoring
 	// ingests the underlying metrics (utilization_by_priority and utilization) independently,
@@ -349,7 +354,8 @@ type SpannerAutoscalerStatus struct {
 	// over-scaling down.
 	CurrentHighPriorityCPUUtilization int `json:"currentHighPriorityCPUUtilization,omitempty"`
 
-	// Current total CPU utilization (all priorities), represented as a percentage.
+	// Total CPU utilization (all priorities) of the busiest region, represented as a percentage.
+	// Aggregated the same way as currentHighPriorityCPUUtilization.
 	// This field is populated only when spec.scaleConfig.targetCPUUtilization.total is specified.
 	// See the note on currentHighPriorityCPUUtilization for the consistency caveat in dual mode.
 	CurrentTotalCPUUtilization int `json:"currentTotalCPUUtilization,omitempty"`
