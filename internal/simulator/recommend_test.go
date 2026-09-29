@@ -532,6 +532,16 @@ func TestRecommendNoneAllowedTimesClearsBlocklist(t *testing.T) {
 	}
 }
 
+func TestInfeasibleReasonsCELErrors(t *testing.T) {
+	reasons := infeasibleReasons(newAutoscaler(1000, 10000, 30), Summary{CELErrors: 3}, Constraints{})
+	found := slices.ContainsFunc(reasons, func(r string) bool {
+		return strings.Contains(r, "CEL evaluation failures")
+	})
+	if !found {
+		t.Errorf("infeasibleReasons = %v; want a CEL-failure reason regardless of constraints", reasons)
+	}
+}
+
 func TestGroupEquivalent(t *testing.T) {
 	mkSummary := func(cost float64) Summary { return Summary{SimPUHours: cost} }
 	candidates := []Candidate{

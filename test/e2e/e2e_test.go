@@ -279,7 +279,7 @@ var _ = Describe("Manager", Ordered, func() {
 						}],
 						"serviceAccountName": "%s"
 					}
-				}`, token, metricsServiceName, namespace, serviceAccountName))
+				}`, metricsServiceName, namespace, serviceAccountName))
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "Failed to create curl-metrics pod")
 

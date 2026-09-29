@@ -131,6 +131,45 @@ The cron expressions use the standard 5-field format: `minute hour day-of-month 
 
 For complex time requirements involving specific minutes, consider using multiple separate cron expressions or adjusting your maintenance windows to align with hour boundaries.
 
+### CEL scaling rules and conditions
+
+The built-in logic reacts to the latest 1-minute CPU value only. For conditions over time — "scale up when the CPU has stayed at or above 50% for 15 minutes", "scale down only when the last 30 minutes prove quiet" — you can declare metric windows and write the conditions in [CEL](https://cel.dev/) (the same expression language used by Kubernetes CRD validation rules):
+
+```yaml
+spec:
+  scaleConfig:
+    metricWindows: ["15m", "30m"]
+    scalingRules:
+      # Sustained high load: add 25% of the current processing units when the
+      # high-priority CPU has stayed at or above 50% for the last 15 minutes.
+      - when: "cpu.highPriority.min15m >= 50"
+        scaleUp: "25%"          # or a fixed amount such as 3000
+    # Allow scale-down only when the last 30 minutes prove it is safe,
+    # instead of disabling scale-down outright.
+    scaledownCondition: "cpu.highPriority.max30m < 20"
+```
+
+- `metricWindows` declares aggregation windows (whole minutes or hours, at most `1h`, at most 4). For every window and configured CPU metric the controller computes min/avg/max over the 1-minute series each sync and exposes them as CEL variables such as `cpu.highPriority.min15m` (also recorded in `status.currentCPUWindowMetrics`).
+- `scalingRules` are **triggers**: when `when` holds, `current + scaleUp` competes with the built-in desired value and the larger one wins. Rules can only add capacity, never reduce what the built-in logic asks for. The scale-up cooldown (`scaleupInterval`) still paces how often they apply, and the min/max range still clamps the result — so `scaleUp: "25%"` with `scaleupInterval: 10m` yields at most +25% every 10 minutes under sustained load.
+- `scaleupCondition` / `scaledownCondition` are **gates**: a boolean expression ANDed with the existing guards. A scale-up (or scale-down) is applied only while the expression is true. Gates can only restrict, never force a change.
+
+Available variables: `current`, `desired`, `minPU`, `maxPU`, `cpu.highPriority` / `cpu.total` (latest values, only for configured metrics), `cpu.<metric>.{min,avg,max}<window>`, `target.highPriority` / `target.total`, `now` / `lastScaleTime` (timestamps; `now.getHours("Asia/Tokyo") >= 13` works), and `activeSchedules` (names of active `SpannerAutoscaleSchedule`s).
+
+The aggregations are deliberately limited to min/avg/max. Percentiles (p95/p99) are not provided: the underlying metric is sampled every 60 seconds and windows are capped at 1h, so one window holds at most 60 points — at that sample size a nearest-rank p99 always equals max, and p95 differs from max only for windows of 20 minutes or more (and even at 1h it is just "max ignoring the top 3 minutes"). Offering them would create variables that look more statistical than they are. Conditions that seem to need percentiles can usually be composed from the existing aggregates, since CEL supports arithmetic across variables:
+
+- Stability (small spread): `cpu.total.max30m - cpu.total.min30m < 10`
+- Rising load (trend): `cpu.highPriority > cpu.highPriority.avg15m + 10`, or a short window against a long one: `cpu.highPriority.avg5m > cpu.highPriority.avg1h + 15`
+- "Mostly above" with tolerance for a brief dip (where `min15m >= 50` would reset on a single quiet minute): `cpu.highPriority.avg15m >= 47` — one 1-minute dip to 0% lowers a 15m average by only ~3 points
+
+If a condition genuinely cannot be composed this way (the most likely candidate is an exact "at least M of the last N minutes above X"), adding an aggregation kind is a small, backward-compatible change — file an issue with the concrete rule.
+
+Safety properties:
+
+- Expressions are compiled and type-checked by the admission webhook, so typos, references to undeclared windows, and references to CPU metrics without a configured target are rejected at `kubectl apply` time.
+- Evaluation always fails toward more capacity: a failing rule simply does not trigger, a failing `scaleupCondition` lets the scale-up through, and a failing `scaledownCondition` denies the scale-down. Every failure emits a warning Event on the resource.
+- Right after resource creation (or across a metrics ingestion gap) a window has less than a full window's worth of data; its aggregates are withheld and expressions using them are skipped fail-safe until the data catches up.
+- The [configuration simulator](#configuration-simulator) replays `scalingRules` and the gate conditions against recorded metrics with the exact production semantics, so a rule can be backtested before it is applied (`summary.celErrors` in the output reports expressions that would also fail in production).
+
 ### Manual scaling override
 
 For incident response or planned ramps, you can pin processing units to an explicit target via the `SpannerManualScaling` CRD. Manual scaling takes precedence over CPU- and schedule-driven autoscaling for as long as the override is active.

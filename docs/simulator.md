@@ -139,3 +139,20 @@ combinations that behave identically on the recording fold into it as
   used for the search (for example, the previous month) and check the
   storage floor: the minimum processing units must also cover the
   database's storage requirement.
+- CEL scaling rules (`spec.scaleConfig.scalingRules`) and the
+  `scaleupCondition` / `scaledownCondition` gates replay with production
+  semantics: the metric-window aggregates (`metricWindows`) are recomputed
+  from the simulated CPU series at every tick, including the warm-up period
+  during which a window has too little data and expressions are skipped
+  fail-safe. `summary.celErrors` counts expression evaluations that failed
+  outside the warm-up — non-zero means the same manifest would also error in
+  production (rules skipped, gates falling back to their fail-safe
+  direction), so fix the expressions before applying.
+- To judge what a rule or gate contributes, `simulate` and `compare` report
+  the attribution counters: `summary.ruleScaleUps` counts scale events a
+  triggered rule drove beyond the built-in logic (such events are also
+  marked `(rule)` in the event list and `"rule": true` in JSON), and
+  `summary.gateBlockedScaleUpMinutes` / `summary.gateBlockedScaleDownMinutes`
+  total the time a gate held back an otherwise-due change. Comparing a
+  manifest with rules against the current one shows not just the cost and
+  headroom difference but which decisions the CEL configuration changed.

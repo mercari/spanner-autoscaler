@@ -524,6 +524,13 @@ func infeasibleReasons(sa *spannerv1beta1.SpannerAutoscaler, s Summary, constrai
 	if m := constraints.MaxGapMinutes; m != nil && s.GapMinutes > *m {
 		reasons = append(reasons, fmt.Sprintf("data gaps %.0fm > %.0fm in the base replay — a metric this candidate enables is missing from the recording", s.GapMinutes, *m))
 	}
+	// Not constraint-configurable: a replay with failed CEL evaluations
+	// skipped rules or fell back to gate fail-safe directions, so its cost
+	// and risk numbers do not describe the configuration as written. The
+	// expressions must be fixed before the candidate is comparable at all.
+	if s.CELErrors > 0 {
+		reasons = append(reasons, fmt.Sprintf("%d CEL evaluation failures — fix the expressions before applying", s.CELErrors))
+	}
 	return reasons
 }
 

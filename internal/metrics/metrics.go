@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	monitoring "cloud.google.com/go/monitoring/apiv3/v2"
@@ -45,6 +46,24 @@ type InstanceMetrics struct {
 	CurrentHighPriorityCPUUtilization int
 	// CurrentTotalCPUUtilization is set when MetricTypeTotal is used.
 	CurrentTotalCPUUtilization int
+
+	// WindowAggregates holds the min/avg/max of the 1-minute CPU series over
+	// each requested window, for the queried metric type. A requested window
+	// is omitted while the returned series does not yet cover it (see
+	// GetInstanceMetrics).
+	WindowAggregates []WindowAggregate
+}
+
+// WindowAggregate is the aggregation of the 1-minute CPU utilization series
+// over one time window. Values are integer percentages, truncated the same
+// way as the current CPU value (int(fraction * 100)).
+type WindowAggregate struct {
+	// Window is the requested aggregation window.
+	Window time.Duration
+	// Min/Avg/Max of the 1-minute CPU utilization within the window, percent.
+	Min int
+	Avg int
+	Max int
 }
 
 // Client is a client for manipulation of InstanceMetrics.
@@ -55,7 +74,15 @@ type Client interface {
 	// GetInstanceMetrics calls whose results need to align should pass the
 	// same now to each call so the underlying Cloud Monitoring queries hit
 	// the same alignment window.
-	GetInstanceMetrics(ctx context.Context, metricType MetricType, now time.Time) (*InstanceMetrics, error)
+	//
+	// windows, when non-empty, requests min/avg/max aggregates of the
+	// 1-minute series over each window. The query term is extended to cover
+	// the largest window; each window is anchored at the newest returned
+	// point (which typically lags now by a couple of minutes of ingestion
+	// delay) and is only reported once the series holds a full window's worth
+	// of 1-minute points, so that e.g. a "sustained for 15 minutes" condition
+	// can never be satisfied by a shorter series.
+	GetInstanceMetrics(ctx context.Context, metricType MetricType, now time.Time, windows []time.Duration) (*InstanceMetrics, error)
 }
 
 // client is a client for Stackdriver Monitoring.
@@ -137,12 +164,12 @@ func NewClient(ctx context.Context, projectID, instanceID string, opts ...Option
 
 // GetInstanceMetrics implements Client.
 // https://cloud.google.com/monitoring/custom-metrics/reading-metrics#monitoring_read_timeseries_fields-go
-func (c *client) GetInstanceMetrics(ctx context.Context, metricType MetricType, now time.Time) (*InstanceMetrics, error) {
+func (c *client) GetInstanceMetrics(ctx context.Context, metricType MetricType, now time.Time, windows []time.Duration) (*InstanceMetrics, error) {
 	log := c.log.WithValues("instance-id", c.instanceID, "project-id", c.projectID)
 
 	log.V(1).Info("getting monitoring time series data")
 
-	it := c.monitoringMetricClient.ListTimeSeries(ctx, c.buildListTimeSeriesRequest(metricType, now))
+	it := c.monitoringMetricClient.ListTimeSeries(ctx, c.buildListTimeSeriesRequest(metricType, now, windows))
 
 	var series []*monitoringpb.TimeSeries
 	for {
@@ -177,7 +204,9 @@ func (c *client) GetInstanceMetrics(ctx context.Context, metricType MetricType, 
 		return nil, err
 	}
 
-	result := &InstanceMetrics{}
+	result := &InstanceMetrics{
+		WindowAggregates: windowAggregates(resp.GetPoints(), windows),
+	}
 	switch metricType {
 	case MetricTypeTotal:
 		result.CurrentTotalCPUUtilization = cpuPercent
@@ -187,13 +216,21 @@ func (c *client) GetInstanceMetrics(ctx context.Context, metricType MetricType, 
 	return result, nil
 }
 
-func (c *client) buildListTimeSeriesRequest(metricType MetricType, now time.Time) *monitoringpb.ListTimeSeriesRequest {
+func (c *client) buildListTimeSeriesRequest(metricType MetricType, now time.Time, windows []time.Duration) *monitoringpb.ListTimeSeriesRequest {
 	var filter string
 	switch metricType {
 	case MetricTypeTotal:
 		filter = fmt.Sprintf(metricsFilterFormatTotal, c.instanceID)
 	default: // MetricTypeHighPriority
 		filter = fmt.Sprintf(metricsFilterFormatHighPriority, c.instanceID)
+	}
+
+	// The base term exists to absorb ingestion delay (the newest point lags
+	// now by a couple of minutes). Window aggregation is anchored at the
+	// newest point, so the term must additionally cover the largest window.
+	term := c.term
+	for _, w := range windows {
+		term = max(term, w+c.term)
 	}
 
 	nowUTC := now.UTC()
@@ -203,7 +240,7 @@ func (c *client) buildListTimeSeriesRequest(metricType MetricType, now time.Time
 		Filter: filter,
 		Interval: &monitoringpb.TimeInterval{
 			StartTime: &timestamp.Timestamp{
-				Seconds: nowUTC.Add(-c.term).Unix(),
+				Seconds: nowUTC.Add(-term).Unix(),
 			},
 			EndTime: &timestamp.Timestamp{
 				Seconds: nowUTC.Unix(),
@@ -231,4 +268,57 @@ func firstPointAsPercent(points []*monitoringpb.Point) (percent int, err error) 
 	}
 
 	return int(points[0].GetValue().GetDoubleValue() * 100), nil
+}
+
+// windowAggregates computes min/avg/max over the 1-minute point series for
+// each requested window. Every window is anchored at the newest point in the
+// series (not at the request time, which the newest point lags by the metric
+// ingestion delay): a window covers the points strictly newer than
+// (newest - window). A window is skipped while it holds fewer than a full
+// window's worth of 1-minute points — evaluating "sustained for 15 minutes"
+// over a shorter series would report false sustainment right after instance
+// creation or across an ingestion gap.
+//
+// The simulator reimplements these exact semantics over its replayed series
+// (internal/simulator windowState.windowMetrics); keep the two in sync.
+func windowAggregates(points []*monitoringpb.Point, windows []time.Duration) []WindowAggregate {
+	if len(windows) == 0 || len(points) == 0 {
+		return nil
+	}
+
+	// Cloud Monitoring returns points newest-first, but ordering is not
+	// documented as part of the contract; scan for the newest explicitly.
+	newest := time.Unix(points[0].GetInterval().GetEndTime().GetSeconds(), 0)
+	for _, p := range points[1:] {
+		if t := time.Unix(p.GetInterval().GetEndTime().GetSeconds(), 0); t.After(newest) {
+			newest = t
+		}
+	}
+
+	aggregates := make([]WindowAggregate, 0, len(windows))
+	for _, w := range windows {
+		cutoff := newest.Add(-w)
+		var values []float64
+		for _, p := range points {
+			t := time.Unix(p.GetInterval().GetEndTime().GetSeconds(), 0)
+			if !t.After(cutoff) {
+				continue
+			}
+			values = append(values, p.GetValue().GetDoubleValue()*100)
+		}
+		if expected := int(w / time.Minute); len(values) < expected {
+			continue
+		}
+		var sum float64
+		for _, v := range values {
+			sum += v
+		}
+		aggregates = append(aggregates, WindowAggregate{
+			Window: w,
+			Min:    int(slices.Min(values)),
+			Avg:    int(sum / float64(len(values))),
+			Max:    int(slices.Max(values)),
+		})
+	}
+	return aggregates
 }

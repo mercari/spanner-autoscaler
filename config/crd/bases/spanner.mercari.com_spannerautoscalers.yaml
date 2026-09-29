@@ -342,6 +342,18 @@ spec:
                     - nodes
                     - processing-units
                     type: string
+                  metricWindows:
+                    description: |-
+                      Time windows over which the 1-minute CPU utilization series is aggregated on every sync.
+                      For each window and each configured CPU metric, min/avg/max aggregates are computed and
+                      exposed to `scalingRules` CEL expressions as `cpu.<metric>.{min,avg,max}<window>`
+                      (for example `cpu.highPriority.min15m` with `metricWindows: ["15m"]`).
+                      Each entry must be a whole number of minutes or hours such as "15m" or "1h",
+                      at most "1h". At most 4 windows can be declared.
+                    items:
+                      type: string
+                    maxItems: 4
+                    type: array
                   nodes:
                     description: 'If `nodes` are provided at the time of resource
                       creation, then they are automatically converted to `processing-units`.
@@ -384,6 +396,17 @@ spec:
                     items:
                       type: string
                     type: array
+                  scaledownCondition:
+                    description: |-
+                      A CEL expression that gates scale-down: when set, a scale-down is applied only while
+                      this expression evaluates to true. It is ANDed with the existing guards (scale-down
+                      interval, scaledownAllowedTimes / scaledownNotAllowedTimes, min/max range) and can
+                      never force a scale-down by itself. The variables are the same as in
+                      `scalingRules[].when`. Useful to allow scale-down only when it is provably safe, e.g.
+                      `cpu.total.max30m < 20` (requires `metricWindows: ["30m"]`) instead of disabling
+                      scale-down outright. If evaluation fails, the gate fails closed (the scale-down is
+                      denied) and a warning Event is emitted.
+                    type: string
                   scaledownInterval:
                     description: |-
                       How often autoscaler is reevaluated for scale down.
@@ -410,6 +433,16 @@ spec:
                       The maximum number of processing units which can be deleted in one scale-down operation. It can be a multiple of 100 for values < 1000, or a multiple of 1000 otherwise.
                       It can also be a percentage of the total number of processing units at the start of the scale-down operation.
                     x-kubernetes-int-or-string: true
+                  scaleupCondition:
+                    description: |-
+                      A CEL expression that gates scale-up: when set, a scale-up (whether driven by the
+                      built-in target-CPU logic or by `scalingRules`) is applied only while this expression
+                      evaluates to true. It is ANDed with the existing guards (scale-up interval, min/max
+                      range) and can never force a scale-up by itself. The variables are the same as in
+                      `scalingRules[].when`. If evaluation fails, the gate fails open (the scale-up is
+                      allowed) so that an expression error cannot starve the instance of capacity, and a
+                      warning Event is emitted.
+                    type: string
                   scaleupInterval:
                     description: |-
                       How often autoscaler is reevaluated for scale up.
@@ -424,6 +457,52 @@ spec:
                       The maximum number of processing units which can be added in one scale-up operation. It can be a multiple of 100 for values < 1000, or a multiple of 1000 otherwise.
                       It can also be a percentage of the total number of processing units at the start of the scale-up operation.
                     x-kubernetes-int-or-string: true
+                  scalingRules:
+                    description: |-
+                      Additional scale-up trigger rules written in CEL (Common Expression Language), evaluated
+                      on every reconcile alongside the built-in target-CPU logic. When a rule condition holds,
+                      its `scaleUp` amount is added to the current processing units and the result competes with
+                      the built-in desired value (the larger one wins). Rules can never bypass the hard guards:
+                      min/max range, scale-up interval, and valid processing-unit steps still apply.
+                      Example: raise processing units by 25% when the high-priority CPU has stayed at or above
+                      50% for the last 15 minutes (requires `metricWindows: ["15m"]`):
+                        scalingRules:
+                          - when: "cpu.highPriority.min15m >= 50"
+                            scaleUp: "25%"
+                    items:
+                      description: |-
+                        ScalingRule triggers an extra scale-up when a CEL condition holds.
+                        See the CRD reference for the list of variables available in `when`.
+                      properties:
+                        scaleUp:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          description: |-
+                            How many processing units to add to the current processing units when the condition
+                            holds. Either a fixed number of processing units (e.g. 3000) or a percentage of the
+                            current processing units (e.g. "25%"; at most "100%", i.e. doubling). The result is
+                            rounded to a valid processing-unit value and clamped to the min/max range; a
+                            percentage never resolves beyond twice the current processing units, even when
+                            rounding up would cross that line (e.g. "100%" at 600 processing units resolves
+                            to 1000, not 2000).
+                          x-kubernetes-int-or-string: true
+                        when:
+                          description: |-
+                            A CEL expression that must evaluate to a boolean. Available variables include
+                            `current` (current processing units), `desired` (the built-in logic's desired
+                            processing units), `minPU` / `maxPU` (effective range after schedules),
+                            `cpu.highPriority` / `cpu.total` (latest 1-minute CPU %, only for configured metrics),
+                            `cpu.<metric>.{min,avg,max}<window>` (aggregates declared via `metricWindows`),
+                            `target.highPriority` / `target.total` (configured targets),
+                            `now` / `lastScaleTime` (timestamps), and `activeSchedules` (names of active schedules).
+                            If evaluation fails, the rule is skipped (fail-safe) and a warning Event is emitted.
+                          type: string
+                      required:
+                      - scaleUp
+                      - when
+                      type: object
+                    type: array
                   targetCPUUtilization:
                     description: 'The CPU utilization which the autoscaling will try
                       to achieve. Ref: [Spanner CPU utilization](https://cloud.google.com/spanner/docs/cpu-utilization#task-priority)'
@@ -516,6 +595,53 @@ spec:
                 - Total
                 - Both
                 type: string
+              currentCPUWindowMetrics:
+                description: |-
+                  Min/avg/max aggregates of the 1-minute CPU utilization series over each window
+                  declared in spec.scaleConfig.metricWindows, rebuilt on every sync. These are the
+                  values exposed to the CEL expressions in spec.scaleConfig.scalingRules and the
+                  scale-up/scale-down conditions. An entry is omitted while the metric series does
+                  not yet cover the whole window (e.g. right after instance creation); CEL
+                  expressions are then skipped fail-safe until the data catches up.
+                items:
+                  description: |-
+                    CPUWindowMetric holds the aggregates of one CPU metric over one declared
+                    metric window. CPU values are integer percentages, truncated the same way
+                    as the status current* CPU fields.
+                  properties:
+                    avg:
+                      description: Average 1-minute CPU utilization (percent) within
+                        the window.
+                      type: integer
+                    max:
+                      description: Maximum 1-minute CPU utilization (percent) within
+                        the window.
+                      type: integer
+                    metric:
+                      description: 'The CPU metric the aggregates were computed from:
+                        `HighPriority` or `Total`.'
+                      enum:
+                      - HighPriority
+                      - Total
+                      - Both
+                      type: string
+                    min:
+                      description: Minimum 1-minute CPU utilization (percent) within
+                        the window.
+                      type: integer
+                    window:
+                      description: |-
+                        The window the aggregates cover, exactly as declared in
+                        spec.scaleConfig.metricWindows (e.g. "15m").
+                      type: string
+                  required:
+                  - avg
+                  - max
+                  - metric
+                  - min
+                  - window
+                  type: object
+                type: array
               currentHighPriorityCPUUtilization:
                 description: |-
                   High priority CPU utilization of the busiest region, represented as a percentage.

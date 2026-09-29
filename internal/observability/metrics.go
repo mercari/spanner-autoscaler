@@ -49,12 +49,17 @@ const (
 	// override with a step size set on the active direction (stepped ramp).
 	// One step per reconcile contributes one event.
 	DriverManualRamp = "manual_ramp"
+	// DriverScalingRule marks a scale event driven by a triggered
+	// spec.scaleConfig.scalingRules entry outbidding the built-in logic.
+	DriverScalingRule = "scaling_rule"
 
 	// Skip reasons for scale_skipped_total.
 	SkipReasonSame                       = "same"
 	SkipReasonScaleUpInterval            = "scale_up_interval"
 	SkipReasonScaleDownInterval          = "scale_down_interval"
 	SkipReasonScaleDownWindow            = "scale_down_window"
+	SkipReasonScaleUpGate                = "scale_up_gate"
+	SkipReasonScaleDownGate              = "scale_down_gate"
 	SkipReasonInstanceNotReady           = "instance_not_ready"
 	SkipReasonCPUNotReady                = "cpu_not_ready"
 	SkipReasonScheduleSuppressedByManual = "schedule_suppressed_by_manual"

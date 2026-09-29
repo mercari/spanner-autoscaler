@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"slices"
 	"sync"
 	"time"
 
@@ -23,6 +24,7 @@ import (
 	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
 	"github.com/mercari/spanner-autoscaler/internal/metrics"
 	"github.com/mercari/spanner-autoscaler/internal/observability"
+	"github.com/mercari/spanner-autoscaler/internal/scaling"
 	"github.com/mercari/spanner-autoscaler/internal/spanner"
 	"google.golang.org/api/impersonate"
 )
@@ -281,6 +283,7 @@ func (s *syncer) syncResource(ctx context.Context) error {
 	)
 
 	metricFlags := sa.Spec.ScaleConfig.TargetCPUUtilization.ActiveMetricFlags()
+	windowStrs, windowDurations := scaling.ValidMetricWindowDurations(sa.Spec.ScaleConfig.MetricWindows)
 
 	var instance *spanner.Instance
 	var highPriorityMetrics, totalMetrics *metrics.InstanceMetrics
@@ -288,14 +291,14 @@ func (s *syncer) syncResource(ctx context.Context) error {
 
 	switch metricFlags {
 	case spannerv1beta1.CPUMetricFlagHighPriority | spannerv1beta1.CPUMetricFlagTotal:
-		instance, highPriorityMetrics, totalMetrics, err = s.getInstanceInfoDual(ctx)
+		instance, highPriorityMetrics, totalMetrics, err = s.getInstanceInfoDual(ctx, windowDurations)
 	case spannerv1beta1.CPUMetricFlagTotal:
 		var m *metrics.InstanceMetrics
-		instance, m, err = s.getInstanceInfo(ctx, metrics.MetricTypeTotal)
+		instance, m, err = s.getInstanceInfo(ctx, metrics.MetricTypeTotal, windowDurations)
 		totalMetrics = m
 	case spannerv1beta1.CPUMetricFlagHighPriority:
 		var m *metrics.InstanceMetrics
-		instance, m, err = s.getInstanceInfo(ctx, metrics.MetricTypeHighPriority)
+		instance, m, err = s.getInstanceInfo(ctx, metrics.MetricTypeHighPriority, windowDurations)
 		highPriorityMetrics = m
 	default:
 		// No metric configured — invalid spec that bypassed webhook validation. Skip sync.
@@ -305,6 +308,12 @@ func (s *syncer) syncResource(ctx context.Context) error {
 	if err != nil {
 		s.recorder.Eventf(&sa, corev1.EventTypeWarning, "FailedSpannerAPICall", "%s", err.Error())
 		log.Error(err, "unable to get instance info")
+		// Invalidate the window aggregates: leaving them in status would let
+		// later reconciles evaluate CEL rules and gates against pre-outage
+		// data (e.g. a stale quiet window passing a scale-down gate). Cleared
+		// aggregates make evaluation skip fail-safe instead, and the next
+		// successful sync fully recomputes them from its own query.
+		s.invalidateWindowMetrics(ctx, log)
 		return err
 	}
 
@@ -335,6 +344,7 @@ func (s *syncer) syncResource(ctx context.Context) error {
 		// Zero both CPU fields first, then populate based on mode.
 		sa.Status.CurrentHighPriorityCPUUtilization = 0
 		sa.Status.CurrentTotalCPUUtilization = 0
+		sa.Status.CurrentCPUWindowMetrics = nil
 		switch metricFlags {
 		case spannerv1beta1.CPUMetricFlagHighPriority | spannerv1beta1.CPUMetricFlagTotal:
 			sa.Status.CurrentHighPriorityCPUUtilization = highPriorityMetrics.CurrentHighPriorityCPUUtilization
@@ -346,6 +356,14 @@ func (s *syncer) syncResource(ctx context.Context) error {
 		case spannerv1beta1.CPUMetricFlagHighPriority:
 			sa.Status.CurrentHighPriorityCPUUtilization = highPriorityMetrics.CurrentHighPriorityCPUUtilization
 			sa.Status.CurrentCPUMetricType = spannerv1beta1.CPUMetricTypeHighPriority
+		}
+		if highPriorityMetrics != nil {
+			sa.Status.CurrentCPUWindowMetrics = append(sa.Status.CurrentCPUWindowMetrics,
+				statusWindowMetrics(spannerv1beta1.CPUMetricTypeHighPriority, windowStrs, windowDurations, highPriorityMetrics.WindowAggregates)...)
+		}
+		if totalMetrics != nil {
+			sa.Status.CurrentCPUWindowMetrics = append(sa.Status.CurrentCPUWindowMetrics,
+				statusWindowMetrics(spannerv1beta1.CPUMetricTypeTotal, windowStrs, windowDurations, totalMetrics.WindowAggregates)...)
 		}
 		sa.Status.LastSyncTime = metav1.Time{Time: s.clock.Now()}
 
@@ -364,6 +382,27 @@ func (s *syncer) syncResource(ctx context.Context) error {
 	return nil
 }
 
+// statusWindowMetrics converts the metrics client's window aggregates into
+// status entries, restoring the spec's window spelling (the client works in
+// durations; the status and the CEL variables use the declared string).
+func statusWindowMetrics(metric spannerv1beta1.CPUMetricType, windowStrs []string, windowDurations []time.Duration, aggregates []metrics.WindowAggregate) []spannerv1beta1.CPUWindowMetric {
+	result := make([]spannerv1beta1.CPUWindowMetric, 0, len(aggregates))
+	for _, agg := range aggregates {
+		idx := slices.Index(windowDurations, agg.Window)
+		if idx < 0 {
+			continue
+		}
+		result = append(result, spannerv1beta1.CPUWindowMetric{
+			Metric: metric,
+			Window: windowStrs[idx],
+			Min:    agg.Min,
+			Avg:    agg.Avg,
+			Max:    agg.Max,
+		})
+	}
+	return result
+}
+
 // metricsTypeToCPUMetricType maps a metrics package MetricType to the
 // corresponding v1beta1 CPUMetricType. Keeping this mapping in syncer avoids
 // a cross-package import between metrics and v1beta1.
@@ -376,7 +415,28 @@ func metricsTypeToCPUMetricType(t metrics.MetricType) spannerv1beta1.CPUMetricTy
 	}
 }
 
-func (s *syncer) getInstanceInfo(ctx context.Context, metricType metrics.MetricType) (*spanner.Instance, *metrics.InstanceMetrics, error) {
+// invalidateWindowMetrics clears status.currentCPUWindowMetrics after a
+// failed metrics fetch, so CEL rules and gates skip fail-safe instead of
+// evaluating pre-outage aggregates. Best-effort: a failure here is logged and
+// the original fetch error stays the sync outcome.
+func (s *syncer) invalidateWindowMetrics(ctx context.Context, log logr.Logger) {
+	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		var sa spannerv1beta1.SpannerAutoscaler
+		if err := s.ctrlClient.Get(ctx, s.namespacedName, &sa); err != nil {
+			return ctrlclient.IgnoreNotFound(err)
+		}
+		if len(sa.Status.CurrentCPUWindowMetrics) == 0 {
+			return nil
+		}
+		sa.Status.CurrentCPUWindowMetrics = nil
+		return s.ctrlClient.Status().Update(ctx, &sa)
+	})
+	if err != nil {
+		log.Error(err, "unable to invalidate window aggregates after a failed metrics fetch")
+	}
+}
+
+func (s *syncer) getInstanceInfo(ctx context.Context, metricType metrics.MetricType, windows []time.Duration) (*spanner.Instance, *metrics.InstanceMetrics, error) {
 	log := s.log
 	eg, ctx := errgroup.WithContext(ctx)
 
@@ -406,7 +466,7 @@ func (s *syncer) getInstanceInfo(ctx context.Context, metricType metrics.MetricT
 	eg.Go(func() error {
 		start := s.clock.Now()
 		var err error
-		instanceMetrics, err = s.metricsClient.GetInstanceMetrics(ctx, metricType, now)
+		instanceMetrics, err = s.metricsClient.GetInstanceMetrics(ctx, metricType, now, windows)
 		observability.RecordMetricsFetch(s.labels(), s.clock.Now().Sub(start), err)
 		if err != nil {
 			log.Error(err, "unable to get spanner instance metrics with client")
@@ -430,7 +490,7 @@ func (s *syncer) getInstanceInfo(ctx context.Context, metricType metrics.MetricT
 
 // getInstanceInfoDual fetches the Spanner instance info and both CPU metrics concurrently.
 // Used when both highPriority and total CPU targets are specified (dual CPU scaling mode).
-func (s *syncer) getInstanceInfoDual(ctx context.Context) (*spanner.Instance, *metrics.InstanceMetrics, *metrics.InstanceMetrics, error) {
+func (s *syncer) getInstanceInfoDual(ctx context.Context, windows []time.Duration) (*spanner.Instance, *metrics.InstanceMetrics, *metrics.InstanceMetrics, error) {
 	log := s.log
 	eg, ctx := errgroup.WithContext(ctx)
 
@@ -463,7 +523,7 @@ func (s *syncer) getInstanceInfoDual(ctx context.Context) (*spanner.Instance, *m
 	eg.Go(func() error {
 		start := s.clock.Now()
 		var err error
-		highPriorityMetrics, err = s.metricsClient.GetInstanceMetrics(ctx, metrics.MetricTypeHighPriority, now)
+		highPriorityMetrics, err = s.metricsClient.GetInstanceMetrics(ctx, metrics.MetricTypeHighPriority, now, windows)
 		observability.RecordMetricsFetch(s.labels(), s.clock.Now().Sub(start), err)
 		if err != nil {
 			log.Error(err, "unable to get high priority cpu metrics")
@@ -478,7 +538,7 @@ func (s *syncer) getInstanceInfoDual(ctx context.Context) (*spanner.Instance, *m
 	eg.Go(func() error {
 		start := s.clock.Now()
 		var err error
-		totalMetrics, err = s.metricsClient.GetInstanceMetrics(ctx, metrics.MetricTypeTotal, now)
+		totalMetrics, err = s.metricsClient.GetInstanceMetrics(ctx, metrics.MetricTypeTotal, now, windows)
 		observability.RecordMetricsFetch(s.labels(), s.clock.Now().Sub(start), err)
 		if err != nil {
 			log.Error(err, "unable to get total cpu metrics")

@@ -19,7 +19,9 @@ package v1beta1
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -32,6 +34,7 @@ import (
 
 	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
 	"github.com/mercari/spanner-autoscaler/internal/cron"
+	"github.com/mercari/spanner-autoscaler/internal/scaling"
 )
 
 var log = logf.Log.WithName("spannerautoscaler-resource.webhook")
@@ -171,6 +174,7 @@ func validateSpec(r *spannerv1beta1.SpannerAutoscaler) (allErrs field.ErrorList)
 	if err := validateScaleConfig(r); err != nil {
 		allErrs = append(allErrs, err)
 	}
+	allErrs = append(allErrs, validateCELScaleConfig(r)...)
 
 	return allErrs
 }
@@ -313,6 +317,101 @@ func validateScaleConfig(r *spannerv1beta1.SpannerAutoscaler) *field.Error {
 		}
 	}
 
+	return nil
+}
+
+// validateCELScaleConfig validates the CEL-based scaling fields:
+// metricWindows, scalingRules, scaleupCondition and scaledownCondition.
+// Expressions are compiled (and type-checked to return a boolean) against the
+// exact variable set the controller will evaluate them with, so a typo, a
+// reference to an undeclared window, or a reference to a CPU metric that has
+// no target configured is rejected at apply time.
+func validateCELScaleConfig(r *spannerv1beta1.SpannerAutoscaler) (allErrs field.ErrorList) {
+	sc := r.Spec.ScaleConfig
+	scPath := field.NewPath("spec").Child("scaleConfig")
+
+	windowsPath := scPath.Child("metricWindows")
+	if len(sc.MetricWindows) > scaling.MaxMetricWindows {
+		allErrs = append(allErrs, field.TooMany(windowsPath, len(sc.MetricWindows), scaling.MaxMetricWindows))
+	}
+	// Deduplicate by parsed duration, not by spelling: "60m" and "1h" declare
+	// the same window, and the syncer maps computed aggregates back to one
+	// spelling — the other's CEL variables would never be populated.
+	seen := make(map[time.Duration]string, len(sc.MetricWindows))
+	for i, w := range sc.MetricWindows {
+		d, err := scaling.ParseMetricWindow(w)
+		if err != nil {
+			allErrs = append(allErrs, field.Invalid(windowsPath.Index(i), w, err.Error()))
+			continue
+		}
+		if prev, ok := seen[d]; ok {
+			msg := w
+			if prev != w {
+				msg = fmt.Sprintf("%s (same duration as %q)", w, prev)
+			}
+			allErrs = append(allErrs, field.Duplicate(windowsPath.Index(i), msg))
+			continue
+		}
+		seen[d] = w
+	}
+
+	flags := sc.TargetCPUUtilization.ActiveMetricFlags()
+	windows := scaling.ValidMetricWindows(sc.MetricWindows)
+
+	for i, rule := range sc.ScalingRules {
+		rulePath := scPath.Child("scalingRules").Index(i)
+		if rule.When == "" {
+			allErrs = append(allErrs, field.Required(rulePath.Child("when"), "a CEL expression is required"))
+		} else if err := scaling.CompileCondition(flags, windows, rule.When); err != nil {
+			allErrs = append(allErrs, field.Invalid(rulePath.Child("when"), rule.When, err.Error()))
+		}
+		if err := validateScaleUpAmount(rule.ScaleUp, rulePath.Child("scaleUp")); err != nil {
+			allErrs = append(allErrs, err)
+		}
+	}
+
+	if sc.ScaleupCondition != "" {
+		if err := scaling.CompileCondition(flags, windows, sc.ScaleupCondition); err != nil {
+			allErrs = append(allErrs, field.Invalid(scPath.Child("scaleupCondition"), sc.ScaleupCondition, err.Error()))
+		}
+	}
+	if sc.ScaledownCondition != "" {
+		if err := scaling.CompileCondition(flags, windows, sc.ScaledownCondition); err != nil {
+			allErrs = append(allErrs, field.Invalid(scPath.Child("scaledownCondition"), sc.ScaledownCondition, err.Error()))
+		}
+	}
+
+	return allErrs
+}
+
+// validateScaleUpAmount validates a scalingRules[].scaleUp value: a positive
+// number of processing units on the usual 100/1000 grid, or a percentage of
+// the current processing units between 1% and 100% (at most doubling per
+// trigger, in line with the Spanner guideline of scaling by at most 2x per
+// change).
+func validateScaleUpAmount(scaleUp intstr.IntOrString, fldPath *field.Path) *field.Error {
+	switch scaleUp.Type {
+	case intstr.Int:
+		v := scaleUp.IntValue()
+		switch {
+		case v <= 0:
+			return field.Invalid(fldPath, scaleUp, "must be positive")
+		case v > 1000 && v%1000 != 0:
+			return field.Invalid(fldPath, scaleUp, "must be a multiple of 1000 for values which are greater than 1000")
+		case v < 1000 && v%100 != 0:
+			return field.Invalid(fldPath, scaleUp, "must be a multiple of 100 for values which are less than 1000")
+		}
+	case intstr.String:
+		if msg := validation.IsValidPercent(scaleUp.StrVal); len(msg) != 0 {
+			return field.Invalid(fldPath, scaleUp, strings.Join(msg, ", "))
+		}
+		percent, err := strconv.Atoi(strings.TrimSuffix(scaleUp.StrVal, "%"))
+		if err != nil || percent < 1 || percent > 100 {
+			return field.Invalid(fldPath, scaleUp, "percentage must be between 1% and 100%")
+		}
+	default:
+		return field.Invalid(fldPath, scaleUp, "must be an integer or percentage (e.g '25%')")
+	}
 	return nil
 }
 
