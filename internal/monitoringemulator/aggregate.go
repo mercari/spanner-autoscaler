@@ -14,10 +14,11 @@ const locationGroupByField = "resource.label.location"
 
 // aggregate reproduces Cloud Monitoring's two-stage aggregation over a
 // region-name -> CPU-utilization map. It supports exactly what
-// internal/metrics/metrics.go sends: CrossSeriesReducer REDUCE_SUM or
-// REDUCE_MAX, and GroupByFields either empty or [locationGroupByField].
-// Anything else is an error, so a future change to the real request shape
-// fails loudly here instead of silently mis-simulating it.
+// internal/metrics/metrics.go sends: CrossSeriesReducer REDUCE_SUM,
+// REDUCE_MAX, or REDUCE_NONE (no reduction, every series preserved), and
+// GroupByFields either empty or [locationGroupByField]. Anything else is an
+// error, so a future change to the real request shape fails loudly here
+// instead of silently mis-simulating it.
 //
 // Without a secondary aggregation, one value per primary group is returned
 // (this is what surfaces as more than one TimeSeries when the request
@@ -30,19 +31,19 @@ func aggregate(regions map[string]float64, primary, secondary *monitoringpb.Aggr
 		return nil, fmt.Errorf("primary aggregation: %w", err)
 	}
 
-	reduced := make(map[string]float64, len(groups))
+	reduced := make(map[string][]float64, len(groups))
 	for key, values := range groups {
-		v, err := reduceCrossSeries(values, primary.GetCrossSeriesReducer())
+		vs, err := reduceCrossSeries(values, primary.GetCrossSeriesReducer())
 		if err != nil {
 			return nil, fmt.Errorf("primary aggregation: %w", err)
 		}
-		reduced[key] = v
+		reduced[key] = vs
 	}
 
 	// Sort by group key so the result order is deterministic.
-	values := make([]float64, 0, len(reduced))
+	var values []float64
 	for _, key := range slices.Sorted(maps.Keys(reduced)) {
-		values = append(values, reduced[key])
+		values = append(values, reduced[key]...)
 	}
 
 	if secondary == nil {
@@ -56,7 +57,7 @@ func aggregate(regions map[string]float64, primary, secondary *monitoringpb.Aggr
 	if err != nil {
 		return nil, fmt.Errorf("secondary aggregation: %w", err)
 	}
-	return []float64{final}, nil
+	return final, nil
 }
 
 // groupRegions groups region CPU values by the requested GroupByFields.
@@ -79,24 +80,25 @@ func groupRegions(regions map[string]float64, groupByFields []string) (map[strin
 }
 
 // reduceCrossSeries reduces values with the given reducer. REDUCE_NONE (the
-// zero value) is treated as REDUCE_SUM: the real client always sets an
-// explicit reducer, so a zero-value Aggregation only occurs when a test
-// builds a request without one, and sum is the correct identity for a
-// single-value group regardless of which reducer was intended.
-func reduceCrossSeries(values []float64, reducer monitoringpb.Aggregation_Reducer) (float64, error) {
+// zero value) means no cross-series reduction in Cloud Monitoring, so every
+// value is preserved (sorted for determinism); collapsing it to a sum would
+// hide exactly the request-shape bugs this emulator exists to expose.
+func reduceCrossSeries(values []float64, reducer monitoringpb.Aggregation_Reducer) ([]float64, error) {
 	switch reducer {
-	case monitoringpb.Aggregation_REDUCE_NONE, monitoringpb.Aggregation_REDUCE_SUM:
+	case monitoringpb.Aggregation_REDUCE_NONE:
+		return slices.Sorted(slices.Values(values)), nil
+	case monitoringpb.Aggregation_REDUCE_SUM:
 		var sum float64
 		for _, v := range values {
 			sum += v
 		}
-		return sum, nil
+		return []float64{sum}, nil
 	case monitoringpb.Aggregation_REDUCE_MAX:
 		if len(values) == 0 {
-			return 0, fmt.Errorf("REDUCE_MAX over zero values")
+			return nil, fmt.Errorf("REDUCE_MAX over zero values")
 		}
-		return slices.Max(values), nil
+		return []float64{slices.Max(values)}, nil
 	default:
-		return 0, fmt.Errorf("unsupported CrossSeriesReducer %v: the emulator only supports REDUCE_SUM and REDUCE_MAX", reducer)
+		return nil, fmt.Errorf("unsupported CrossSeriesReducer %v: the emulator only supports REDUCE_NONE, REDUCE_SUM, and REDUCE_MAX", reducer)
 	}
 }

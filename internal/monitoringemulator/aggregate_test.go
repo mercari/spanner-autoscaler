@@ -69,9 +69,11 @@ func TestAggregate(t *testing.T) {
 			want:    []float64{0.31, 0.14, 0.08},
 		},
 		{
-			name:    "nil primary aggregation defaults to summing everything",
+			// REDUCE_NONE means no cross-series reduction: every series is
+			// preserved (sorted), never silently summed.
+			name:    "nil primary aggregation preserves every series",
 			regions: threeRegions,
-			want:    []float64{0.53},
+			want:    []float64{0.08, 0.14, 0.31},
 		},
 		{
 			name:    "unsupported GroupByFields is an error",
