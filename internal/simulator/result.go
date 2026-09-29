@@ -49,6 +49,10 @@ type Event struct {
 	Time   time.Time `json:"time"`
 	FromPU int       `json:"fromPU"`
 	ToPU   int       `json:"toPU"`
+	// Rule is true when a triggered scaling rule asked for more capacity
+	// than the built-in logic, so this event is attributable to
+	// spec.scaleConfig.scalingRules.
+	Rule bool `json:"rule,omitzero"`
 }
 
 // SimPoint pairs one recorded point with the simulated state at that tick.
@@ -114,6 +118,16 @@ type Summary struct {
 	ScaleGapsUnder10Min int `json:"scaleGapsUnder10Min"`
 	ScaleGapsUnder30Min int `json:"scaleGapsUnder30Min"`
 
+	// RuleScaleUps counts scale events where a triggered scaling rule asked
+	// for more capacity than the built-in logic, so the event (or its size)
+	// is attributable to spec.scaleConfig.scalingRules.
+	RuleScaleUps int `json:"ruleScaleUps,omitzero"`
+	// GateBlockedScaleUpMinutes / GateBlockedScaleDownMinutes total the time
+	// an otherwise-due change was held back by scaleupCondition /
+	// scaledownCondition, making a gate's effect visible even when the final
+	// cost numbers barely move.
+	GateBlockedScaleUpMinutes   float64 `json:"gateBlockedScaleUpMinutes,omitzero"`
+	GateBlockedScaleDownMinutes float64 `json:"gateBlockedScaleDownMinutes,omitzero"`
 	// CELErrors counts scaling-rule and gate-condition evaluations that
 	// failed during the replay, excluding the expected warm-up period before
 	// the metric windows hold enough data. Non-zero means the same

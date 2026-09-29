@@ -189,6 +189,8 @@ func Run(cfg Config, points []Point) (*Result, error) {
 	expectedWindowMetrics := len(scaling.ValidMetricWindows(sa.Spec.ScaleConfig.MetricWindows)) * bits.OnesCount(uint(flags))
 	warmedUp := expectedWindowMetrics == 0
 	celErrors := 0
+	ruleScaleUps := 0
+	var gateBlockedUpMinutes, gateBlockedDownMinutes float64
 	countCELError := func(err error) {
 		if err == nil {
 			return
@@ -267,14 +269,26 @@ func Run(cfg Config, points []Point) (*Result, error) {
 		}
 
 		puBefore := simPU
-		if decision == scaling.DecisionScale {
+		switch decision {
+		case scaling.DecisionScale:
+			// Rules only ever raise the built-in desired value (max merge),
+			// so a higher final value means a rule drove this event.
+			ruleDriven := desired > builtinDesired
+			if ruleDriven {
+				ruleScaleUps++
+			}
 			result.Events = append(result.Events, Event{
 				Time:   now,
 				FromPU: simPU,
 				ToPU:   desired,
+				Rule:   ruleDriven,
 			})
 			simPU = desired
 			sa.Status.LastScaleTime = metav1.Time{Time: now}
+		case scaling.DecisionSkipScaleUpGate:
+			gateBlockedUpMinutes += dt.Minutes()
+		case scaling.DecisionSkipScaleDownGate:
+			gateBlockedDownMinutes += dt.Minutes()
 		}
 
 		sp.SimPU = simPU
@@ -284,6 +298,9 @@ func Run(cfg Config, points []Point) (*Result, error) {
 
 	result.Summary = agg.summary(points[0].Time, points[len(points)-1].Time, result.Events)
 	result.Summary.CELErrors = celErrors
+	result.Summary.RuleScaleUps = ruleScaleUps
+	result.Summary.GateBlockedScaleUpMinutes = gateBlockedUpMinutes
+	result.Summary.GateBlockedScaleDownMinutes = gateBlockedDownMinutes
 	return result, nil
 }
 

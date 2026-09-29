@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -195,6 +196,9 @@ func writeTextReport(w io.Writer, name string, result *simulator.Result, common 
 	fmt.Fprintf(w, "  scale events:      %d up / %d down\n", s.ScaleUps, s.ScaleDowns)
 	fmt.Fprintf(w, "  PU-change guide:   %d steps beyond 2x/half, %d gaps < 10m, %d gaps < 30m\n",
 		s.ScaleStepViolations, s.ScaleGapsUnder10Min, s.ScaleGapsUnder30Min)
+	if cel := formatCELSummary(&s); cel != "" {
+		fmt.Fprintf(w, "  CEL rules/gates:   %s\n", cel)
+	}
 	if s.SimHighPriorityCPU != nil {
 		fmt.Fprintf(w, "  sim high-pri CPU:  %s\n", formatCPUStats(s.SimHighPriorityCPU))
 	}
@@ -219,7 +223,11 @@ func writeTextReport(w io.Writer, name string, result *simulator.Result, common 
 				fmt.Fprintf(w, "    ... %d more (use -format json or -points-csv for the full list)\n", len(result.Events)-i)
 				break
 			}
-			fmt.Fprintf(w, "    %s  %6d -> %6d\n", e.Time.Format(time.RFC3339), e.FromPU, e.ToPU)
+			marker := ""
+			if e.Rule {
+				marker = "  (rule)"
+			}
+			fmt.Fprintf(w, "    %s  %6d -> %6d%s\n", e.Time.Format(time.RFC3339), e.FromPU, e.ToPU, marker)
 		}
 	}
 }
@@ -284,11 +292,15 @@ func runCompare(args []string) error {
 //nolint:errcheck // best-effort terminal output; Flush reports the write errors
 func writeCompareTable(rows []compareRow) error {
 	tw := tabwriter.NewWriter(os.Stdout, 2, 8, 2, ' ', 0)
-	fmt.Fprintln(tw, "CONFIG\tPU-HOURS\tSAVED%\tUPS\tDOWNS\tP95 HI-CPU\tP95 TOTAL-CPU\t>TARGET MIN\tLOW-CONF MIN")
-	fmt.Fprintf(tw, "(recorded)\t%.1f\t\t\t\t\t\t\t\n", rows[0].Summary.ActualPUHours)
+	fmt.Fprintln(tw, "CONFIG\tPU-HOURS\tSAVED%\tUPS\tDOWNS\tP95 HI-CPU\tP95 TOTAL-CPU\t>TARGET MIN\tLOW-CONF MIN\tCEL")
+	fmt.Fprintf(tw, "(recorded)\t%.1f\t\t\t\t\t\t\t\t\n", rows[0].Summary.ActualPUHours)
 	for i := range rows {
 		r := &rows[i]
-		fmt.Fprintf(tw, "%s\t%.1f\t%.1f\t%d\t%d\t%s\t%s\t%.0f\t%.0f\n",
+		cel := formatCELSummary(&r.Summary)
+		if cel == "" {
+			cel = "-"
+		}
+		fmt.Fprintf(tw, "%s\t%.1f\t%.1f\t%d\t%d\t%s\t%s\t%.0f\t%.0f\t%s\n",
 			r.Config,
 			r.Summary.SimPUHours,
 			r.Summary.PUHoursSavedPercent,
@@ -298,9 +310,28 @@ func writeCompareTable(rows []compareRow) error {
 			formatP95(r.Summary.SimTotalCPU),
 			r.Summary.TargetExceededMinutes,
 			r.Summary.LowConfidenceMinutes,
+			cel,
 		)
 	}
 	return tw.Flush()
+}
+
+// formatCELSummary renders the scaling-rule and gate-condition counters, or
+// "" when the replay had no CEL activity at all (nothing triggered, blocked,
+// or failed — including configurations without CEL fields).
+func formatCELSummary(s *simulator.Summary) string {
+	if s.RuleScaleUps == 0 && s.GateBlockedScaleUpMinutes == 0 && s.GateBlockedScaleDownMinutes == 0 && s.CELErrors == 0 {
+		return ""
+	}
+	parts := []string{fmt.Sprintf("%d rule-driven ups", s.RuleScaleUps)}
+	if s.GateBlockedScaleUpMinutes > 0 || s.GateBlockedScaleDownMinutes > 0 {
+		parts = append(parts, fmt.Sprintf("gate-blocked %.0fm up / %.0fm down",
+			s.GateBlockedScaleUpMinutes, s.GateBlockedScaleDownMinutes))
+	}
+	if s.CELErrors > 0 {
+		parts = append(parts, fmt.Sprintf("%d evaluation errors", s.CELErrors))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func formatP95(s *simulator.CPUStats) string {

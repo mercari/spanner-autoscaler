@@ -565,6 +565,55 @@ func TestRunScalingRule_SustainedCPU(t *testing.T) {
 	if result.Summary.CELErrors != 0 {
 		t.Errorf("CELErrors = %d; want 0 (window warm-up is not an error)", result.Summary.CELErrors)
 	}
+	// The event must be attributed to the rule, in both the event itself and
+	// the summary counter.
+	if !e.Rule {
+		t.Error("event.Rule = false; want true for a rule-driven scale-up")
+	}
+	if result.Summary.RuleScaleUps != 1 {
+		t.Errorf("RuleScaleUps = %d; want 1", result.Summary.RuleScaleUps)
+	}
+}
+
+func TestRunGateBlockedMinutesCounted(t *testing.T) {
+	// Grossly over-provisioned: the built-in logic wants to scale down every
+	// tick, but the gate never allows it. The summary must show how long the
+	// gate held the scale-down back.
+	sa := newAutoscaler(1000, 10000, 30)
+	sa.Spec.ScaleConfig.ScaledownCondition = "false"
+
+	start := time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC)
+	// Workload 50: 1% CPU at 5000 PU — desired is the 1000 minimum.
+	points := constantWorkloadPoints(start, 120, 5000, 50)
+
+	result, err := Run(Config{Autoscaler: sa, InitialPU: 5000, ScaleDownInterval: 10 * time.Minute}, points)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	s := result.Summary
+	if s.ScaleDowns != 0 {
+		t.Errorf("ScaleDowns = %d; want 0 (gate always denies)", s.ScaleDowns)
+	}
+	if s.GateBlockedScaleDownMinutes == 0 {
+		t.Error("GateBlockedScaleDownMinutes = 0; want > 0")
+	}
+	if s.RuleScaleUps != 0 || s.GateBlockedScaleUpMinutes != 0 {
+		t.Errorf("RuleScaleUps/GateBlockedScaleUpMinutes = %d/%.0f; want 0/0",
+			s.RuleScaleUps, s.GateBlockedScaleUpMinutes)
+	}
+	if s.CELErrors != 0 {
+		t.Errorf("CELErrors = %d; want 0", s.CELErrors)
+	}
+
+	// Sanity: with the gate removed the same replay does scale down.
+	sa.Spec.ScaleConfig.ScaledownCondition = ""
+	unblocked, err := Run(Config{Autoscaler: sa, InitialPU: 5000, ScaleDownInterval: 10 * time.Minute}, points)
+	if err != nil {
+		t.Fatalf("Run (no gate): %v", err)
+	}
+	if unblocked.Summary.ScaleDowns == 0 {
+		t.Error("ScaleDowns = 0 without the gate; the blocked counter test is not exercising the gate")
+	}
 }
 
 func TestRunScaledownCondition_GatesUntilWindowProvesQuiet(t *testing.T) {
