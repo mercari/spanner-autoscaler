@@ -12,7 +12,10 @@ import (
 //
 //	PUT    /metrics/{project_id}/{instance_id}
 //	  Body: {"high_priority": 0.65, "total": 0.45}
-//	  At least one of high_priority or total must be set.
+//	  or, to simulate a multi-region instance:
+//	  Body: {"high_priority_regions": {"asia-northeast1": 0.31, "asia-northeast2": 0.14}}
+//	  At least one of high_priority/high_priority_regions or total/total_regions must be
+//	  set; the scalar and regional form of the same metric kind are mutually exclusive.
 //	GET    /metrics/{project_id}/{instance_id}
 //	DELETE /metrics/{project_id}/{instance_id}
 //
@@ -53,17 +56,26 @@ func NewAdminHandler(staticStore *StaticStore, workloadStore *WorkloadStore, sce
 // ---- static mode ----
 
 // staticSetRequest sets independent fixed CPU values per metric type.
-// At least one of HighPriority or Total must be set.
+// At least one of HighPriority/HighPriorityRegions or Total/TotalRegions
+// must be set. The scalar and regional form of the same metric kind are
+// mutually exclusive: HighPriority simulates a single-region instance,
+// HighPriorityRegions (region name -> CPU utilization) simulates a
+// multi-region instance so that requests grouping by
+// resource.label.location can be exercised.
 type staticSetRequest struct {
-	HighPriority *float64 `json:"high_priority,omitempty"`
-	Total        *float64 `json:"total,omitempty"`
+	HighPriority        *float64           `json:"high_priority,omitempty"`
+	HighPriorityRegions map[string]float64 `json:"high_priority_regions,omitempty"`
+	Total               *float64           `json:"total,omitempty"`
+	TotalRegions        map[string]float64 `json:"total_regions,omitempty"`
 }
 
 type staticResponse struct {
-	ProjectID    string   `json:"project_id"`
-	InstanceID   string   `json:"instance_id"`
-	HighPriority *float64 `json:"high_priority,omitempty"`
-	Total        *float64 `json:"total,omitempty"`
+	ProjectID           string             `json:"project_id"`
+	InstanceID          string             `json:"instance_id"`
+	HighPriority        *float64           `json:"high_priority,omitempty"`
+	HighPriorityRegions map[string]float64 `json:"high_priority_regions,omitempty"`
+	Total               *float64           `json:"total,omitempty"`
+	TotalRegions        map[string]float64 `json:"total_regions,omitempty"`
 }
 
 func handleStaticSet(store *StaticStore) http.HandlerFunc {
@@ -77,33 +89,54 @@ func handleStaticSet(store *StaticStore) http.HandlerFunc {
 			return
 		}
 
-		if req.HighPriority == nil && req.Total == nil {
-			http.Error(w, "must set high_priority and/or total", http.StatusBadRequest)
-			return
-		}
-
-		entry := CPUEntry{}
-		if err := validateCPUField("high_priority", req.HighPriority); err != nil {
+		entry, err := staticEntryFromRequest(req)
+		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if err := validateCPUField("total", req.Total); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		entry.HighPriority = req.HighPriority
-		entry.Total = req.Total
 
 		store.Set(projectID, instanceID, entry)
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(staticResponse{ //nolint:errcheck,gosec
-			ProjectID:    projectID,
-			InstanceID:   instanceID,
-			HighPriority: entry.HighPriority,
-			Total:        entry.Total,
+			ProjectID:           projectID,
+			InstanceID:          instanceID,
+			HighPriority:        entry.HighPriority,
+			HighPriorityRegions: entry.HighPriorityRegions,
+			Total:               entry.Total,
+			TotalRegions:        entry.TotalRegions,
 		})
 	}
+}
+
+// staticEntryFromRequest validates req and converts it to a CPUEntry.
+func staticEntryFromRequest(req staticSetRequest) (CPUEntry, error) {
+	if req.HighPriority == nil && len(req.HighPriorityRegions) == 0 &&
+		req.Total == nil && len(req.TotalRegions) == 0 {
+		return CPUEntry{}, fmt.Errorf("must set high_priority, high_priority_regions, total, and/or total_regions")
+	}
+
+	if req.HighPriority != nil && len(req.HighPriorityRegions) > 0 {
+		return CPUEntry{}, fmt.Errorf("high_priority and high_priority_regions are mutually exclusive")
+	}
+	if req.Total != nil && len(req.TotalRegions) > 0 {
+		return CPUEntry{}, fmt.Errorf("total and total_regions are mutually exclusive")
+	}
+
+	if err := validateCPUField("high_priority", req.HighPriority); err != nil {
+		return CPUEntry{}, err
+	}
+	if err := validateCPUField("total", req.Total); err != nil {
+		return CPUEntry{}, err
+	}
+	if err := validateCPURegions("high_priority_regions", req.HighPriorityRegions); err != nil {
+		return CPUEntry{}, err
+	}
+	if err := validateCPURegions("total_regions", req.TotalRegions); err != nil {
+		return CPUEntry{}, err
+	}
+
+	return CPUEntry(req), nil
 }
 
 func handleStaticGet(store *StaticStore) http.HandlerFunc {
@@ -119,10 +152,12 @@ func handleStaticGet(store *StaticStore) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(staticResponse{ //nolint:errcheck,gosec
-			ProjectID:    projectID,
-			InstanceID:   instanceID,
-			HighPriority: entry.HighPriority,
-			Total:        entry.Total,
+			ProjectID:           projectID,
+			InstanceID:          instanceID,
+			HighPriority:        entry.HighPriority,
+			HighPriorityRegions: entry.HighPriorityRegions,
+			Total:               entry.Total,
+			TotalRegions:        entry.TotalRegions,
 		})
 	}
 }
@@ -289,6 +324,15 @@ func validateCPUField(name string, v *float64) error {
 			return fmt.Errorf("%s must be between 0.0 and 1.0", name)
 		}
 		return fmt.Errorf("cpu_utilization must be between 0.0 and 1.0")
+	}
+	return nil
+}
+
+func validateCPURegions(name string, regions map[string]float64) error {
+	for region, v := range regions {
+		if v < 0 || v > 1 {
+			return fmt.Errorf("%s[%q] must be between 0.0 and 1.0", name, region)
+		}
 	}
 	return nil
 }
