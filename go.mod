@@ -1,6 +1,6 @@
 module github.com/mercari/spanner-autoscaler
 
-go 1.26.0
+go 1.26.10
 
 require (
 	cloud.google.com/go/longrunning v1.2.0
