@@ -265,7 +265,7 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `min` _integer_ | Minimum number of Processing Units for the autoscaling range |  | MultipleOf: 100 <br /> |
-| `max` _integer_ | Maximum number of Processing Units for the autoscaling range |  | MultipleOf: 100 <br /> |
+| `max` _integer_ | Maximum number of Processing Units for the autoscaling range.<br />When lowered below the current processing units, the instance scales down to it in scaledownStepSize steps. |  | MultipleOf: 100 <br /> |
 
 
 #### Schedule

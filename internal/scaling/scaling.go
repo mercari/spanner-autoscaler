@@ -150,6 +150,14 @@ func DesiredPUFromCPU(currentCPU, targetCPU int, sa spannerv1beta1.SpannerAutosc
 		desiredPU = maxPU
 	}
 
+	// A max below the current PU is approached in scale-down steps too, so
+	// lowering it (editing the spec, the end of an Exceed schedule) does not
+	// remove all the excess capacity in one operation. The result stays above
+	// the max until the steps reach it.
+	if scaledDownPU := sa.Status.CurrentProcessingUnits - sdStepSize; desiredPU < scaledDownPU {
+		desiredPU = scaledDownPU
+	}
+
 	return desiredPU
 }
 

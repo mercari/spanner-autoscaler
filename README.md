@@ -64,6 +64,8 @@ spec:
 - `Exceed` (default): raises both ends of the range, so the instance may scale beyond `spec.processingUnits.max`. This is the original behavior and remains the default for backward compatibility. Schedules created before this field existed may have an empty value; the controller treats empty/unset as `Exceed` everywhere for backward compatibility.
 - `Cap`: raises only the lower bound; `spec.processingUnits.max` remains the hard ceiling. If `min + additionalProcessingUnits` exceeds `max`, the lower bound is clamped down to `max` (the effective range never inverts), the trimmed contribution is logged, and a `ScheduleCappedAtMax` event is emitted on the `SpannerAutoscaler`.
 
+When the max drops below the current processing units, because an `Exceed` schedule ended or `spec.processingUnits.max` was lowered, the controller scales down to it in `scaledownStepSize` steps. `scaledownInterval` and the scale-down time restrictions apply as for any other scale down, so until the steps reach the max, the instance runs above it.
+
 > **Note:** When multiple schedules are active simultaneously (i.e. their windows overlap), the `additionalProcessingUnits` from all active schedules are **summed**: every active schedule contributes to `desiredMinPUs`, while only schedules with `maxPUPolicy: Exceed` (or unset) contribute to `desiredMaxPUs`. For example, if schedule A adds +1,000 PU and schedule B adds +5,000 PU and both are active at the same time, `desiredMinPUs = spec.processingUnits.min + 6,000`.
 
 ### Scale down time restrictions

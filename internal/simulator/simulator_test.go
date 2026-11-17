@@ -152,6 +152,38 @@ func TestRunScaledownWindowAndStepSize(t *testing.T) {
 	}
 }
 
+func TestRunStepsDownToLoweredMax(t *testing.T) {
+	// The recording runs at 10000 PU, above the spec max of 6000.
+	sa := newAutoscaler(1000, 6000, 40)
+	sa.Spec.ScaleConfig.ScaledownStepSize = intstr.FromInt(1000)
+	sa.Spec.ScaleConfig.ScaledownInterval = &metav1.Duration{Duration: 10 * time.Minute}
+
+	start := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	// Workload 400: 4% CPU at 10000 PU.
+	points := constantWorkloadPoints(start, 31, 10000, 400)
+
+	result, err := Run(Config{Autoscaler: sa}, points)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	wantEvents := []Event{
+		{Time: start, FromPU: 10000, ToPU: 9000},
+		{Time: start.Add(10 * time.Minute), FromPU: 9000, ToPU: 8000},
+		{Time: start.Add(20 * time.Minute), FromPU: 8000, ToPU: 7000},
+		{Time: start.Add(30 * time.Minute), FromPU: 7000, ToPU: 6000},
+	}
+	if len(result.Events) != len(wantEvents) {
+		t.Fatalf("events = %+v; want %+v", result.Events, wantEvents)
+	}
+	for i, want := range wantEvents {
+		got := result.Events[i]
+		if !got.Time.Equal(want.Time) || got.FromPU != want.FromPU || got.ToPU != want.ToPU {
+			t.Errorf("event[%d] = %+v; want %+v", i, got, want)
+		}
+	}
+}
+
 func TestRunScheduleRaisesMinimum(t *testing.T) {
 	sa := newAutoscaler(1000, 10000, 30)
 	schedule := &spannerv1beta1.SpannerAutoscaleSchedule{

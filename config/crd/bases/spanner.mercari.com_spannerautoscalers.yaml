@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.21.0
+    controller-gen.kubebuilder.io/version: v0.22.0
   name: spannerautoscalers.spanner.mercari.com
 spec:
   group: spanner.mercari.com
@@ -360,8 +360,9 @@ spec:
                       Ref: [Spanner Compute Capacity](https://cloud.google.com/spanner/docs/compute-capacity#compute_capacity)'
                     properties:
                       max:
-                        description: Maximum number of Processing Units for the autoscaling
-                          range
+                        description: |-
+                          Maximum number of Processing Units for the autoscaling range.
+                          When lowered below the current processing units, the instance scales down to it in scaledownStepSize steps.
                         multipleOf: 100
                         type: integer
                       min:
