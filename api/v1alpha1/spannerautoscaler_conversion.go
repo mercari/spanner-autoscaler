@@ -1,6 +1,10 @@
 package v1alpha1
 
 import (
+	"encoding/json"
+	"fmt"
+	"maps"
+
 	"github.com/mercari/spanner-autoscaler/api/v1beta1"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -11,6 +15,11 @@ import (
 )
 
 var log = ctrllog.Log.WithName("spannerautoscaler-v1alpha1.converter")
+
+// timeBasedOverridesAnnotation keeps spec.scaleConfig.timeBasedOverrides of
+// v1beta1 across a round trip through v1alpha1, which has no such field.
+// Dropping them would silently lift the scale-down restrictions they hold.
+const timeBasedOverridesAnnotation = "spanner.mercari.com/v1beta1-time-based-overrides"
 
 func (src *SpannerAutoscaler) ConvertTo(dstRaw conversion.Hub) error {
 	log.V(2).Info("begin conversion from v1alpha1 to v1beta1", "src", src)
@@ -68,10 +77,21 @@ func (src *SpannerAutoscaler) ConvertTo(dstRaw conversion.Hub) error {
 		HighPriority: &hp,
 	}
 
-	dst.Spec.ScaleConfig = scaleConfig
-
 	// Copy the resource metadata
 	dst.ObjectMeta = src.ObjectMeta
+
+	if raw, ok := src.Annotations[timeBasedOverridesAnnotation]; ok {
+		if err := json.Unmarshal([]byte(raw), &scaleConfig.TimeBasedOverrides); err != nil {
+			return fmt.Errorf("decoding annotation %s: %w", timeBasedOverridesAnnotation, err)
+		}
+		dst.Annotations = maps.Clone(src.Annotations)
+		delete(dst.Annotations, timeBasedOverridesAnnotation)
+		if len(dst.Annotations) == 0 {
+			dst.Annotations = nil
+		}
+	}
+
+	dst.Spec.ScaleConfig = scaleConfig
 
 	// Copy the resource status
 	if !src.Status.LastScaleTime.IsZero() {
@@ -143,6 +163,18 @@ func (dst *SpannerAutoscaler) ConvertFrom(srcRaw conversion.Hub) error {
 
 	// Copy the resource metadata
 	dst.ObjectMeta = src.ObjectMeta
+
+	if overrides := src.Spec.ScaleConfig.TimeBasedOverrides; len(overrides) > 0 {
+		raw, err := json.Marshal(overrides)
+		if err != nil {
+			return fmt.Errorf("encoding annotation %s: %w", timeBasedOverridesAnnotation, err)
+		}
+		dst.Annotations = maps.Clone(src.Annotations)
+		if dst.Annotations == nil {
+			dst.Annotations = map[string]string{}
+		}
+		dst.Annotations[timeBasedOverridesAnnotation] = string(raw)
+	}
 
 	// Copy the resource status
 	dst.Status.LastScaleTime = &metav1.Time{Time: src.Status.LastScaleTime.Time}

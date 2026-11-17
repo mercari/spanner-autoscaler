@@ -337,3 +337,52 @@ var _ = Describe("ConvertFrom", func() {
 })
 
 func intPtr(i int) *int { return &i }
+
+var _ = Describe("timeBasedOverrides round trip", func() {
+	It("should keep the overrides through v1alpha1 without leaking the annotation", func() {
+		overrides := []v1beta1.TimeBasedOverride{
+			{
+				Name:              "night",
+				Times:             []string{"CRON_TZ=Asia/Tokyo * 1-6 * * *"},
+				ProcessingUnits:   &v1beta1.TimeBasedOverridePUs{Min: new(8000)},
+				ScaledownStepSize: new(intstr.FromString("30%")),
+			},
+			{Name: "others", Times: []string{"* * * * *"}, ScaledownPolicy: v1beta1.ScaledownPolicyDeny},
+		}
+		src := &v1beta1.SpannerAutoscaler{
+			ObjectMeta: metav1.ObjectMeta{Name: "n", Namespace: "ns", Annotations: map[string]string{"keep": "me"}},
+			Spec: v1beta1.SpannerAutoscalerSpec{
+				TargetInstance: v1beta1.TargetInstance{ProjectID: "p", InstanceID: "i"},
+				ScaleConfig: v1beta1.ScaleConfig{
+					ComputeType:          v1beta1.ComputeTypePU,
+					ProcessingUnits:      v1beta1.ScaleConfigPUs{Min: 12000, Max: 80000},
+					ScaledownStepSize:    intstr.FromInt(2000),
+					TargetCPUUtilization: v1beta1.TargetCPUUtilization{HighPriority: new(50)},
+					TimeBasedOverrides:   overrides,
+				},
+			},
+		}
+
+		alpha := &SpannerAutoscaler{}
+		Expect(alpha.ConvertFrom(src)).To(Succeed())
+		Expect(alpha.Annotations).To(HaveKey(timeBasedOverridesAnnotation))
+		Expect(src.Annotations).To(Equal(map[string]string{"keep": "me"}), "the source annotations must not be modified")
+
+		back := &v1beta1.SpannerAutoscaler{}
+		Expect(alpha.ConvertTo(back)).To(Succeed())
+		Expect(back.Spec.ScaleConfig.TimeBasedOverrides).To(Equal(overrides))
+		Expect(back.Annotations).To(Equal(map[string]string{"keep": "me"}))
+		Expect(alpha.Annotations).To(HaveKey(timeBasedOverridesAnnotation), "the v1alpha1 object must not be modified")
+	})
+
+	It("should fail on a broken annotation instead of dropping the overrides", func() {
+		alpha := &SpannerAutoscaler{
+			ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{timeBasedOverridesAnnotation: "{"}},
+			Spec: SpannerAutoscalerSpec{
+				ScaleTargetRef:       ScaleTargetRef{ProjectID: new("p"), InstanceID: new("i")},
+				TargetCPUUtilization: TargetCPUUtilization{HighPriority: new(int32(50))},
+			},
+		}
+		Expect(alpha.ConvertTo(&v1beta1.SpannerAutoscaler{})).NotTo(Succeed())
+	})
+})

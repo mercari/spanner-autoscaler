@@ -150,6 +150,12 @@ func CurrentParameterValues(sa *spannerv1beta1.SpannerAutoscaler, defaultScaleUp
 		OverrideScaleupInterval:   DurationValueOr(sc.ScaleupInterval, defaultScaleUpInterval).Duration.String(),
 	}
 	switch {
+	case len(sc.TimeBasedOverrides) > 0:
+		names := make([]string, 0, len(sc.TimeBasedOverrides))
+		for _, o := range sc.TimeBasedOverrides {
+			names = append(names, o.Name)
+		}
+		current[OverrideScaledownAllowedTimes] = "timeBasedOverrides:" + strings.Join(names, ";")
 	case len(sc.ScaledownAllowedTimes) > 0:
 		current[OverrideScaledownAllowedTimes] = strings.Join(sc.ScaledownAllowedTimes, ";")
 	case len(sc.ScaledownNotAllowedTimes) > 0:
@@ -233,6 +239,11 @@ type override struct {
 func Recommend(base Config, space SearchSpace, constraints Constraints, points []Point) ([]Candidate, error) {
 	if base.Autoscaler == nil {
 		return nil, fmt.Errorf("config: autoscaler is required")
+	}
+	// Window candidates are scaledownAllowedTimes, which the webhook rejects
+	// next to timeBasedOverrides; every candidate would fail validation.
+	if len(base.Autoscaler.Spec.ScaleConfig.TimeBasedOverrides) > 0 && len(space.ScaledownAllowedTimes) > 0 {
+		return nil, fmt.Errorf("scaledownAllowedTimes candidates cannot be searched for an autoscaler with timeBasedOverrides; change the overrides in the manifest instead")
 	}
 
 	dimensions := buildDimensions(space)

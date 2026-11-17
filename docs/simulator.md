@@ -10,7 +10,7 @@ and the simulated part is the counterfactual — what the autoscaler would have
 done against that workload under a different configuration. Decisions are
 computed by `internal/scaling`, the same package the controller uses, so
 replays match production behavior including step sizes, cooldown intervals,
-`scaledownAllowedTimes` windows, and `SpannerAutoscaleSchedule` activation.
+`scaledownAllowedTimes` windows, `timeBasedOverrides`, and `SpannerAutoscaleSchedule` activation.
 
 ## Build
 
@@ -73,6 +73,12 @@ $ ./bin/simulator help
    replace the manifest's value for that parameter and take precedence over
    `-auto`; unspecified parameters keep the manifest's value. `compare`
    replays several complete manifests side by side instead of searching.
+
+   For a manifest with `timeBasedOverrides`, the candidates change the base
+   values only and the overrides are replayed as written; searching
+   `-scaledown-allowed-times` is rejected because it cannot be combined with
+   the overrides. Minutes above the target are counted against the base
+   target, not an overridden one.
 
    A candidate is recommended only when it satisfies every constraint and
    costs less than the current configuration's own replay; otherwise the

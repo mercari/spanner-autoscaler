@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.21.0
+    controller-gen.kubebuilder.io/version: v0.22.0
   name: spannerautoscalers.spanner.mercari.com
 spec:
   group: spanner.mercari.com
@@ -247,6 +247,9 @@ spec:
     - jsonPath: .status.activeManualScaling.ramp
       name: Manual Ramp
       type: boolean
+    - jsonPath: .status.currentTimeBasedOverride
+      name: Override
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -449,6 +452,106 @@ spec:
                         minimum: 0
                         type: integer
                     type: object
+                  timeBasedOverrides:
+                    description: |-
+                      Overrides of this scale config that apply during specific time periods.
+                      The overrides are evaluated in order and only the first one whose `times` match the current minute is applied;
+                      fields omitted in that override keep the values above. Outside every override, the values above are used as is.
+                      Cannot be used together with scaledownAllowedTimes or scaledownNotAllowedTimes:
+                      restrict scale down with `scaledownPolicy` instead.
+                    items:
+                      description: |-
+                        TimeBasedOverride replaces part of the scale config during the time periods given in `times`.
+                        Every field other than `name` and `times` is optional and replaces the field of the same name in the scale config.
+                      properties:
+                        name:
+                          description: Name of the override, shown in status, events,
+                            logs and metrics. Must be unique within the list.
+                          maxLength: 63
+                          minLength: 1
+                          type: string
+                        processingUnits:
+                          description: |-
+                            Replaces processingUnits.min and/or processingUnits.max.
+                            Additional processing units of active `SpannerAutoscaleSchedule`s are added to the replaced values.
+                            A max below the current processing units is applied at once, not limited by scaledownStepSize.
+                          properties:
+                            max:
+                              description: Replaces processingUnits.max
+                              multipleOf: 100
+                              type: integer
+                            min:
+                              description: Replaces processingUnits.min
+                              multipleOf: 100
+                              type: integer
+                          type: object
+                        scaledownInterval:
+                          description: Replaces scaledownInterval.
+                          type: string
+                        scaledownPolicy:
+                          description: |-
+                            `Deny` prevents scale down while this override applies. `Allow`, or omitting the field, allows it.
+                            An override with only `scaledownPolicy: Allow` is useful to exempt a period from a later `Deny` override.
+                          enum:
+                          - Allow
+                          - Deny
+                          type: string
+                        scaledownStepSize:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          description: Replaces scaledownStepSize.
+                          x-kubernetes-int-or-string: true
+                        scaleupInterval:
+                          description: Replaces scaleupInterval.
+                          type: string
+                        scaleupStepSize:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          description: Replaces scaleupStepSize.
+                          x-kubernetes-int-or-string: true
+                        targetCPUUtilization:
+                          description: |-
+                            Replaces targetCPUUtilization.highPriority and/or targetCPUUtilization.total.
+                            Only metrics that are set in the scale config can be overridden.
+                            The target applies to both scale up and scale down.
+                          properties:
+                            highPriority:
+                              description: |-
+                                Desired CPU utilization for 'High Priority' CPU consumption category. Ref: [Spanner CPU utilization](https://cloud.google.com/spanner/docs/cpu-utilization#task-priority)
+                                Optional. When specified together with 'total', scale-out occurs when either threshold is exceeded (OR condition).
+                                At least one of 'highPriority' or 'total' must be specified.
+                              exclusiveMaximum: true
+                              exclusiveMinimum: true
+                              maximum: 100
+                              minimum: 0
+                              type: integer
+                            total:
+                              description: |-
+                                Desired total CPU utilization (all priorities combined). Ref: [Spanner CPU utilization](https://cloud.google.com/spanner/docs/cpu-utilization)
+                                Optional. When specified together with 'highPriority', scale-out occurs when either threshold is exceeded (OR condition).
+                                At least one of 'highPriority' or 'total' must be specified.
+                              exclusiveMaximum: true
+                              exclusiveMinimum: true
+                              maximum: 100
+                              minimum: 0
+                              type: integer
+                          type: object
+                        times:
+                          description: |-
+                            Time periods in which this override applies, in the same cron format as scaledownAllowedTimes.
+                            Each expression is matched per minute; `CRON_TZ=` can be used to set the time zone.
+                            To apply an override to every minute not covered by earlier overrides, use "* * * * *".
+                          items:
+                            type: string
+                          minItems: 1
+                          type: array
+                      required:
+                      - name
+                      - times
+                      type: object
+                    type: array
                 required:
                 - targetCPUUtilization
                 type: object
@@ -536,6 +639,11 @@ spec:
               currentProcessingUnits:
                 description: Current number of processing-units in the Spanner instance
                 type: integer
+              currentTimeBasedOverride:
+                description: |-
+                  Name of the entry of spec.scaleConfig.timeBasedOverrides applied in the last reconcile.
+                  Empty when no override applied.
+                type: string
               currentTotalCPUUtilization:
                 description: |-
                   Total CPU utilization (all priorities) of the busiest region, represented as a percentage.

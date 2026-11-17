@@ -116,7 +116,7 @@ scaledownNotAllowedTimes:
   - "* 18-19 * * 1-5"   # Evening peak on weekdays
 ```
 
-> **Note:** You can specify either `scaledownAllowedTimes` OR `scaledownNotAllowedTimes`, but not both. When neither is specified, scale down operations are allowed at any time (default behavior). Scale up operations are never restricted and will always be executed immediately when needed, regardless of time restrictions.
+> **Note:** You can specify either `scaledownAllowedTimes` OR `scaledownNotAllowedTimes`, but not both, and neither can be combined with [`timeBasedOverrides`](#time-based-overrides). When neither is specified, scale down operations are allowed at any time (default behavior). Scale up operations are never restricted and will always be executed immediately when needed, regardless of time restrictions.
 
 #### Cron Expression Format and Limitations
 
@@ -130,6 +130,76 @@ The cron expressions use the standard 5-field format: `minute hour day-of-month 
 - **Use wildcard (*) for continuous coverage**: To allow scale-downs throughout an hour range, use `*` in the minute field.
 
 For complex time requirements involving specific minutes, consider using multiple separate cron expressions or adjusting your maintenance windows to align with hour boundaries.
+
+### Time-based overrides
+
+`timeBasedOverrides` replaces part of the scale config during specific time periods, for example a lower min and a larger step size at night, and no scale down during the day.
+
+```yaml
+spec:
+  scaleConfig:
+    # Used outside every override
+    processingUnits: {min: 12000, max: 80000}
+    targetCPUUtilization: {highPriority: 50, total: 80}
+    scaledownStepSize: "10%"
+    scaledownInterval: 30m
+
+    # Evaluated from the top; only the first matching entry applies
+    timeBasedOverrides:
+      - name: night
+        times: ["CRON_TZ=Asia/Tokyo * 1-6 * * *"]
+        processingUnits: {min: 8000}
+        scaledownStepSize: "30%"
+      - name: after-morning-spike
+        times:
+          - "CRON_TZ=Asia/Tokyo 36-59 9 * * *"
+          - "CRON_TZ=Asia/Tokyo * 10 * * *"
+        scaledownStepSize: "25%"
+      # Every other minute: no scale down
+      - name: daytime
+        times: ["* * * * *"]
+        scaledownPolicy: Deny
+```
+
+Each entry has a `name`, a list of cron expressions in `times` (the same format as `scaledownAllowedTimes`), and one or more of the following fields. Omitted fields keep the value of the scale config.
+
+| Field | Effect |
+|---|---|
+| `processingUnits.min` / `.max` | Replaces the min / max. `additionalProcessingUnits` of active `SpannerAutoscaleSchedule`s is added to the replaced value. As with a change to the scale config, a max below the current processing units is applied in one operation, regardless of `scaledownStepSize`. |
+| `targetCPUUtilization.highPriority` / `.total` | Replaces the target. Only metrics set in the scale config can be overridden. The target applies to both scale up and scale down. |
+| `scaledownStepSize`, `scaledownInterval`, `scaleupStepSize`, `scaleupInterval` | Replaces the value. |
+| `scaledownPolicy` | `Deny` prevents scale down; scale up is not affected. `Allow`, or omitting the field, allows it. |
+
+`status.currentTimeBasedOverride`, the `Override` printer column, and the `spanner_autoscaler_time_based_override_active` metric show the entry in effect. The controller emits a `TimeBasedOverrideChanged` event when it changes.
+
+- Only the first matching entry applies, and entries are not merged: an entry that shadows another does not inherit its values. Put narrow periods first and broad ones last.
+- To deny scale down outside some periods, put `Allow` entries for those periods first and a `"* * * * *"` `Deny` entry last. Writing the complement as cron (for example `* 0,8-23 * * *`) is easy to get wrong, and any minute it misses allows scale down. An entry with only `scaledownPolicy: Allow` is valid for this.
+- To stop scale down on a specific day, add a `Deny` entry at the top and repeat the `processingUnits` and step sizes of the entries it shadows. Otherwise a stop during `night` in the example above raises the min back to 12000 and scales up.
+- `status.lastScaleTime` is shared across periods. A scale down held back by `Deny` runs as soon as a period that allows it starts, and the end of a lower-min period scales up right away, so restore capacity before traffic rises.
+- A schedule stays active through its end minute: one starting at 08:55 for 40 minutes is active until 09:35. Start an override that raises the min at 09:36; starting it at 09:35 adds both for that minute.
+- The webhook rejects `timeBasedOverrides` together with `scaledownAllowedTimes` or `scaledownNotAllowedTimes`. If both are present anyway (for example, written while the webhook was disabled), or an override cannot be evaluated, the controller does not scale down and emits an `InvalidTimeBasedOverride` warning event.
+
+#### Migrating from `scaledownAllowedTimes`
+
+```yaml
+# Before
+scaledownAllowedTimes: ["CRON_TZ=Asia/Tokyo * 1-7 * * *"]
+
+# After (same behavior)
+timeBasedOverrides:
+  - name: night
+    times: ["CRON_TZ=Asia/Tokyo * 1-7 * * *"]
+    scaledownPolicy: Allow
+  - name: others
+    times: ["* * * * *"]
+    scaledownPolicy: Deny
+```
+
+Upgrade the CRDs and the controller before changing manifests, and check that `status.currentTimeBasedOverride` is set after applying. A controller or CRD that does not know `timeBasedOverrides` ignores it, and since the migration removes `scaledownAllowedTimes`, scale down is then allowed at any time. Before rolling back to such a version, rewrite the manifests back to `scaledownAllowedTimes`.
+
+#### Limit on the number of entries
+
+The webhook accepts up to 10 entries per `SpannerAutoscaler`. Change the limit with the controller flag `--max-time-based-overrides` (0 or less disables it). Lowering the limit does not change how existing resources scale, but updates to resources above the limit are rejected.
 
 ### Manual scaling override
 
@@ -524,10 +594,11 @@ The endpoint can be scraped by Prometheus (`ServiceMonitor` / `PodMonitor`), the
 | `spanner_autoscaler_desired_processing_units` | — | Desired processing units computed in the latest reconcile. |
 | `spanner_autoscaler_min_processing_units` | — | Configured `spec.scaleConfig.processingUnits.min`. |
 | `spanner_autoscaler_max_processing_units` | — | Configured `spec.scaleConfig.processingUnits.max`. |
-| `spanner_autoscaler_effective_min_processing_units` | — | Effective lower bound including additions from currently active schedules. |
-| `spanner_autoscaler_effective_max_processing_units` | — | Effective upper bound including additions from currently active schedules. |
+| `spanner_autoscaler_effective_min_processing_units` | — | Effective lower bound including the time-based override in effect and additions from currently active schedules. |
+| `spanner_autoscaler_effective_max_processing_units` | — | Effective upper bound including the time-based override in effect and additions from currently active schedules. |
 | `spanner_autoscaler_cpu_utilization` | `type=high_priority\|total` | Current CPU utilization percentage (0–100) per metric type. For multi-region instances this is the busiest region. |
-| `spanner_autoscaler_cpu_utilization_target` | `type=high_priority\|total` | Configured target CPU utilization percentage. |
+| `spanner_autoscaler_cpu_utilization_target` | `type=high_priority\|total` | Target CPU utilization percentage in effect, including the time-based override in effect. |
+| `spanner_autoscaler_time_based_override_active` | `override` | `1` for the `timeBasedOverrides` entry in effect. No series when none applies. |
 | `spanner_autoscaler_instance_ready` | — | `1` when the Spanner instance state is `ready`, `0` otherwise. |
 | `spanner_autoscaler_active_schedules` | — | Number of `SpannerAutoscaleSchedule` entries currently in effect. |
 | `spanner_autoscaler_active_schedule_additional_pu` | — | Sum of `AdditionalPU` contributed by currently active schedules. |
@@ -538,8 +609,8 @@ The endpoint can be scraped by Prometheus (`ServiceMonitor` / `PodMonitor`), the
 
 | Name | Type | Extra labels | Description |
 |---|---|---|---|
-| `spanner_autoscaler_scale_events_total` | Counter | `direction=up\|down`, `driver=cpu_high_priority\|cpu_total\|schedule` | Successful processing-units updates. The `driver` label is a best-effort attribution to the metric (or schedule floor) that drove the decision. |
-| `spanner_autoscaler_scale_skipped_total` | Counter | `reason` | Reconciles where scaling was skipped. Reasons: `same`, `scale_up_interval`, `scale_down_interval`, `scale_down_window`, `instance_not_ready`, `cpu_not_ready`. |
+| `spanner_autoscaler_scale_events_total` | Counter | `direction=up\|down`, `driver=cpu_high_priority\|cpu_total\|schedule\|time_based_override` | Successful processing-units updates. The `driver` label is a best-effort attribution to the metric (or the schedule or time-based override floor) that drove the decision. |
+| `spanner_autoscaler_scale_skipped_total` | Counter | `reason` | Reconciles where scaling was skipped. Reasons: `same`, `scale_up_interval`, `scale_down_interval`, `scale_down_window`, `scale_down_policy` (denied by a time-based override), `instance_not_ready`, `cpu_not_ready`. |
 | `spanner_autoscaler_scale_pu_delta` | Histogram | `direction=up\|down` | Absolute processing-units change per scale event. Buckets: 100, 200, 500, 1000, 2000, 5000, 10000, 20000. |
 
 #### Scheduled scaling

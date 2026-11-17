@@ -23,6 +23,8 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+
+	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
 )
 
 func TestRecommendRanksCheapestFeasibleFirst(t *testing.T) {
@@ -576,5 +578,35 @@ func TestRecommendGridLimit(t *testing.T) {
 	}
 	if _, err := Recommend(base, SearchSpace{MinPUs: minPUs}, Constraints{}, []Point{{}}); err == nil {
 		t.Fatal("Recommend accepted an oversized grid; want an error")
+	}
+}
+
+func TestRecommendWithTimeBasedOverrides(t *testing.T) {
+	sa := newAutoscaler(1000, 10000, 40)
+	sa.Spec.ScaleConfig.TimeBasedOverrides = []spannerv1beta1.TimeBasedOverride{
+		{Name: "night", Times: []string{"* 1-7 * * *"}, ScaledownPolicy: spannerv1beta1.ScaledownPolicyAllow},
+		{Name: "others", Times: []string{"* * * * *"}, ScaledownPolicy: spannerv1beta1.ScaledownPolicyDeny},
+	}
+
+	current := CurrentParameterValues(sa, time.Minute, 55*time.Minute)
+	if got, want := current[OverrideScaledownAllowedTimes], "timeBasedOverrides:night;others"; got != want {
+		t.Errorf("current %s = %q; want %q", OverrideScaledownAllowedTimes, got, want)
+	}
+
+	points := constantWorkloadPoints(time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), 10, 5000, 400)
+	space := SearchSpace{ScaledownAllowedTimes: [][]string{{"* 1-7 * * *"}}}
+	if _, err := Recommend(Config{Autoscaler: sa}, space, Constraints{}, points); err == nil {
+		t.Error("Recommend succeeded; want an error for window candidates with timeBasedOverrides")
+	}
+
+	space = SearchSpace{MinPUs: []int{1000, 2000}}
+	candidates, err := Recommend(Config{Autoscaler: sa}, space, Constraints{}, points)
+	if err != nil {
+		t.Fatalf("Recommend: %v", err)
+	}
+	for _, c := range candidates {
+		if c.Error != "" {
+			t.Errorf("candidate %v failed: %s", c.Overrides, c.Error)
+		}
 	}
 }

@@ -152,6 +152,64 @@ func TestRunScaledownWindowAndStepSize(t *testing.T) {
 	}
 }
 
+func TestRunTimeBasedOverrides(t *testing.T) {
+	sa := newAutoscaler(1000, 10000, 40)
+	sa.Spec.ScaleConfig.ScaledownStepSize = intstr.FromInt(1000)
+	sa.Spec.ScaleConfig.ScaledownInterval = &metav1.Duration{Duration: 10 * time.Minute}
+	sa.Spec.ScaleConfig.TimeBasedOverrides = []spannerv1beta1.TimeBasedOverride{
+		{
+			Name:            "early",
+			Times:           []string{"* 12 * * *"},
+			ProcessingUnits: &spannerv1beta1.TimeBasedOverridePUs{Min: new(6000)},
+			ScaledownPolicy: spannerv1beta1.ScaledownPolicyDeny,
+		},
+		{
+			Name:              "window",
+			Times:             []string{"* 13-23 * * *"},
+			ScaledownStepSize: new(intstr.FromInt(2000)),
+		},
+	}
+
+	start := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	// Workload 400: 8% CPU at 5000 PU; 2000 PU is enough for target 40.
+	points := constantWorkloadPoints(start, 121, 5000, 400)
+
+	result, err := Run(Config{Autoscaler: sa}, points)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	windowOpen := time.Date(2026, 9, 1, 13, 0, 0, 0, time.UTC)
+	wantEvents := []Event{
+		// "early" raises the min and denies scale down.
+		{Time: start, FromPU: 5000, ToPU: 6000},
+		// "window" restores the base min and doubles the step size.
+		{Time: windowOpen, FromPU: 6000, ToPU: 4000},
+		{Time: windowOpen.Add(10 * time.Minute), FromPU: 4000, ToPU: 2000},
+	}
+	if len(result.Events) != len(wantEvents) {
+		t.Fatalf("events = %+v; want %+v", result.Events, wantEvents)
+	}
+	for i, want := range wantEvents {
+		got := result.Events[i]
+		if !got.Time.Equal(want.Time) || got.FromPU != want.FromPU || got.ToPU != want.ToPU {
+			t.Errorf("event[%d] = %+v; want %+v", i, got, want)
+		}
+	}
+}
+
+func TestRunInvalidTimeBasedOverridesFails(t *testing.T) {
+	sa := newAutoscaler(1000, 10000, 40)
+	sa.Spec.ScaleConfig.TimeBasedOverrides = []spannerv1beta1.TimeBasedOverride{
+		{Name: "broken", Times: []string{"not a cron"}, ScaledownPolicy: spannerv1beta1.ScaledownPolicyDeny},
+	}
+	points := constantWorkloadPoints(time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC), 5, 5000, 400)
+
+	if _, err := Run(Config{Autoscaler: sa}, points); err == nil {
+		t.Fatal("Run succeeded; want an error for an invalid cron expression")
+	}
+}
+
 func TestRunScheduleRaisesMinimum(t *testing.T) {
 	sa := newAutoscaler(1000, 10000, 30)
 	schedule := &spannerv1beta1.SpannerAutoscaleSchedule{

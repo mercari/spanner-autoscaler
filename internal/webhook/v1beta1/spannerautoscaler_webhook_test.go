@@ -1,6 +1,8 @@
 package v1beta1
 
 import (
+	"fmt"
+
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -334,6 +336,75 @@ var _ = Describe("SpannerAutoscaler validation", func() {
 					_, err := createResource(testResource)
 					Expect(err).To(HaveOccurred())
 					Expect(err.Error()).To(ContainSubstring("processing units which are greater than 1000, should be multiples of 1000"))
+				})
+			})
+		})
+
+		Describe("TimeBasedOverrides", func() {
+			BeforeEach(func() {
+				testResource.Spec.ScaleConfig.ProcessingUnits = spannerv1beta1.ScaleConfigPUs{Min: 12000, Max: 80000}
+				testResource.Spec.ScaleConfig.TimeBasedOverrides = []spannerv1beta1.TimeBasedOverride{
+					{
+						Name:              "night",
+						Times:             []string{"CRON_TZ=Asia/Tokyo * 1-6 * * *"},
+						ProcessingUnits:   &spannerv1beta1.TimeBasedOverridePUs{Min: new(8000)},
+						ScaledownStepSize: new(intstr.FromString("30%")),
+					},
+					{
+						Name:            "others",
+						Times:           []string{"* * * * *"},
+						ScaledownPolicy: spannerv1beta1.ScaledownPolicyDeny,
+					},
+				}
+			})
+
+			It("should keep the overrides without filling defaults into them", func() {
+				got, err := createResource(testResource)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(got.Spec.ScaleConfig.TimeBasedOverrides).To(Equal(testResource.Spec.ScaleConfig.TimeBasedOverrides))
+			})
+
+			Context("scaledownAllowedTimes is also set", func() {
+				BeforeEach(func() {
+					testResource.Spec.ScaleConfig.ScaledownAllowedTimes = []string{"CRON_TZ=Asia/Tokyo * 1-7 * * *"}
+				})
+
+				It("should return validation error", func() {
+					_, err := createResource(testResource)
+					Expect(err).To(HaveOccurred())
+					Expect(err.Error()).To(ContainSubstring("cannot be used together with scaledownAllowedTimes or scaledownNotAllowedTimes"))
+				})
+			})
+
+			Context("more overrides than the default limit", func() {
+				BeforeEach(func() {
+					testResource.Spec.ScaleConfig.TimeBasedOverrides = nil
+					for i := range DefaultMaxTimeBasedOverrides + 1 {
+						testResource.Spec.ScaleConfig.TimeBasedOverrides = append(testResource.Spec.ScaleConfig.TimeBasedOverrides,
+							spannerv1beta1.TimeBasedOverride{
+								Name:            fmt.Sprintf("o%d", i),
+								Times:           []string{"* * * * *"},
+								ScaledownPolicy: spannerv1beta1.ScaledownPolicyDeny,
+							})
+					}
+				})
+
+				It("should return validation error", func() {
+					_, err := createResource(testResource)
+					Expect(err).To(HaveOccurred())
+					Expect(err.Error()).To(ContainSubstring("must have at most 10 items"))
+				})
+			})
+
+			Context("scaledownPolicy is not in the enum", func() {
+				BeforeEach(func() {
+					testResource.Spec.ScaleConfig.TimeBasedOverrides[1].ScaledownPolicy = "Sometimes"
+				})
+
+				It("should return validation error", func() {
+					_, err := createResource(testResource)
+					Expect(err).To(HaveOccurred())
+					Expect(err.Error()).To(ContainSubstring("scaledownPolicy"))
 				})
 			})
 		})

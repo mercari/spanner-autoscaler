@@ -380,7 +380,9 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 	// are reflected in /metrics instead of leaving the previous values stuck.
 	// sa is mutated throughout Reconcile; capturing &sa here lets the defer see
 	// the final state at return time.
-	defer observability.RecordState(&sa)
+	// Replaced below once the time-based override for this reconcile is known.
+	effectiveTarget := sa.Spec.ScaleConfig.TargetCPUUtilization
+	defer func() { observability.RecordState(&sa, effectiveTarget) }()
 
 	credentials, err := r.fetchCredentials(ctx, &sa)
 	if err != nil {
@@ -468,7 +470,14 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 		return result, err
 	}
 
-	if minPU, maxPU, updated, capped := calcDesiredPURange(sa); updated {
+	now := r.clock.Now()
+	resolved := r.resolveTimeBasedOverride(log, &sa, now)
+	previousOverride := sa.Status.CurrentTimeBasedOverride
+	sa.Status.CurrentTimeBasedOverride = resolved.OverrideName
+	statusChanged = statusChanged || previousOverride != resolved.OverrideName
+	effectiveTarget = resolved.ScaleConfig.TargetCPUUtilization
+
+	if minPU, maxPU, updated, capped := calcDesiredPURange(scaling.WithScaleConfig(sa, resolved.ScaleConfig)); updated {
 		sa.Status.DesiredMinPUs = minPU
 		sa.Status.DesiredMaxPUs = maxPU
 		statusChanged = true
@@ -484,6 +493,9 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 				"desiredMaxPUs", maxPU,
 				"specMinPUs", sa.Spec.ScaleConfig.ProcessingUnits.Min,
 				"specMaxPUs", sa.Spec.ScaleConfig.ProcessingUnits.Max,
+				"timeBasedOverride", resolved.OverrideName,
+				"overrideMinPUs", resolved.ScaleConfig.ProcessingUnits.Min,
+				"overrideMaxPUs", resolved.ScaleConfig.ProcessingUnits.Max,
 			)
 			r.recorder.Eventf(&sa, corev1.EventTypeNormal, "ScheduleCappedAtMax",
 				"active schedule(s) with maxPUPolicy=Cap raised the lower bound above the upper bound; clamped range to [%d, %d]",
@@ -491,17 +503,19 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 		}
 	}
 
-	desiredProcessingUnits := calcDesiredProcessingUnits(sa)
+	// Built after the range update above so it sees the new DesiredMin/MaxPUs.
+	effective := scaling.WithScaleConfig(sa, resolved.ScaleConfig)
+	desiredProcessingUnits := calcDesiredProcessingUnits(effective)
 
-	if now := r.clock.Now(); r.needUpdateProcessingUnits(log, &sa, desiredProcessingUnits, now) {
+	if r.needUpdateProcessingUnits(log, &effective, desiredProcessingUnits, now, resolved) {
 		// Targets are *int because a single-mode spec leaves one of them nil.
 		// Normalise to 0 for the log so consumers see "metric not active" as
 		// an explicit zero rather than tripping on a nil deref.
 		var highPriorityTarget, totalTarget int
-		if p := sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority; p != nil {
+		if p := effectiveTarget.HighPriority; p != nil {
 			highPriorityTarget = *p
 		}
-		if p := sa.Spec.ScaleConfig.TargetCPUUtilization.Total; p != nil {
+		if p := effectiveTarget.Total; p != nil {
 			totalTarget = *p
 		}
 		// For logging only: summarize the schedules currently in effect.
@@ -527,6 +541,7 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 			"totalTarget", totalTarget,
 			"activeSchedules", activeScheduleNames,
 			"scheduleAdditionalPU", scheduleAdditionalPU,
+			"timeBasedOverride", resolved.OverrideName,
 		)
 
 		labels := observability.LabelsForAutoscaler(&sa)
@@ -540,7 +555,7 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 		}
 		observability.RecordScaleEvent(labels,
 			sa.Status.CurrentProcessingUnits, desiredProcessingUnits,
-			scaleDriver(&sa, desiredProcessingUnits),
+			scaleDriver(&effective, sa.Spec.ScaleConfig.ProcessingUnits.Min, desiredProcessingUnits),
 		)
 
 		r.recorder.Eventf(&sa, corev1.EventTypeNormal, "Updated",
@@ -562,6 +577,7 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 			"totalTarget", totalTarget,
 			"activeSchedules", activeScheduleNames,
 			"scheduleAdditionalPU", scheduleAdditionalPU,
+			"timeBasedOverride", resolved.OverrideName,
 		)
 
 		statusChanged = true
@@ -585,6 +601,10 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 		// path inside dispatchManualScaling, so schedules orphaned in the
 		// same reconcile as an active manual override are still reported.
 		emitScheduleDeactivations(log, &sa, droppedActiveSchedules)
+
+		// Emitted after the write for the same reason: a failed write would
+		// report the same change again on the next reconcile.
+		r.emitTimeBasedOverrideChange(log, &sa, previousOverride)
 	}
 
 	return ctrlreconcile.Result{}, nil
@@ -817,11 +837,35 @@ func (r *SpannerAutoscalerReconciler) startSyncer(ctx context.Context, log logr.
 	return nil
 }
 
-func (r *SpannerAutoscalerReconciler) needUpdateProcessingUnits(log logr.Logger, sa *spannerv1beta1.SpannerAutoscaler, desiredProcessingUnits int, now time.Time) bool {
+// resolveTimeBasedOverride returns the scale config in effect at now.
+// It does not modify sa.
+func (r *SpannerAutoscalerReconciler) resolveTimeBasedOverride(log logr.Logger, sa *spannerv1beta1.SpannerAutoscaler, now time.Time) scaling.ResolvedScaleConfig {
+	resolved, err := scaling.ResolveScaleConfig(sa.Spec.ScaleConfig, now)
+	if err != nil {
+		// resolved still holds a usable config: the base values with scale down denied.
+		log.Error(err, "Failed to resolve time-based override, scale down is denied")
+		r.recorder.Event(sa, corev1.EventTypeWarning, "InvalidTimeBasedOverride", err.Error())
+	}
+	observability.RecordTimeBasedOverride(observability.LabelsForAutoscaler(sa), sa.Status.CurrentTimeBasedOverride, resolved.OverrideName)
+	return resolved
+}
+
+func (r *SpannerAutoscalerReconciler) emitTimeBasedOverrideChange(log logr.Logger, sa *spannerv1beta1.SpannerAutoscaler, previous string) {
+	current := sa.Status.CurrentTimeBasedOverride
+	if previous == current {
+		return
+	}
+	log.Info("Changed time-based override", "previous", previous, "current", current)
+	r.recorder.Eventf(sa, corev1.EventTypeNormal, "TimeBasedOverrideChanged",
+		"time-based override changed from %q to %q", previous, current)
+}
+
+// needUpdateProcessingUnits expects sa to carry resolved.ScaleConfig.
+func (r *SpannerAutoscalerReconciler) needUpdateProcessingUnits(log logr.Logger, sa *spannerv1beta1.SpannerAutoscaler, desiredProcessingUnits int, now time.Time, resolved scaling.ResolvedScaleConfig) bool {
 	currentProcessingUnits := sa.Status.CurrentProcessingUnits
 	labels := observability.LabelsForAutoscaler(sa)
 
-	decision, err := scaling.Decide(sa, desiredProcessingUnits, now, r.scaleUpInterval, r.scaleDownInterval)
+	decision, err := scaling.Decide(sa, desiredProcessingUnits, now, resolved.ScaledownPolicy, r.scaleUpInterval, r.scaleDownInterval)
 	if err != nil {
 		log.Error(err, "invalid scale down time restriction configuration")
 		return false
@@ -870,6 +914,16 @@ func (r *SpannerAutoscalerReconciler) needUpdateProcessingUnits(log logr.Logger,
 		)
 		observability.RecordScaleSkipped(labels, observability.SkipReasonScaleDownWindow)
 		return false
+
+	case scaling.DecisionSkipScaleDownPolicy:
+		log.Info("scale down is denied by time-based override",
+			"now", now.String(),
+			"currentPU", currentProcessingUnits,
+			"desiredPU", desiredProcessingUnits,
+			"timeBasedOverride", resolved.OverrideName,
+		)
+		observability.RecordScaleSkipped(labels, observability.SkipReasonScaleDownPolicy)
+		return false
 	}
 
 	return true
@@ -895,11 +949,18 @@ func calcDesiredPUFromCPU(currentCPU, targetCPU int, sa spannerv1beta1.SpannerAu
 // by the upper schedule bound shrinking are still reported as CPU-driven
 // since no symmetric Status field tracks the upper schedule contribution
 // separately.
-func scaleDriver(sa *spannerv1beta1.SpannerAutoscaler, after int) string {
-	// Schedule attribution: the desired value sits on a min floor that the
-	// user's spec.processingUnits.min alone would not have created.
-	if sa.Status.DesiredMinPUs > sa.Spec.ScaleConfig.ProcessingUnits.Min && after == sa.Status.DesiredMinPUs {
-		return observability.DriverSchedule
+// sa carries the resolved scale config; baseMinPU is spec.processingUnits.min
+// before any time-based override.
+func scaleDriver(sa *spannerv1beta1.SpannerAutoscaler, baseMinPU, after int) string {
+	if after == sa.Status.DesiredMinPUs {
+		switch {
+		// The desired value sits on a min floor that the min in effect alone
+		// would not have created.
+		case sa.Status.DesiredMinPUs > sa.Spec.ScaleConfig.ProcessingUnits.Min:
+			return observability.DriverSchedule
+		case sa.Spec.ScaleConfig.ProcessingUnits.Min > baseMinPU:
+			return observability.DriverTimeBasedOverride
+		}
 	}
 
 	switch sa.Spec.ScaleConfig.TargetCPUUtilization.ActiveMetricFlags() {

@@ -28,6 +28,7 @@ const (
 	instanceIDLabel = "instance_id"
 
 	typeLabel      = "type"
+	overrideLabel  = "override"
 	directionLabel = "direction"
 	driverLabel    = "driver"
 	reasonLabel    = "reason"
@@ -42,6 +43,9 @@ const (
 	DriverCPUHighPriority = "cpu_high_priority"
 	DriverCPUTotal        = "cpu_total"
 	DriverSchedule        = "schedule"
+	// DriverTimeBasedOverride marks a scale-up to a min raised by a
+	// time-based override.
+	DriverTimeBasedOverride = "time_based_override"
 	// DriverManualImmediate marks a scale event driven by a SpannerManualScaling
 	// override with no step size set on the active direction (single-jump).
 	DriverManualImmediate = "manual_immediate"
@@ -55,6 +59,7 @@ const (
 	SkipReasonScaleUpInterval            = "scale_up_interval"
 	SkipReasonScaleDownInterval          = "scale_down_interval"
 	SkipReasonScaleDownWindow            = "scale_down_window"
+	SkipReasonScaleDownPolicy            = "scale_down_policy"
 	SkipReasonInstanceNotReady           = "instance_not_ready"
 	SkipReasonCPUNotReady                = "cpu_not_ready"
 	SkipReasonScheduleSuppressedByManual = "schedule_suppressed_by_manual"
@@ -149,12 +154,12 @@ var (
 
 	effectiveMinProcessingUnits = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "spanner_autoscaler_effective_min_processing_units",
-		Help: "Effective lower bound including AdditionalPU from currently active schedules.",
+		Help: "Effective lower bound including the time-based override in effect and AdditionalPU from currently active schedules.",
 	}, identityLabels)
 
 	effectiveMaxProcessingUnits = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "spanner_autoscaler_effective_max_processing_units",
-		Help: "Effective upper bound including AdditionalPU from currently active schedules.",
+		Help: "Effective upper bound including the time-based override in effect and AdditionalPU from currently active schedules.",
 	}, identityLabels)
 
 	cpuUtilization = prometheus.NewGaugeVec(prometheus.GaugeOpts{
@@ -164,8 +169,13 @@ var (
 
 	cpuUtilizationTarget = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "spanner_autoscaler_cpu_utilization_target",
-		Help: "Configured target Spanner CPU utilization percentage (0-100) by metric type.",
+		Help: "Target Spanner CPU utilization percentage (0-100) in effect by metric type, including the time-based override in effect.",
 	}, append(identityLabels, typeLabel))
+
+	timeBasedOverrideActive = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "spanner_autoscaler_time_based_override_active",
+		Help: "1 for the spec.scaleConfig.timeBasedOverrides entry applied in the latest reconcile, labeled by its name. No series when no override applies.",
+	}, append(identityLabels, overrideLabel))
 
 	instanceReady = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "spanner_autoscaler_instance_ready",
@@ -212,7 +222,7 @@ var (
 var (
 	scaleEventsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "spanner_autoscaler_scale_events_total",
-		Help: "Number of processing-units updates, labeled by direction (up|down) and driver (cpu_high_priority|cpu_total|schedule).",
+		Help: "Number of processing-units updates, labeled by direction (up|down) and driver (cpu_high_priority|cpu_total|schedule|time_based_override).",
 	}, append(identityLabels, directionLabel, driverLabel))
 
 	scaleSkippedTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -292,6 +302,7 @@ func allCollectors() []prometheus.Collector {
 		effectiveMaxProcessingUnits,
 		cpuUtilization,
 		cpuUtilizationTarget,
+		timeBasedOverrideActive,
 		instanceReady,
 		activeSchedules,
 		activeScheduleAdditionalPU,
@@ -329,6 +340,7 @@ func allVectors() []partialDeleter {
 		effectiveMaxProcessingUnits,
 		cpuUtilization,
 		cpuUtilizationTarget,
+		timeBasedOverrideActive,
 		instanceReady,
 		activeSchedules,
 		activeScheduleAdditionalPU,
@@ -370,7 +382,9 @@ func Register(reg prometheus.Registerer) error {
 // RecordState writes every state gauge based on the current SpannerAutoscaler.
 // Intended to be called once per Reconcile (after Status mutations and before
 // returning) so dashboards reflect the snapshot the controller acted on.
-func RecordState(sa *spannerv1beta1.SpannerAutoscaler) {
+// target is the target CPU utilization in effect, which differs from the
+// spec while a time-based override replaces it.
+func RecordState(sa *spannerv1beta1.SpannerAutoscaler, target spannerv1beta1.TargetCPUUtilization) {
 	l := LabelsForAutoscaler(sa)
 	vals := l.values()
 
@@ -384,11 +398,11 @@ func RecordState(sa *spannerv1beta1.SpannerAutoscaler) {
 	// Emit a CPU gauge only for metric types the spec actually activates.
 	// This avoids reporting a stale 0% for the unused mode in single-metric
 	// configurations (syncer also leaves the unused field at 0).
-	if p := sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority; p != nil {
+	if p := target.HighPriority; p != nil {
 		cpuUtilization.WithLabelValues(l.withExtra(cpuTypeHighPriority)...).Set(float64(sa.Status.CurrentHighPriorityCPUUtilization))
 		cpuUtilizationTarget.WithLabelValues(l.withExtra(cpuTypeHighPriority)...).Set(float64(*p))
 	}
-	if p := sa.Spec.ScaleConfig.TargetCPUUtilization.Total; p != nil {
+	if p := target.Total; p != nil {
 		cpuUtilization.WithLabelValues(l.withExtra(cpuTypeTotal)...).Set(float64(sa.Status.CurrentTotalCPUUtilization))
 		cpuUtilizationTarget.WithLabelValues(l.withExtra(cpuTypeTotal)...).Set(float64(*p))
 	}
@@ -411,6 +425,18 @@ func RecordState(sa *spannerv1beta1.SpannerAutoscaler) {
 	}
 	if !sa.Status.LastSyncTime.IsZero() {
 		lastSyncTimestamp.WithLabelValues(vals...).Set(float64(sa.Status.LastSyncTime.Unix()))
+	}
+}
+
+// RecordTimeBasedOverride exposes the time-based override applied in the
+// latest reconcile. previous is the override reported before, so its series
+// can be removed when the override changes; "" means none.
+func RecordTimeBasedOverride(l Labels, previous, current string) {
+	if previous != "" && previous != current {
+		timeBasedOverrideActive.DeleteLabelValues(l.withExtra(previous)...)
+	}
+	if current != "" {
+		timeBasedOverrideActive.WithLabelValues(l.withExtra(current)...).Set(1)
 	}
 }
 

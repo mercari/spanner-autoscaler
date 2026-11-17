@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
 	"github.com/mercari/spanner-autoscaler/internal/cron"
+	"github.com/mercari/spanner-autoscaler/internal/scaling"
 	schedulerpkg "github.com/mercari/spanner-autoscaler/internal/scheduler"
 	"github.com/mercari/spanner-autoscaler/internal/syncer"
 	fakesyncer "github.com/mercari/spanner-autoscaler/internal/syncer/fake"
@@ -68,7 +69,8 @@ var _ = Describe("SpannerAutoscaler controller", func() {
 		}
 	})
 
-	Context("Check Reconciler", func() {
+	// Ordered: the second spec reuses the resource and syncer set up by the first.
+	Context("Check Reconciler", Ordered, func() {
 		It("should scale up spanner instance nodes", func() {
 			testSecret := &corev1.Secret{
 				ObjectMeta: metav1.ObjectMeta{
@@ -130,6 +132,72 @@ var _ = Describe("SpannerAutoscaler controller", func() {
 			)
 			Expect(diff).To(BeEmpty())
 		})
+
+		It("should apply time-based overrides", func() {
+			setStatus := func() {
+				GinkgoHelper()
+				Eventually(func() error {
+					got := &spannerv1beta1.SpannerAutoscaler{}
+					if err := k8sClient.Get(ctx, namespacedName, got); err != nil {
+						return err
+					}
+					got.Status.CurrentProcessingUnits = 3000
+					got.Status.InstanceState = spannerv1beta1.InstanceStateReady
+					got.Status.LastScaleTime = metav1.Time{Time: fakeTime.Add(-2 * time.Hour)}
+					got.Status.CurrentHighPriorityCPUUtilization = 5
+					got.Status.CurrentCPUMetricType = spannerv1beta1.CPUMetricTypeHighPriority
+					return k8sClient.Status().Update(ctx, got)
+				}).Should(Succeed())
+			}
+			setOverrides := func(overrides []spannerv1beta1.TimeBasedOverride) {
+				GinkgoHelper()
+				Eventually(func() error {
+					got := &spannerv1beta1.SpannerAutoscaler{}
+					if err := k8sClient.Get(ctx, namespacedName, got); err != nil {
+						return err
+					}
+					got.Spec.ScaleConfig.TimeBasedOverrides = overrides
+					return k8sClient.Update(ctx, got)
+				}).Should(Succeed())
+			}
+			getStatus := func() spannerv1beta1.SpannerAutoscalerStatus {
+				got := &spannerv1beta1.SpannerAutoscaler{}
+				Expect(k8sClient.Get(ctx, namespacedName, got)).To(Succeed())
+				return got.Status
+			}
+
+			By("Raising the min with an override that also denies scale down")
+			setOverrides([]spannerv1beta1.TimeBasedOverride{{
+				Name:            "busy",
+				Times:           []string{"* * * * *"},
+				ProcessingUnits: &spannerv1beta1.TimeBasedOverridePUs{Min: new(5000)},
+				ScaledownPolicy: spannerv1beta1.ScaledownPolicyDeny,
+			}})
+			setStatus()
+			Eventually(getStatus).Should(SatisfyAll(
+				HaveField("CurrentTimeBasedOverride", "busy"),
+				HaveField("DesiredMinPUs", 5000),
+				HaveField("DesiredProcessingUnits", 5000),
+				HaveField("LastScaleTime", metav1.Time{Time: fakeTime}),
+			))
+
+			By("Denying scale down without changing the min")
+			setOverrides([]spannerv1beta1.TimeBasedOverride{{
+				Name:            "quiet",
+				Times:           []string{"* * * * *"},
+				ScaledownPolicy: spannerv1beta1.ScaledownPolicyDeny,
+			}})
+			setStatus()
+			Eventually(getStatus).Should(SatisfyAll(
+				HaveField("CurrentTimeBasedOverride", "quiet"),
+				HaveField("DesiredMinPUs", 1000),
+				HaveField("DesiredProcessingUnits", 1000),
+			))
+			Consistently(getStatus, 2*time.Second).Should(
+				HaveField("LastScaleTime", metav1.Time{Time: fakeTime.Add(-2 * time.Hour)}),
+				"scale down must not be applied",
+			)
+		})
 	})
 })
 
@@ -155,7 +223,7 @@ var _ = Describe("Check Update Nodes", func() {
 				InstanceState:          spannerv1beta1.InstanceStateReady,
 			},
 		}
-		got := testReconciler.needUpdateProcessingUnits(testReconciler.log, sa, sa.Status.DesiredProcessingUnits, fakeTime)
+		got := testReconciler.needUpdateProcessingUnits(testReconciler.log, sa, sa.Status.DesiredProcessingUnits, fakeTime, scaling.ResolvedScaleConfig{})
 		Expect(got).To(BeTrue())
 	})
 
@@ -168,7 +236,7 @@ var _ = Describe("Check Update Nodes", func() {
 				InstanceState:          spannerv1beta1.InstanceStateReady,
 			},
 		}
-		got := testReconciler.needUpdateProcessingUnits(testReconciler.log, sa, sa.Status.DesiredProcessingUnits, fakeTime)
+		got := testReconciler.needUpdateProcessingUnits(testReconciler.log, sa, sa.Status.DesiredProcessingUnits, fakeTime, scaling.ResolvedScaleConfig{})
 		Expect(got).To(BeFalse())
 	})
 
@@ -186,7 +254,7 @@ var _ = Describe("Check Update Nodes", func() {
 				InstanceState:          spannerv1beta1.InstanceStateReady,
 			},
 		}
-		got := testReconciler.needUpdateProcessingUnits(testReconciler.log, sa, sa.Status.DesiredProcessingUnits, fakeTime)
+		got := testReconciler.needUpdateProcessingUnits(testReconciler.log, sa, sa.Status.DesiredProcessingUnits, fakeTime, scaling.ResolvedScaleConfig{})
 		Expect(got).To(BeTrue())
 	})
 
@@ -199,7 +267,7 @@ var _ = Describe("Check Update Nodes", func() {
 				InstanceState:          spannerv1beta1.InstanceStateReady,
 			},
 		}
-		got := testReconciler.needUpdateProcessingUnits(testReconciler.log, sa, sa.Status.DesiredProcessingUnits, fakeTime)
+		got := testReconciler.needUpdateProcessingUnits(testReconciler.log, sa, sa.Status.DesiredProcessingUnits, fakeTime, scaling.ResolvedScaleConfig{})
 		Expect(got).To(BeFalse())
 	})
 })

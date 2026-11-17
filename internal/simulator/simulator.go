@@ -220,12 +220,21 @@ func Run(cfg Config, points []Point) (*Result, error) {
 		sa.Status.CurrentlyActiveSchedules = active
 		setStatusCPU(sa, flags, simHigh, simTotal)
 
-		minPU, maxPU, _, _ := scaling.DesiredPURange(*sa)
+		// The controller keeps running on the fail-safe config when the
+		// overrides cannot be resolved; a replay should fail loudly instead.
+		resolved, err := scaling.ResolveScaleConfig(sa.Spec.ScaleConfig, now)
+		if err != nil {
+			return nil, fmt.Errorf("invalid time-based override configuration: %w", err)
+		}
+		effective := scaling.WithScaleConfig(*sa, resolved.ScaleConfig)
+
+		minPU, maxPU, _, _ := scaling.DesiredPURange(effective)
 		sa.Status.DesiredMinPUs = minPU
 		sa.Status.DesiredMaxPUs = maxPU
+		effective.Status = sa.Status
 
-		desired := scaling.DesiredProcessingUnits(*sa)
-		decision, err := scaling.Decide(sa, desired, now, scaleUpInterval, scaleDownInterval)
+		desired := scaling.DesiredProcessingUnits(effective)
+		decision, err := scaling.Decide(&effective, desired, now, resolved.ScaledownPolicy, scaleUpInterval, scaleDownInterval)
 		if err != nil {
 			return nil, fmt.Errorf("invalid scale-down time restriction configuration: %w", err)
 		}
