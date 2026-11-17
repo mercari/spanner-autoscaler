@@ -380,9 +380,11 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 	// are reflected in /metrics instead of leaving the previous values stuck.
 	// sa is mutated throughout Reconcile; capturing &sa here lets the defer see
 	// the final state at return time.
-	// Replaced below once the time-based override for this reconcile is known.
-	effectiveTarget := sa.Spec.ScaleConfig.TargetCPUUtilization
-	defer func() { observability.RecordState(&sa, effectiveTarget) }()
+	// Resolved before any early return so the target gauge keeps reporting
+	// the overridden target while, for example, the instance is not ready.
+	now := r.clock.Now()
+	resolved := r.resolveTimeBasedOverride(log, &sa, now)
+	defer func() { observability.RecordState(&sa, resolved.ScaleConfig.TargetCPUUtilization) }()
 
 	credentials, err := r.fetchCredentials(ctx, &sa)
 	if err != nil {
@@ -470,12 +472,9 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 		return result, err
 	}
 
-	now := r.clock.Now()
-	resolved := r.resolveTimeBasedOverride(log, &sa, now)
 	previousOverride := sa.Status.CurrentTimeBasedOverride
 	sa.Status.CurrentTimeBasedOverride = resolved.OverrideName
 	statusChanged = statusChanged || previousOverride != resolved.OverrideName
-	effectiveTarget = resolved.ScaleConfig.TargetCPUUtilization
 
 	if minPU, maxPU, updated, capped := calcDesiredPURange(scaling.WithScaleConfig(sa, resolved.ScaleConfig)); updated {
 		sa.Status.DesiredMinPUs = minPU
@@ -512,10 +511,10 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 		// Normalise to 0 for the log so consumers see "metric not active" as
 		// an explicit zero rather than tripping on a nil deref.
 		var highPriorityTarget, totalTarget int
-		if p := effectiveTarget.HighPriority; p != nil {
+		if p := resolved.ScaleConfig.TargetCPUUtilization.HighPriority; p != nil {
 			highPriorityTarget = *p
 		}
-		if p := effectiveTarget.Total; p != nil {
+		if p := resolved.ScaleConfig.TargetCPUUtilization.Total; p != nil {
 			totalTarget = *p
 		}
 		// For logging only: summarize the schedules currently in effect.
@@ -846,7 +845,7 @@ func (r *SpannerAutoscalerReconciler) resolveTimeBasedOverride(log logr.Logger, 
 		log.Error(err, "Failed to resolve time-based override, scale down is denied")
 		r.recorder.Event(sa, corev1.EventTypeWarning, "InvalidTimeBasedOverride", err.Error())
 	}
-	observability.RecordTimeBasedOverride(observability.LabelsForAutoscaler(sa), sa.Status.CurrentTimeBasedOverride, resolved.OverrideName)
+	observability.RecordTimeBasedOverride(observability.LabelsForAutoscaler(sa), resolved.OverrideName)
 	return resolved
 }
 

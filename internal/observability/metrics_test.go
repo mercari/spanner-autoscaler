@@ -458,13 +458,15 @@ func TestRecordTimeBasedOverride(t *testing.T) {
 	series := func() int { return testutil.CollectAndCount(timeBasedOverrideActive) }
 	before := series()
 
-	RecordTimeBasedOverride(l, "", "night")
+	RecordTimeBasedOverride(l, "night")
 	if got := testutil.ToFloat64(timeBasedOverrideActive.WithLabelValues(l.withExtra("night")...)); got != 1 {
 		t.Errorf("night = %v; want 1", got)
 	}
 
-	RecordTimeBasedOverride(l, "night", "night")
-	RecordTimeBasedOverride(l, "night", "daytime")
+	// Switching twice without a persisted status in between must not leave
+	// the intermediate override behind.
+	RecordTimeBasedOverride(l, "morning")
+	RecordTimeBasedOverride(l, "daytime")
 	if got := series() - before; got != 1 {
 		t.Errorf("series after switching = %d; want 1 (only daytime)", got)
 	}
@@ -472,7 +474,7 @@ func TestRecordTimeBasedOverride(t *testing.T) {
 		t.Errorf("daytime = %v; want 1", got)
 	}
 
-	RecordTimeBasedOverride(l, "daytime", "")
+	RecordTimeBasedOverride(l, "")
 	if got := series() - before; got != 0 {
 		t.Errorf("series after leaving every override = %d; want 0", got)
 	}

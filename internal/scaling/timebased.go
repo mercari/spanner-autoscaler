@@ -56,22 +56,29 @@ func ResolveScaleConfig(sc spannerv1beta1.ScaleConfig, now time.Time) (ResolvedS
 		return failSafe, errors.New("timeBasedOverrides cannot be used together with scaledownAllowedTimes or scaledownNotAllowedTimes")
 	}
 
-	for _, o := range overrides {
-		matched, err := matchesAnyCron(o.Times, now)
+	// Every entry is checked, not only those up to the first match, so an
+	// invalid entry is reported at every minute rather than only when an
+	// earlier entry does not match.
+	matched := -1
+	for i, o := range overrides {
+		m, err := matchesAnyCron(o.Times, now)
 		if err != nil {
 			return failSafe, fmt.Errorf("timeBasedOverrides %q: %w", o.Name, err)
 		}
-		if !matched {
-			continue
+		if m && matched < 0 {
+			matched = i
 		}
-		resolved, err := applyOverride(base, o)
-		if err != nil {
-			return failSafe, fmt.Errorf("timeBasedOverrides %q: %w", o.Name, err)
-		}
-		return ResolvedScaleConfig{ScaleConfig: resolved, OverrideName: o.Name, ScaledownPolicy: o.ScaledownPolicy}, nil
+	}
+	if matched < 0 {
+		return ResolvedScaleConfig{ScaleConfig: base}, nil
 	}
 
-	return ResolvedScaleConfig{ScaleConfig: base}, nil
+	o := overrides[matched]
+	resolved, err := applyOverride(base, o)
+	if err != nil {
+		return failSafe, fmt.Errorf("timeBasedOverrides %q: %w", o.Name, err)
+	}
+	return ResolvedScaleConfig{ScaleConfig: resolved, OverrideName: o.Name, ScaledownPolicy: o.ScaledownPolicy}, nil
 }
 
 func applyOverride(sc spannerv1beta1.ScaleConfig, o spannerv1beta1.TimeBasedOverride) (spannerv1beta1.ScaleConfig, error) {
@@ -81,6 +88,9 @@ func applyOverride(sc spannerv1beta1.ScaleConfig, o spannerv1beta1.TimeBasedOver
 		}
 		if pu.Max != nil {
 			sc.ProcessingUnits.Max = *pu.Max
+		}
+		if (pu.Min != nil && *pu.Min < minProcessingUnits) || (pu.Max != nil && *pu.Max < minProcessingUnits) {
+			return sc, fmt.Errorf("processingUnits must be at least %d", minProcessingUnits)
 		}
 		if sc.ProcessingUnits.Min > sc.ProcessingUnits.Max {
 			return sc, fmt.Errorf("processingUnits.min %d is greater than processingUnits.max %d", sc.ProcessingUnits.Min, sc.ProcessingUnits.Max)
@@ -120,23 +130,28 @@ func applyOverride(sc spannerv1beta1.ScaleConfig, o spannerv1beta1.TimeBasedOver
 	return sc, nil
 }
 
+// minProcessingUnits is the smallest compute capacity of a Spanner instance.
+const minProcessingUnits = 100
+
 // matchesAnyCron is isTimeInCronSchedules without skipping invalid
 // expressions: an override silently not matching would fall through to a
-// later, possibly less restrictive, one.
+// later, possibly less restrictive, one. Every expression is parsed even
+// after a match for the same reason.
 func matchesAnyCron(exprs []string, now time.Time) (bool, error) {
 	if len(exprs) == 0 {
 		return false, errors.New("times is empty")
 	}
+	matched := false
 	for _, expr := range exprs {
 		schedule, err := cron.Parse(expr)
 		if err != nil {
 			return false, fmt.Errorf("invalid cron expression %q: %w", expr, err)
 		}
 		if schedule.Next(now.Add(-time.Minute)).Truncate(time.Minute).Equal(now.Truncate(time.Minute)) {
-			return true, nil
+			matched = true
 		}
 	}
-	return false, nil
+	return matched, nil
 }
 
 // WithScaleConfig returns a shallow copy of sa whose spec.scaleConfig is

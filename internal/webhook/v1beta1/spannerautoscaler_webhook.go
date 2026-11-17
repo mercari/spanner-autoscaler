@@ -404,17 +404,20 @@ func validateTimeBasedOverride(sc spannerv1beta1.ScaleConfig, o spannerv1beta1.T
 
 func validateOverridePUs(base spannerv1beta1.ScaleConfigPUs, pu spannerv1beta1.TimeBasedOverridePUs, p *field.Path) (allErrs field.ErrorList) {
 	effMin, effMax := base.Min, base.Max
-	if pu.Min != nil {
-		if err := validateProcessingUnits(*pu.Min, p.Child("min")); err != nil {
+	for _, bound := range []struct {
+		name      string
+		value     *int
+		effective *int
+	}{{"min", pu.Min, &effMin}, {"max", pu.Max, &effMax}} {
+		if bound.value == nil {
+			continue
+		}
+		if *bound.value < 100 {
+			allErrs = append(allErrs, field.Invalid(p.Child(bound.name), *bound.value, "must be at least 100"))
+		} else if err := validateProcessingUnits(*bound.value, p.Child(bound.name)); err != nil {
 			allErrs = append(allErrs, err)
 		}
-		effMin = *pu.Min
-	}
-	if pu.Max != nil {
-		if err := validateProcessingUnits(*pu.Max, p.Child("max")); err != nil {
-			allErrs = append(allErrs, err)
-		}
-		effMax = *pu.Max
+		*bound.effective = *bound.value
 	}
 	if effMin > effMax {
 		allErrs = append(allErrs, field.Invalid(p, fmt.Sprintf("min=%d, max=%d", effMin, effMax),

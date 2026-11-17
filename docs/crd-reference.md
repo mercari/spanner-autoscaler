@@ -632,7 +632,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `min` _integer_ | Replaces processingUnits.min |  | MultipleOf: 100 <br />Optional: \{\} <br /> |
-| `max` _integer_ | Replaces processingUnits.max |  | MultipleOf: 100 <br />Optional: \{\} <br /> |
+| `min` _integer_ | Replaces processingUnits.min |  | Minimum: 100 <br />MultipleOf: 100 <br />Optional: \{\} <br /> |
+| `max` _integer_ | Replaces processingUnits.max |  | Minimum: 100 <br />MultipleOf: 100 <br />Optional: \{\} <br /> |
 
 

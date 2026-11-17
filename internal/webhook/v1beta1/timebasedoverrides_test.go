@@ -147,6 +147,19 @@ func TestValidateTimeBasedOverrides(t *testing.T) {
 			},
 		},
 		{
+			name: "processing units below 100",
+			modify: func(sc *spannerv1beta1.ScaleConfig) {
+				sc.ProcessingUnits.Min = 100
+				sc.TimeBasedOverrides = []spannerv1beta1.TimeBasedOverride{override(func(o *spannerv1beta1.TimeBasedOverride) {
+					o.ProcessingUnits = &spannerv1beta1.TimeBasedOverridePUs{Min: new(-100), Max: new(0)}
+				})}
+			},
+			wantErrs: []string{
+				"timeBasedOverrides[0].processingUnits.min: Invalid value: -100: must be at least 100",
+				"timeBasedOverrides[0].processingUnits.max: Invalid value: 0: must be at least 100",
+			},
+		},
+		{
 			name: "invalid targets",
 			modify: func(sc *spannerv1beta1.ScaleConfig) {
 				sc.TimeBasedOverrides = []spannerv1beta1.TimeBasedOverride{

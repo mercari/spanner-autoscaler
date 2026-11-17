@@ -230,11 +230,13 @@ type TimeBasedOverridePUs struct {
 	// Replaces processingUnits.min
 	// +optional
 	// +kubebuilder:validation:MultipleOf=100
+	// +kubebuilder:validation:Minimum=100
 	Min *int `json:"min,omitempty"`
 
 	// Replaces processingUnits.max
 	// +optional
 	// +kubebuilder:validation:MultipleOf=100
+	// +kubebuilder:validation:Minimum=100
 	Max *int `json:"max,omitempty"`
 }
 

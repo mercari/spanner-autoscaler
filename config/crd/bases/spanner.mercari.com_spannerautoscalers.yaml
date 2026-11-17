@@ -478,10 +478,12 @@ spec:
                           properties:
                             max:
                               description: Replaces processingUnits.max
+                              minimum: 100
                               multipleOf: 100
                               type: integer
                             min:
                               description: Replaces processingUnits.min
+                              minimum: 100
                               multipleOf: 100
                               type: integer
                           type: object

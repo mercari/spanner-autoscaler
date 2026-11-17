@@ -176,6 +176,33 @@ func TestResolveScaleConfig(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name: "processing units below the instance minimum",
+			sc: withOverrides(spannerv1beta1.TimeBasedOverride{
+				Name: "m", Times: []string{"* * * * *"}, ProcessingUnits: &spannerv1beta1.TimeBasedOverridePUs{Min: new(-100), Max: new(-100)},
+			}),
+			now:     time.Date(2026, 11, 17, 3, 0, 0, 0, jst),
+			want:    ResolvedScaleConfig{ScaleConfig: baseScaleConfig(), ScaledownPolicy: spannerv1beta1.ScaledownPolicyDeny},
+			wantErr: true,
+		},
+		{
+			name: "invalid expression after a matching one",
+			sc: withOverrides(spannerv1beta1.TimeBasedOverride{
+				Name: "allow", Times: []string{"* * * * *", "bad"}, ScaledownPolicy: spannerv1beta1.ScaledownPolicyAllow,
+			}),
+			now:     time.Date(2026, 11, 17, 3, 0, 0, 0, jst),
+			want:    ResolvedScaleConfig{ScaleConfig: baseScaleConfig(), ScaledownPolicy: spannerv1beta1.ScaledownPolicyDeny},
+			wantErr: true,
+		},
+		{
+			name: "invalid entry after the matching one",
+			sc: withOverrides(night, spannerv1beta1.TimeBasedOverride{
+				Name: "broken", Times: []string{"bad"}, ScaledownPolicy: spannerv1beta1.ScaledownPolicyDeny,
+			}),
+			now:     time.Date(2026, 11, 17, 3, 0, 0, 0, jst),
+			want:    ResolvedScaleConfig{ScaleConfig: baseScaleConfig(), ScaledownPolicy: spannerv1beta1.ScaledownPolicyDeny},
+			wantErr: true,
+		},
+		{
 			name: "min above max after the override",
 			sc: withOverrides(spannerv1beta1.TimeBasedOverride{
 				Name: "m", Times: []string{"* * * * *"}, ProcessingUnits: &spannerv1beta1.TimeBasedOverridePUs{Max: new(10000)},

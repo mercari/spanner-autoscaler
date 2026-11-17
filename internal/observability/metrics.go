@@ -429,12 +429,10 @@ func RecordState(sa *spannerv1beta1.SpannerAutoscaler, target spannerv1beta1.Tar
 }
 
 // RecordTimeBasedOverride exposes the time-based override applied in the
-// latest reconcile. previous is the override reported before, so its series
-// can be removed when the override changes; "" means none.
-func RecordTimeBasedOverride(l Labels, previous, current string) {
-	if previous != "" && previous != current {
-		timeBasedOverrideActive.DeleteLabelValues(l.withExtra(previous)...)
-	}
+// latest reconcile; "" means none. Every other override series of this
+// autoscaler is removed, independently of what status last persisted.
+func RecordTimeBasedOverride(l Labels, current string) {
+	timeBasedOverrideActive.DeletePartialMatch(l.partialMatch())
 	if current != "" {
 		timeBasedOverrideActive.WithLabelValues(l.withExtra(current)...).Set(1)
 	}
