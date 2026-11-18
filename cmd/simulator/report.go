@@ -83,6 +83,7 @@ type refView struct {
 type seriesView struct {
 	Color      template.CSS
 	Band, Line string // SVG path data; Band may be empty
+	Ref        bool
 }
 
 type bucketRowView struct {
@@ -157,8 +158,8 @@ type recommendPage struct {
 // writeSimulateHTML renders the full report for one simulation run: KPI row,
 // the recorded-vs-simulated PU timeline (emphasis form: the simulation in the
 // accent hue, the recording as gray context), the simulated CPU timeline with
-// target reference lines, the min-PU assessment, and the scale-event table.
-func writeSimulateHTML(w io.Writer, result *simulator.Result, targetHigh, targetTotal int) error {
+// its targets, the min-PU assessment, and the scale-event table.
+func writeSimulateHTML(w io.Writer, result *simulator.Result) error {
 	s := result.Summary
 	days := max(s.End.Sub(s.Start).Hours()/24, 1)
 
@@ -192,7 +193,7 @@ func writeSimulateHTML(w io.Writer, result *simulator.Result, targetHigh, target
 		Verdict: buildVerdict("this config", s),
 	}
 
-	page.Charts = buildResultCharts(result, targetHigh, targetTotal,
+	page.Charts = buildResultCharts(result,
 		"Processing units — simulated vs recorded", "Simulated CPU utilization")
 
 	for _, e := range result.Events {
@@ -215,7 +216,7 @@ func writeSimulateHTML(w io.Writer, result *simulator.Result, targetHigh, target
 // topResult, when non-nil, is a full re-run of the recommended candidate; its
 // PU/CPU timelines are embedded so the recommendation can be judged from the
 // simulated behavior, not only from aggregate numbers.
-func writeRecommendHTML(w io.Writer, current, displayCurrent map[string]string, base simulator.Summary, candidates []simulator.Candidate, savingsTolerance float64, maxChanges int, topResult *simulator.Result, topTargetHigh, topTargetTotal int) error {
+func writeRecommendHTML(w io.Writer, current, displayCurrent map[string]string, base simulator.Summary, candidates []simulator.Candidate, savingsTolerance float64, maxChanges int, topResult *simulator.Result) error {
 	feasibleCount := 0
 	for i := range candidates {
 		if candidates[i].Feasible {
@@ -239,7 +240,7 @@ func writeRecommendHTML(w io.Writer, current, displayCurrent map[string]string, 
 		Verdicts: []verdictView{buildVerdict("base", base)},
 	}
 	if topResult != nil {
-		page.Charts = buildResultCharts(topResult, topTargetHigh, topTargetTotal,
+		page.Charts = buildResultCharts(topResult,
 			"Processing units — recommended candidate (simulated) vs recorded",
 			"CPU utilization — recommended candidate (simulated)")
 	}
@@ -294,9 +295,8 @@ func writeRecommendHTML(w io.Writer, current, displayCurrent map[string]string, 
 }
 
 // buildResultCharts renders one run as the two report timelines: simulated
-// versus recorded processing units, and the simulated CPU with its targets
-// as reference lines.
-func buildResultCharts(result *simulator.Result, targetHigh, targetTotal int, puTitle, cpuTitle string) []lineChartView {
+// versus recorded processing units, and the simulated CPU with its targets.
+func buildResultCharts(result *simulator.Result, puTitle, cpuTitle string) []lineChartView {
 	times, simPU := downsample(result.Points, buckets, func(p simulator.SimPoint) (float64, bool) {
 		return float64(p.SimPU), true
 	})
@@ -312,20 +312,45 @@ func buildResultCharts(result *simulator.Result, targetHigh, targetTotal int, pu
 	var refs []refLine
 	if _, hp := downsample(result.Points, buckets, simHighCPU); hasData(hp) {
 		cpuSeries = append(cpuSeries, tsSeries{Name: "high-priority (simulated)", Color: "var(--series-1)", Buckets: hp})
-		if targetHigh > 0 {
-			refs = append(refs, refLine{Y: float64(targetHigh), Label: fmt.Sprintf("high-pri target %d%%", targetHigh)})
-		}
+		cpuSeries, refs = appendTarget(cpuSeries, refs, result.Points, "high-pri target",
+			func(p simulator.SimPoint) int { return p.TargetHighCPU })
 	}
 	if _, tt := downsample(result.Points, buckets, simTotalCPU); hasData(tt) {
 		cpuSeries = append(cpuSeries, tsSeries{Name: "total (simulated)", Color: "var(--series-2)", Buckets: tt})
-		if targetTotal > 0 {
-			refs = append(refs, refLine{Y: float64(targetTotal), Label: fmt.Sprintf("total target %d%%", targetTotal)})
-		}
+		cpuSeries, refs = appendTarget(cpuSeries, refs, result.Points, "total target",
+			func(p simulator.SimPoint) int { return p.TargetTotalCPU })
 	}
 	if len(cpuSeries) > 0 {
 		charts = append(charts, buildLineChart(cpuTitle, "%", times, cpuSeries, refs))
 	}
 	return charts
+}
+
+// appendTarget adds the CPU target of one metric to a chart: a horizontal
+// reference line when it is the same at every tick, or a stepped series when
+// timeBasedOverrides change it, so CPU above the base target during an
+// override does not look like a breach.
+func appendTarget(series []tsSeries, refs []refLine, points []simulator.SimPoint, name string, target func(simulator.SimPoint) int) ([]tsSeries, []refLine) {
+	values := map[int]bool{}
+	for _, p := range points {
+		if t := target(p); t > 0 {
+			values[t] = true
+		}
+	}
+	switch len(values) {
+	case 0:
+		return series, refs
+	case 1:
+		for t := range values {
+			refs = append(refs, refLine{Y: float64(t), Label: fmt.Sprintf("%s %d%%", name, t)})
+		}
+		return series, refs
+	}
+	_, bs := downsample(points, buckets, func(p simulator.SimPoint) (float64, bool) {
+		t := target(p)
+		return float64(t), t > 0
+	})
+	return append(series, tsSeries{Name: name, Color: "var(--ref)", Buckets: bs, Ref: true}), refs
 }
 
 func buildVerdict(label string, s simulator.Summary) verdictView {
@@ -386,6 +411,7 @@ type tsSeries struct {
 	Name    string
 	Color   template.CSS
 	Buckets []tsBucket
+	Ref     bool // drawn like a reference line, without the min/max band
 }
 
 type refLine struct {
@@ -490,7 +516,10 @@ func buildLineChart(title, unit string, times []int64, series []tsSeries, refs [
 	}
 	for _, s := range series {
 		band, line := seriesPaths(s.Buckets, xAt, yAt)
-		view.Series = append(view.Series, seriesView{Color: s.Color, Band: band, Line: line})
+		if s.Ref {
+			band = ""
+		}
+		view.Series = append(view.Series, seriesView{Color: s.Color, Band: band, Line: line, Ref: s.Ref})
 	}
 	view.DataJSON = chartJSON(unit, times, series)
 

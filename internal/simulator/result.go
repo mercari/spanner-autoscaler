@@ -62,7 +62,12 @@ type SimPoint struct {
 	ActualTotalCPU *float64  `json:"actualTotalCPU,omitempty"`
 	SimHighCPU     *float64  `json:"simHighCPU,omitempty"`
 	SimTotalCPU    *float64  `json:"simTotalCPU,omitempty"`
-	Gap            bool      `json:"gap,omitzero"`
+	// TargetHighCPU and TargetTotalCPU are the targets the tick's decision
+	// used, after timeBasedOverrides; 0 for a metric without a target and on
+	// gap ticks.
+	TargetHighCPU  int  `json:"targetHighCPU,omitzero"`
+	TargetTotalCPU int  `json:"targetTotalCPU,omitzero"`
+	Gap            bool `json:"gap,omitzero"`
 }
 
 // CPUStats summarizes a simulated CPU utilization series (percentages).

@@ -244,12 +244,12 @@ func Run(cfg Config, points []Point) (*Result, error) {
 		}
 
 		sp.SimPU = simPU
-		result.Points = append(result.Points, sp)
 		// Judge the tick against the targets the decision above used, not
 		// the base ones, so CPU within an override's target is not counted
 		// as exceeded.
-		targetHigh, targetTotal := cpuTargets(resolved.ScaleConfig)
-		agg.observe(p, sp, targetHigh, targetTotal, minPU, puBefore, dt)
+		sp.TargetHighCPU, sp.TargetTotalCPU = cpuTargets(resolved.ScaleConfig)
+		result.Points = append(result.Points, sp)
+		agg.observe(p, sp, sp.TargetHighCPU, sp.TargetTotalCPU, minPU, puBefore, dt)
 	}
 
 	result.Summary = agg.summary(points[0].Time, points[len(points)-1].Time, result.Events)

@@ -223,6 +223,13 @@ func TestRunSummaryUsesOverrideTarget(t *testing.T) {
 		if got := result.Summary.TargetExceededMinutes; got != 60 {
 			t.Errorf("TargetExceededMinutes = %.0f; want 60 (only the base-config hour)", got)
 		}
+		// The points carry the target each tick used, for the report charts.
+		if got := result.Points[0].TargetHighCPU; got != 70 {
+			t.Errorf("Points[0].TargetHighCPU = %d; want 70 (override)", got)
+		}
+		if got := result.Points[60].TargetHighCPU; got != 50 {
+			t.Errorf("Points[60].TargetHighCPU = %d; want 50 (base)", got)
+		}
 	})
 
 	t.Run("required PU uses the override target", func(t *testing.T) {
