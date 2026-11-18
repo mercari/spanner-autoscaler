@@ -66,7 +66,7 @@ spec:
 
 When the current processing units are above the max, the controller scales down to it in `scaledownStepSize` steps. This happens when `spec.processingUnits.max` is lowered, an `Exceed` schedule ends, a `SpannerManualScaling` with a target above the max ends, or the instance was resized outside the controller. `scaledownInterval` and the scale-down time restrictions apply as for any other scale down, so until the steps reach the max, the instance runs above it. With a small step, a long interval or wide `scaledownNotAllowedTimes`, this can take hours or days.
 
-- Each step is an ordinary scale down: it emits the usual `Updated` event and counts in `spanner_autoscaler_scale_events_total` under the CPU metric's `driver`. To see or alert while the instance is above its max, compare `spanner_autoscaler_current_processing_units` with `spanner_autoscaler_effective_max_processing_units` (see the example PromQL below).
+- Each step is an ordinary scale down: it emits the usual `Updated` event and counts in `spanner_autoscaler_scale_events_total` under the CPU metric's `driver`, or under `schedule` when the step lands on a minimum raised by a schedule (for example the last step when a `Cap` schedule has raised the min to the max). To see or alert while the instance is above its max, compare `spanner_autoscaler_current_processing_units` with `spanner_autoscaler_effective_max_processing_units`, ignoring a zero effective max (see the example PromQL below).
 - To reach the max sooner, raise `scaledownStepSize` for the transition, or use a `SpannerManualScaling` to set the processing units directly.
 
 > **Note:** When multiple schedules are active simultaneously (i.e. their windows overlap), the `additionalProcessingUnits` from all active schedules are **summed**: every active schedule contributes to `desiredMinPUs`, while only schedules with `maxPUPolicy: Exceed` (or unset) contribute to `desiredMaxPUs`. For example, if schedule A adds +1,000 PU and schedule B adds +5,000 PU and both are active at the same time, `desiredMinPUs = spec.processingUnits.min + 6,000`.
@@ -543,7 +543,7 @@ The endpoint can be scraped by Prometheus (`ServiceMonitor` / `PodMonitor`), the
 
 | Name | Type | Extra labels | Description |
 |---|---|---|---|
-| `spanner_autoscaler_scale_events_total` | Counter | `direction=up\|down`, `driver=cpu_high_priority\|cpu_total\|schedule\|manual_immediate\|manual_ramp` | Successful processing-units updates. The `driver` label is a best-effort attribution to the metric (or schedule floor) that drove the decision. A step down toward a max below the current processing units is attributed to the CPU metric. |
+| `spanner_autoscaler_scale_events_total` | Counter | `direction=up\|down`, `driver=cpu_high_priority\|cpu_total\|schedule\|manual_immediate\|manual_ramp` | Successful processing-units updates. The `driver` label is a best-effort attribution to the metric (or schedule floor) that drove the decision. A step down toward a max below the current processing units is attributed to the CPU metric, or to `schedule` when it lands on a schedule-raised minimum. |
 | `spanner_autoscaler_scale_skipped_total` | Counter | `reason` | Reconciles where scaling was skipped. Reasons: `same`, `scale_up_interval`, `scale_down_interval`, `scale_down_window`, `instance_not_ready`, `cpu_not_ready`. |
 | `spanner_autoscaler_scale_pu_delta` | Histogram | `direction=up\|down` | Absolute processing-units change per scale event. Buckets: 100, 200, 500, 1000, 2000, 5000, 10000, 20000. |
 
@@ -583,7 +583,9 @@ sum by (driver) (rate(spanner_autoscaler_scale_events_total{direction="up"}[1h])
 histogram_quantile(0.99, sum by (le) (rate(spanner_autoscaler_metrics_fetch_duration_seconds_bucket[5m])))
 
 # Autoscalers running above their effective max (stepping down to a lowered max).
+# The effective max is 0 while a SpannerManualScaling is active, so exclude it.
 spanner_autoscaler_current_processing_units > spanner_autoscaler_effective_max_processing_units
+  and spanner_autoscaler_effective_max_processing_units > 0
 
 # Autoscalers pinned at their effective max for 5+ minutes.
 max_over_time(

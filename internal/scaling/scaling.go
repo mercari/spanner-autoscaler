@@ -96,8 +96,8 @@ func DesiredProcessingUnits(sa spannerv1beta1.SpannerAutoscaler) int {
 // PU is above the max (a lowered spec.processingUnits.max, the end of an
 // Exceed schedule, the end of a SpannerManualScaling above the max, or an
 // out-of-band resize): then the scale-down step limit wins, and the result is
-// current - scaledownStepSize, which can still be above the max. Callers must
-// not assume result <= max.
+// the larger of the max and current - scaledownStepSize, so it can still be
+// above the max. Callers must not assume result <= max.
 func DesiredPUFromCPU(currentCPU, targetCPU int, sa spannerv1beta1.SpannerAutoscaler) int {
 	if targetCPU == 0 {
 		return sa.Status.CurrentProcessingUnits
