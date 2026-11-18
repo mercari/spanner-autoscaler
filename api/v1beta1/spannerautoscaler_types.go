@@ -156,6 +156,88 @@ type ScaleConfig struct {
 
 	// The CPU utilization which the autoscaling will try to achieve. Ref: [Spanner CPU utilization](https://cloud.google.com/spanner/docs/cpu-utilization#task-priority)
 	TargetCPUUtilization TargetCPUUtilization `json:"targetCPUUtilization"`
+
+	// Overrides of this scale config that apply during specific time periods.
+	// The overrides are evaluated in order and only the first one whose `times` match the current minute is applied;
+	// fields omitted in that override keep the values above. Outside every override, the values above are used as is.
+	// Cannot be used together with scaledownAllowedTimes or scaledownNotAllowedTimes:
+	// restrict scale down with `scaledownPolicy` instead.
+	// +optional
+	TimeBasedOverrides []TimeBasedOverride `json:"timeBasedOverrides,omitempty"`
+}
+
+// ScaledownPolicy controls whether scale down is allowed while a time-based override applies.
+// +kubebuilder:validation:Enum=Allow;Deny
+type ScaledownPolicy string
+
+const (
+	// ScaledownPolicyAllow allows scale down, the same as when no policy is set.
+	ScaledownPolicyAllow ScaledownPolicy = "Allow"
+	// ScaledownPolicyDeny prevents scale down. Scale up is not affected.
+	ScaledownPolicyDeny ScaledownPolicy = "Deny"
+)
+
+// TimeBasedOverride replaces part of the scale config during the time periods given in `times`.
+// Every field other than `name` and `times` is optional and replaces the field of the same name in the scale config.
+type TimeBasedOverride struct {
+	// Name of the override, shown in status, events, logs and metrics. Must be unique within the list.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	Name string `json:"name"`
+
+	// Time periods in which this override applies, in the same cron format as scaledownAllowedTimes.
+	// Each expression is matched per minute; `CRON_TZ=` can be used to set the time zone.
+	// To apply an override to every minute not covered by earlier overrides, use "* * * * *".
+	// +kubebuilder:validation:MinItems=1
+	Times []string `json:"times"`
+
+	// Replaces processingUnits.min and/or processingUnits.max.
+	// Additional processing units of active `SpannerAutoscaleSchedule`s are added to the replaced values.
+	// A max below the current processing units is applied at once, not limited by scaledownStepSize.
+	// +optional
+	ProcessingUnits *TimeBasedOverridePUs `json:"processingUnits,omitempty"`
+
+	// Replaces targetCPUUtilization.highPriority and/or targetCPUUtilization.total.
+	// Only metrics that are set in the scale config can be overridden.
+	// The target applies to both scale up and scale down.
+	// +optional
+	TargetCPUUtilization *TargetCPUUtilization `json:"targetCPUUtilization,omitempty"`
+
+	// Replaces scaledownStepSize.
+	// +optional
+	ScaledownStepSize *intstr.IntOrString `json:"scaledownStepSize,omitempty"`
+
+	// Replaces scaledownInterval.
+	// +optional
+	ScaledownInterval *metav1.Duration `json:"scaledownInterval,omitempty"`
+
+	// Replaces scaleupStepSize.
+	// +optional
+	ScaleupStepSize *intstr.IntOrString `json:"scaleupStepSize,omitempty"`
+
+	// Replaces scaleupInterval.
+	// +optional
+	ScaleupInterval *metav1.Duration `json:"scaleupInterval,omitempty"`
+
+	// `Deny` prevents scale down while this override applies. `Allow`, or omitting the field, allows it.
+	// An override with only `scaledownPolicy: Allow` is useful to exempt a period from a later `Deny` override.
+	// +optional
+	ScaledownPolicy ScaledownPolicy `json:"scaledownPolicy,omitempty"`
+}
+
+// TimeBasedOverridePUs replaces the processing unit range of the scale config.
+type TimeBasedOverridePUs struct {
+	// Replaces processingUnits.min
+	// +optional
+	// +kubebuilder:validation:MultipleOf=100
+	// +kubebuilder:validation:Minimum=100
+	Min *int `json:"min,omitempty"`
+
+	// Replaces processingUnits.max
+	// +optional
+	// +kubebuilder:validation:MultipleOf=100
+	// +kubebuilder:validation:Minimum=100
+	Max *int `json:"max,omitempty"`
 }
 
 // Compute capacity in terms of Nodes
@@ -370,6 +452,11 @@ type SpannerAutoscalerStatus struct {
 	// normal (CPU- and schedule-driven) autoscaling is in effect.
 	// +optional
 	ActiveManualScaling *ActiveManualScaling `json:"activeManualScaling,omitempty"`
+
+	// Name of the entry of spec.scaleConfig.timeBasedOverrides applied in the last reconcile.
+	// Empty when no override applied.
+	// +optional
+	CurrentTimeBasedOverride string `json:"currentTimeBasedOverride,omitempty"`
 }
 
 //+kubebuilder:object:root=true
@@ -387,6 +474,7 @@ type SpannerAutoscalerStatus struct {
 //+kubebuilder:printcolumn:name="Current CPU Total",type="integer",JSONPath=".status.currentTotalCPUUtilization"
 //+kubebuilder:printcolumn:name="Manual PU",type="integer",JSONPath=".status.activeManualScaling.processingUnits"
 //+kubebuilder:printcolumn:name="Manual Ramp",type="boolean",JSONPath=".status.activeManualScaling.ramp"
+//+kubebuilder:printcolumn:name="Override",type="string",JSONPath=".status.currentTimeBasedOverride"
 //+kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 
 // SpannerAutoscaler is the Schema for the spannerautoscalers API

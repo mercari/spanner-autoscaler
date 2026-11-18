@@ -232,6 +232,7 @@ _Appears in:_
 | `scaledownAllowedTimes` _string array_ | Scale down is allowed only during the time periods specified in standard cron format.<br />Multiple cron expressions can be specified to handle complex time ranges including periods that cross midnight.<br />If not specified, scale down is allowed at any time.<br />Examples:<br />  - ["* 2-4 * * *"] allows scale down from 2:00 AM to 4:59 AM daily<br />  - ["* 23 * * *", "* 0-5 * * *"] allows scale down from 11:00 PM to 5:59 AM daily (crossing midnight) |  | Optional: \{\} <br /> |
 | `scaledownNotAllowedTimes` _string array_ | Scale down is NOT allowed during the time periods specified in standard cron format.<br />Multiple cron expressions can be specified to handle complex time ranges including periods that cross midnight.<br />If not specified, scale down is allowed at any time (unless scaledownAllowedTimes is specified).<br />Cannot be used together with scaledownAllowedTimes - only one of the two fields can be specified.<br />Examples:<br />  - ["* 9-17 * * 1-5"] prevents scale down during business hours (9:00 AM to 5:59 PM on weekdays)<br />  - ["* 12-13 * * 1-5", "* 18-19 * * 1-5"] prevents scale down during lunch and evening peak hours |  | Optional: \{\} <br /> |
 | `targetCPUUtilization` _[TargetCPUUtilization](#targetcpuutilization)_ | The CPU utilization which the autoscaling will try to achieve. Ref: [Spanner CPU utilization](https://cloud.google.com/spanner/docs/cpu-utilization#task-priority) |  |  |
+| `timeBasedOverrides` _[TimeBasedOverride](#timebasedoverride) array_ | Overrides of this scale config that apply during specific time periods.<br />The overrides are evaluated in order and only the first one whose `times` match the current minute is applied;<br />fields omitted in that override keep the values above. Outside every override, the values above are used as is.<br />Cannot be used together with scaledownAllowedTimes or scaledownNotAllowedTimes:<br />restrict scale down with `scaledownPolicy` instead. |  | Optional: \{\} <br /> |
 
 
 #### ScaleConfigNodes
@@ -266,6 +267,24 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `min` _integer_ | Minimum number of Processing Units for the autoscaling range |  | MultipleOf: 100 <br /> |
 | `max` _integer_ | Maximum number of Processing Units for the autoscaling range |  | MultipleOf: 100 <br /> |
+
+
+#### ScaledownPolicy
+
+_Underlying type:_ _string_
+
+ScaledownPolicy controls whether scale down is allowed while a time-based override applies.
+
+_Validation:_
+- Enum: [Allow Deny]
+
+_Appears in:_
+- [TimeBasedOverride](#timebasedoverride)
+
+| Field | Description |
+| --- | --- |
+| `Allow` | ScaledownPolicyAllow allows scale down, the same as when no policy is set.<br /> |
+| `Deny` | ScaledownPolicyDeny prevents scale down. Scale up is not affected.<br /> |
 
 
 #### Schedule
@@ -399,6 +418,7 @@ _Appears in:_
 | `currentTotalCPUUtilization` _integer_ | Total CPU utilization (all priorities) of the busiest region, represented as a percentage.<br />Aggregated the same way as currentHighPriorityCPUUtilization.<br />This field is populated only when spec.scaleConfig.targetCPUUtilization.total is specified.<br />See the note on currentHighPriorityCPUUtilization for the consistency caveat in dual mode. |  |  |
 | `currentCPUMetricType` _[CPUMetricType](#cpumetrictype)_ | CurrentCPUMetricType is the CPU metric type that was used in the last sync cycle.<br />The controller uses this to detect metric-type switches and skip scaling until<br />the status reflects the newly configured metric type. |  | Enum: [HighPriority Total Both] <br /> |
 | `activeManualScaling` _[ActiveManualScaling](#activemanualscaling)_ | ActiveManualScaling references the `SpannerManualScaling` resource that<br />is currently overriding this autoscaler's processing units. Empty when<br />normal (CPU- and schedule-driven) autoscaling is in effect. |  | Optional: \{\} <br /> |
+| `currentTimeBasedOverride` _string_ | Name of the entry of spec.scaleConfig.timeBasedOverrides applied in the last reconcile.<br />Empty when no override applied. |  | Optional: \{\} <br /> |
 
 
 #### SpannerManualScaling
@@ -549,6 +569,7 @@ _Appears in:_
 
 _Appears in:_
 - [ScaleConfig](#scaleconfig)
+- [TimeBasedOverride](#timebasedoverride)
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
@@ -571,5 +592,47 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `projectId` _string_ | The GCP Project id of the Spanner instance |  |  |
 | `instanceId` _string_ | The instance id of the Spanner instance |  |  |
+
+
+#### TimeBasedOverride
+
+
+
+TimeBasedOverride replaces part of the scale config during the time periods given in `times`.
+Every field other than `name` and `times` is optional and replaces the field of the same name in the scale config.
+
+
+
+_Appears in:_
+- [ScaleConfig](#scaleconfig)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `name` _string_ | Name of the override, shown in status, events, logs and metrics. Must be unique within the list. |  | MaxLength: 63 <br />MinLength: 1 <br /> |
+| `times` _string array_ | Time periods in which this override applies, in the same cron format as scaledownAllowedTimes.<br />Each expression is matched per minute; `CRON_TZ=` can be used to set the time zone.<br />To apply an override to every minute not covered by earlier overrides, use "* * * * *". |  | MinItems: 1 <br /> |
+| `processingUnits` _[TimeBasedOverridePUs](#timebasedoverridepus)_ | Replaces processingUnits.min and/or processingUnits.max.<br />Additional processing units of active `SpannerAutoscaleSchedule`s are added to the replaced values.<br />A max below the current processing units is applied at once, not limited by scaledownStepSize. |  | Optional: \{\} <br /> |
+| `targetCPUUtilization` _[TargetCPUUtilization](#targetcpuutilization)_ | Replaces targetCPUUtilization.highPriority and/or targetCPUUtilization.total.<br />Only metrics that are set in the scale config can be overridden.<br />The target applies to both scale up and scale down. |  | Optional: \{\} <br /> |
+| `scaledownStepSize` _[IntOrString](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.22/#intorstring-intstr-util)_ | Replaces scaledownStepSize. |  | Optional: \{\} <br /> |
+| `scaledownInterval` _[Duration](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.22/#duration-v1-meta)_ | Replaces scaledownInterval. |  | Optional: \{\} <br /> |
+| `scaleupStepSize` _[IntOrString](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.22/#intorstring-intstr-util)_ | Replaces scaleupStepSize. |  | Optional: \{\} <br /> |
+| `scaleupInterval` _[Duration](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.22/#duration-v1-meta)_ | Replaces scaleupInterval. |  | Optional: \{\} <br /> |
+| `scaledownPolicy` _[ScaledownPolicy](#scaledownpolicy)_ | `Deny` prevents scale down while this override applies. `Allow`, or omitting the field, allows it.<br />An override with only `scaledownPolicy: Allow` is useful to exempt a period from a later `Deny` override. |  | Enum: [Allow Deny] <br />Optional: \{\} <br /> |
+
+
+#### TimeBasedOverridePUs
+
+
+
+TimeBasedOverridePUs replaces the processing unit range of the scale config.
+
+
+
+_Appears in:_
+- [TimeBasedOverride](#timebasedoverride)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `min` _integer_ | Replaces processingUnits.min |  | Minimum: 100 <br />MultipleOf: 100 <br />Optional: \{\} <br /> |
+| `max` _integer_ | Replaces processingUnits.max |  | Minimum: 100 <br />MultipleOf: 100 <br />Optional: \{\} <br /> |
 
 

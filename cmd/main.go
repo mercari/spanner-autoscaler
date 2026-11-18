@@ -88,6 +88,14 @@ var (
 			"is the full operational surface). Defaults to false (both "+
 			"directions allowed) for backwards compatibility.",
 	)
+	maxTimeBasedOverrides = flag.Int(
+		"max-time-based-overrides",
+		webhookv1beta1.DefaultMaxTimeBasedOverrides,
+		"Maximum number of spec.scaleConfig.timeBasedOverrides entries the "+
+			"validating webhook accepts per SpannerAutoscaler. 0 or less "+
+			"disables the limit. Lowering it does not affect scaling of existing "+
+			"resources, but updates to resources above the limit are rejected.",
+	)
 	manualScalingHistoryPerNamespace = flag.Int(
 		"manual-scaling-history-per-namespace",
 		0,
@@ -252,7 +260,10 @@ func main() {
 
 	//nolint:goconst
 	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
-		if err := webhookv1beta1.SetupSpannerAutoscalerWebhookWithManager(mgr); err != nil {
+		if err := webhookv1beta1.SetupSpannerAutoscalerWebhookWithManager(
+			mgr,
+			webhookv1beta1.WithMaxTimeBasedOverrides(*maxTimeBasedOverrides),
+		); err != nil {
 			setupLog.Error(err, "Failed to create webhook", "webhook", "SpannerAutoscaler")
 			os.Exit(1)
 		}

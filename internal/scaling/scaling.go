@@ -221,19 +221,24 @@ const (
 	// DecisionSkipScaleDownWindow means a scale-down is wanted but the
 	// current time is outside the allowed scale-down windows.
 	DecisionSkipScaleDownWindow
+	// DecisionSkipScaleDownPolicy means a scale-down is wanted but the
+	// time-based override in effect has scaledownPolicy: Deny.
+	DecisionSkipScaleDownPolicy
 )
 
 // Decide reports whether desiredPU may be applied at now, reproducing the
 // guard conditions of the controller's needUpdateProcessingUnits: equal-value
 // short circuit, per-direction cooldown intervals since
 // sa.Status.LastScaleTime, and the scale-down time-window restrictions.
+// sa must carry the scale config resolved by ResolveScaleConfig, and
+// scaledownPolicy the policy resolved with it.
 // defaultScaleUpInterval / defaultScaleDownInterval are the controller-level
 // defaults used when the spec does not override them.
 //
 // A non-nil error indicates an invalid time-restriction configuration; the
 // returned Decision is DecisionSkipScaleDownWindow in that case (the change
 // must not be applied).
-func Decide(sa *spannerv1beta1.SpannerAutoscaler, desiredPU int, now time.Time, defaultScaleUpInterval, defaultScaleDownInterval time.Duration) (Decision, error) {
+func Decide(sa *spannerv1beta1.SpannerAutoscaler, desiredPU int, now time.Time, scaledownPolicy spannerv1beta1.ScaledownPolicy, defaultScaleUpInterval, defaultScaleDownInterval time.Duration) (Decision, error) {
 	currentPU := sa.Status.CurrentProcessingUnits
 
 	switch {
@@ -245,6 +250,9 @@ func Decide(sa *spannerv1beta1.SpannerAutoscaler, desiredPU int, now time.Time, 
 
 	case desiredPU < currentPU && now.Before(sa.Status.LastScaleTime.Time.Add(DurationOr(sa.Spec.ScaleConfig.ScaledownInterval, defaultScaleDownInterval))):
 		return DecisionSkipScaleDownInterval, nil
+
+	case desiredPU < currentPU && scaledownPolicy == spannerv1beta1.ScaledownPolicyDeny:
+		return DecisionSkipScaleDownPolicy, nil
 
 	case desiredPU < currentPU:
 		allowed, err := IsScaledownAllowed(sa.Spec.ScaleConfig.ScaledownAllowedTimes, sa.Spec.ScaleConfig.ScaledownNotAllowedTimes, now)

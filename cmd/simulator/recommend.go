@@ -99,7 +99,11 @@ func runRecommend(args []string) error {
 	if *auto {
 		space.FillGuidelineStepCandidates(sa, common.scaleUpInterval, common.scaleDownInterval)
 		if len(space.MinPUs) == 0 {
-			space.MinPUs = simulator.MinPUCandidates(sa, points)
+			minPUs, err := simulator.MinPUCandidates(sa, points)
+			if err != nil {
+				return fmt.Errorf("auto-generating -min-pu candidates: %w", err)
+			}
+			space.MinPUs = minPUs
 			_, _ = fmt.Fprintf(os.Stderr, "auto-generated -min-pu candidates from the workload's required-PU percentiles: %v\n", space.MinPUs)
 		}
 	}
@@ -140,7 +144,6 @@ func runRecommend(args []string) error {
 		// the report — the aggregate numbers alone do not show how the PU and
 		// CPU would have moved under the recommended configuration.
 		var topResult *simulator.Result
-		var topHigh, topTotal int
 		if idx, _, _ := simulator.RecommendedIndex(baseResult.Summary, current, candidates, *savingsTolerance, *maxChanges); idx >= 0 && candidates[idx].Autoscaler != nil {
 			best := &candidates[idx]
 			topConfig := base
@@ -148,19 +151,13 @@ func runRecommend(args []string) error {
 			if topResult, err = simulator.Run(topConfig, points); err != nil {
 				return err
 			}
-			if t := best.Autoscaler.Spec.ScaleConfig.TargetCPUUtilization.HighPriority; t != nil {
-				topHigh = *t
-			}
-			if t := best.Autoscaler.Spec.ScaleConfig.TargetCPUUtilization.Total; t != nil {
-				topTotal = *t
-			}
 		}
 
 		f, err := os.Create(*htmlPath)
 		if err != nil {
 			return err
 		}
-		if err := writeRecommendHTML(f, current, displayCurrent, baseResult.Summary, candidates, *savingsTolerance, *maxChanges, topResult, topHigh, topTotal); err != nil {
+		if err := writeRecommendHTML(f, current, displayCurrent, baseResult.Summary, candidates, *savingsTolerance, *maxChanges, topResult); err != nil {
 			_ = f.Close()
 			return err
 		}

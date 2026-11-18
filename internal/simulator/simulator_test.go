@@ -152,6 +152,113 @@ func TestRunScaledownWindowAndStepSize(t *testing.T) {
 	}
 }
 
+func TestRunTimeBasedOverrides(t *testing.T) {
+	sa := newAutoscaler(1000, 10000, 40)
+	sa.Spec.ScaleConfig.ScaledownStepSize = intstr.FromInt(1000)
+	sa.Spec.ScaleConfig.ScaledownInterval = &metav1.Duration{Duration: 10 * time.Minute}
+	sa.Spec.ScaleConfig.TimeBasedOverrides = []spannerv1beta1.TimeBasedOverride{
+		{
+			Name:            "early",
+			Times:           []string{"* 12 * * *"},
+			ProcessingUnits: &spannerv1beta1.TimeBasedOverridePUs{Min: new(6000)},
+			ScaledownPolicy: spannerv1beta1.ScaledownPolicyDeny,
+		},
+		{
+			Name:              "window",
+			Times:             []string{"* 13-23 * * *"},
+			ScaledownStepSize: new(intstr.FromInt(2000)),
+		},
+	}
+
+	start := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	// Workload 400: 8% CPU at 5000 PU; 2000 PU is enough for target 40.
+	points := constantWorkloadPoints(start, 121, 5000, 400)
+
+	result, err := Run(Config{Autoscaler: sa}, points)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	windowOpen := time.Date(2026, 9, 1, 13, 0, 0, 0, time.UTC)
+	wantEvents := []Event{
+		// "early" raises the min and denies scale down.
+		{Time: start, FromPU: 5000, ToPU: 6000},
+		// "window" restores the base min and doubles the step size.
+		{Time: windowOpen, FromPU: 6000, ToPU: 4000},
+		{Time: windowOpen.Add(10 * time.Minute), FromPU: 4000, ToPU: 2000},
+	}
+	if len(result.Events) != len(wantEvents) {
+		t.Fatalf("events = %+v; want %+v", result.Events, wantEvents)
+	}
+	for i, want := range wantEvents {
+		got := result.Events[i]
+		if !got.Time.Equal(want.Time) || got.FromPU != want.FromPU || got.ToPU != want.ToPU {
+			t.Errorf("event[%d] = %+v; want %+v", i, got, want)
+		}
+	}
+}
+
+// TestRunSummaryUsesOverrideTarget checks that the summary judges each tick
+// against the target in effect, not the base target: CPU that is within an
+// override's target must not count as exceeded.
+func TestRunSummaryUsesOverrideTarget(t *testing.T) {
+	// min == max pins the instance at 1000 PU, so workload 650 runs at 65%
+	// CPU throughout: above the base target 50, below the override target 70.
+	sa := newAutoscaler(1000, 1000, 50)
+	sa.Spec.ScaleConfig.TimeBasedOverrides = []spannerv1beta1.TimeBasedOverride{
+		{
+			Name:                 "relaxed",
+			Times:                []string{"* 12 * * *"},
+			TargetCPUUtilization: &spannerv1beta1.TargetCPUUtilization{HighPriority: new(70)},
+		},
+	}
+	start := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+
+	t.Run("target exceeded only outside the override", func(t *testing.T) {
+		// 12:00-12:59 under the override, 13:00-13:59 under the base config.
+		result, err := Run(Config{Autoscaler: sa}, constantWorkloadPoints(start, 120, 1000, 650))
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if got := result.Summary.TargetExceededMinutes; got != 60 {
+			t.Errorf("TargetExceededMinutes = %.0f; want 60 (only the base-config hour)", got)
+		}
+		// The points carry the target each tick used, for the report charts.
+		if got := result.Points[0].TargetHighCPU; got != 70 {
+			t.Errorf("Points[0].TargetHighCPU = %d; want 70 (override)", got)
+		}
+		if got := result.Points[60].TargetHighCPU; got != 50 {
+			t.Errorf("Points[60].TargetHighCPU = %d; want 50 (base)", got)
+		}
+	})
+
+	t.Run("required PU uses the override target", func(t *testing.T) {
+		result, err := Run(Config{Autoscaler: sa}, constantWorkloadPoints(start, 60, 1000, 650))
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if got := result.Summary.TargetExceededMinutes; got != 0 {
+			t.Errorf("TargetExceededMinutes = %.0f; want 0", got)
+		}
+		// 650 / 70% = 929 → 1000; the base target would give 650 / 50% → 2000.
+		if got := result.Summary.RequiredPUAtMinP95; got != 1000 {
+			t.Errorf("RequiredPUAtMinP95 = %d; want 1000", got)
+		}
+	})
+}
+
+func TestRunInvalidTimeBasedOverridesFails(t *testing.T) {
+	sa := newAutoscaler(1000, 10000, 40)
+	sa.Spec.ScaleConfig.TimeBasedOverrides = []spannerv1beta1.TimeBasedOverride{
+		{Name: "broken", Times: []string{"not a cron"}, ScaledownPolicy: spannerv1beta1.ScaledownPolicyDeny},
+	}
+	points := constantWorkloadPoints(time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC), 5, 5000, 400)
+
+	if _, err := Run(Config{Autoscaler: sa}, points); err == nil {
+		t.Fatal("Run succeeded; want an error for an invalid cron expression")
+	}
+}
+
 func TestRunScheduleRaisesMinimum(t *testing.T) {
 	sa := newAutoscaler(1000, 10000, 30)
 	schedule := &spannerv1beta1.SpannerAutoscaleSchedule{

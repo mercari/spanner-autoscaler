@@ -27,9 +27,10 @@
 {{end}}{{range .XTicks}}<text x="{{.Pos}}" y="268" text-anchor="middle">{{.Label}}</text>
 {{end}}<text x="940" y="268" text-anchor="end">UTC</text>
 {{range .Refs}}<line class="refline" x1="68" y1="{{.Y}}" x2="940" y2="{{.Y}}"/><text x="940" y="{{.LabelY}}" text-anchor="end">{{.Label}}</text>
-{{end}}{{range .Series}}{{if .Band}}<path d="{{.Band}}" fill="{{.Color}}" fill-opacity="0.1" stroke="none"/>
+{{end}}{{range .Series}}{{if .Ref}}<path class="refline" d="{{.Line}}" fill="none"/>
+{{else}}{{if .Band}}<path d="{{.Band}}" fill="{{.Color}}" fill-opacity="0.1" stroke="none"/>
 {{end}}<path d="{{.Line}}" fill="none" stroke="{{.Color}}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-{{end}}<line class="crosshair" x1="0" y1="14" x2="0" y2="250"/>
+{{end}}{{end}}<line class="crosshair" x1="0" y1="14" x2="0" y2="250"/>
 </svg>
 <script type="application/json">{{.DataJSON}}</script>
 </figure>

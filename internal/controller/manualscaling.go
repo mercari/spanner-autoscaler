@@ -42,26 +42,35 @@ const conflictRequeueDelay = time.Second
 
 // dispatchManualScaling runs the manual-scaling reconcile and converts its
 // (handled, requeueAfter, err) return into the ctrlreconcile.Result shape
-// the caller returns. On the success path it persists sa.Status, maps
-// status-update conflicts to a benign requeue, and emits the per-entry
-// schedule-deactivation events that the caller queued before invoking this
-// function. handled=true tells the caller to short-circuit Reconcile;
-// handled=false means there was no active override and Reconcile should
-// fall through to the CPU autoscale path (which emits the deactivations
-// itself).
+// the caller returns. It persists sa.Status when it changed, on both the
+// success and the error path, and calls onPersisted after every successful
+// write so the caller can emit the side effects it queued before invoking
+// this function (schedule deactivations, override changes). onPersisted does
+// not run when the write fails or conflicts; it must be non-nil.
+//
+// handled=true tells the caller to short-circuit Reconcile; handled=false
+// means there was no active override and Reconcile falls through to the
+// next step, which persists status and emits the side effects itself.
 func (r *SpannerAutoscalerReconciler) dispatchManualScaling(
 	ctx context.Context,
 	log logr.Logger,
 	sa *spannerv1beta1.SpannerAutoscaler,
 	syncer syncerpkg.Syncer,
 	statusChanged *bool,
-	droppedActiveSchedules []spannerv1beta1.ActiveSchedule,
+	onPersisted func(),
 ) (ctrlreconcile.Result, bool, error) {
 	handled, requeueAfter, err := r.reconcileManualScaling(ctx, log, sa, syncer, r.clock.Now(), statusChanged)
 	if err != nil {
 		if *statusChanged {
 			sa.Status.DesiredProcessingUnits = sa.Status.CurrentProcessingUnits
-			if updateErr := r.ctrlClient.Status().Update(ctx, sa); updateErr != nil && !apierrors.IsConflict(updateErr) {
+			switch updateErr := r.ctrlClient.Status().Update(ctx, sa); {
+			case updateErr == nil:
+				// The write also persisted the changes queued before this
+				// call (e.g. a new CurrentTimeBasedOverride). Emit their
+				// side effects now: the next reconcile sees them as already
+				// applied and would never emit them.
+				onPersisted()
+			case !apierrors.IsConflict(updateErr):
 				log.Error(updateErr, "manual scaling: failed to persist status after error")
 			}
 		}
@@ -80,18 +89,17 @@ func (r *SpannerAutoscalerReconciler) dispatchManualScaling(
 			log.Error(uerr, "manual scaling: failed to update spanner autoscaler status")
 			return ctrlreconcile.Result{}, true, uerr
 		}
-		// Status persisted — emit schedule deactivations that were pruned in
-		// the same reconcile (analog of the trailing block in Reconcile's CPU
-		// path).
-		emitScheduleDeactivations(log, sa, droppedActiveSchedules)
+		// Status persisted — emit the side effects queued in the same
+		// reconcile (analog of the trailing block in Reconcile's CPU path).
+		onPersisted()
 	}
 	return ctrlreconcile.Result{RequeueAfter: requeueAfter}, true, nil
 }
 
 // emitScheduleDeactivations logs and increments the deactivation counter for
-// every entry in droppedActiveSchedules. Called from both the manual scaling
-// success path (dispatchManualScaling) and the CPU autoscale success path
-// (Reconcile's trailing block) after sa.Status has been persisted, so a
+// every entry in droppedActiveSchedules. Called through Reconcile's
+// emitStatusSideEffects after sa.Status has been persisted (by
+// dispatchManualScaling, persistSkippedStatus or the CPU autoscale path), so a
 // failed Status().Update does not lose the event and a successful persist
 // emits it exactly once.
 func emitScheduleDeactivations(log logr.Logger, sa *spannerv1beta1.SpannerAutoscaler, dropped []spannerv1beta1.ActiveSchedule) {

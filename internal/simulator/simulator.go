@@ -166,14 +166,7 @@ func Run(cfg Config, points []Point) (*Result, error) {
 	// exactly at the first timestamp still activates.
 	prevTick := points[0].Time.Add(-time.Minute)
 
-	var targetHigh, targetTotal int
-	if t := sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority; t != nil {
-		targetHigh = *t
-	}
-	if t := sa.Spec.ScaleConfig.TargetCPUUtilization.Total; t != nil {
-		targetTotal = *t
-	}
-	agg := newAggregator(flags, lowConfidenceCPU, targetHigh, targetTotal, sa.Spec.ScaleConfig.ProcessingUnits.Min)
+	agg := newAggregator(flags, lowConfidenceCPU, sa.Spec.ScaleConfig.ProcessingUnits.Min)
 
 	for i, p := range points {
 		now := p.Time
@@ -220,12 +213,21 @@ func Run(cfg Config, points []Point) (*Result, error) {
 		sa.Status.CurrentlyActiveSchedules = active
 		setStatusCPU(sa, flags, simHigh, simTotal)
 
-		minPU, maxPU, _, _ := scaling.DesiredPURange(*sa)
+		// The controller keeps running on the fail-safe config when the
+		// overrides cannot be resolved; a replay should fail loudly instead.
+		resolved, err := scaling.ResolveScaleConfig(sa.Spec.ScaleConfig, now)
+		if err != nil {
+			return nil, fmt.Errorf("invalid time-based override configuration: %w", err)
+		}
+		effective := scaling.WithScaleConfig(*sa, resolved.ScaleConfig)
+
+		minPU, maxPU, _, _ := scaling.DesiredPURange(effective)
 		sa.Status.DesiredMinPUs = minPU
 		sa.Status.DesiredMaxPUs = maxPU
+		effective.Status = sa.Status
 
-		desired := scaling.DesiredProcessingUnits(*sa)
-		decision, err := scaling.Decide(sa, desired, now, scaleUpInterval, scaleDownInterval)
+		desired := scaling.DesiredProcessingUnits(effective)
+		decision, err := scaling.Decide(&effective, desired, now, resolved.ScaledownPolicy, scaleUpInterval, scaleDownInterval)
 		if err != nil {
 			return nil, fmt.Errorf("invalid scale-down time restriction configuration: %w", err)
 		}
@@ -242,8 +244,12 @@ func Run(cfg Config, points []Point) (*Result, error) {
 		}
 
 		sp.SimPU = simPU
+		// Judge the tick against the targets the decision above used, not
+		// the base ones, so CPU within an override's target is not counted
+		// as exceeded.
+		sp.TargetHighCPU, sp.TargetTotalCPU = cpuTargets(resolved.ScaleConfig)
 		result.Points = append(result.Points, sp)
-		agg.observe(p, sp, minPU, puBefore, dt)
+		agg.observe(p, sp, sp.TargetHighCPU, sp.TargetTotalCPU, minPU, puBefore, dt)
 	}
 
 	result.Summary = agg.summary(points[0].Time, points[len(points)-1].Time, result.Events)

@@ -10,7 +10,7 @@ and the simulated part is the counterfactual — what the autoscaler would have
 done against that workload under a different configuration. Decisions are
 computed by `internal/scaling`, the same package the controller uses, so
 replays match production behavior including step sizes, cooldown intervals,
-`scaledownAllowedTimes` windows, and `SpannerAutoscaleSchedule` activation.
+`scaledownAllowedTimes` windows, `timeBasedOverrides`, and `SpannerAutoscaleSchedule` activation.
 
 ## Build
 
@@ -60,7 +60,11 @@ $ ./bin/simulator help
    also keeps the configuration's current value in the running:
 
    - `-min-pu`: percentiles (p50–p99) of the PU the recorded workload
-     actually required to stay on its CPU targets.
+     actually required to stay on its CPU targets. With
+     `timeBasedOverrides`, each point uses the target in effect at that
+     minute, periods where an override sets `processingUnits.min` are
+     skipped (the base min does not apply there), and the candidates are
+     capped by the `max` of every override that sets only `max`.
    - `-scaledown-step-size`: 5%, 10%, 15%, and 20%. Larger steps shed
      capacity too fast to recommend for an instance that serves steady
      traffic; list them explicitly to search them.
@@ -73,6 +77,13 @@ $ ./bin/simulator help
    replace the manifest's value for that parameter and take precedence over
    `-auto`; unspecified parameters keep the manifest's value. `compare`
    replays several complete manifests side by side instead of searching.
+
+   For a manifest with `timeBasedOverrides`, the candidates change the base
+   values only and the overrides are replayed as written; searching
+   `-scaledown-allowed-times` is rejected because it cannot be combined with
+   the overrides. Minutes above the target are counted against the target
+   in effect at each minute, so an override that raises the target also
+   raises the threshold for those minutes.
 
    A candidate is recommended only when it satisfies every constraint and
    costs less than the current configuration's own replay; otherwise the
@@ -95,11 +106,13 @@ $ ./bin/simulator help
 PU-hours, cheapest first:
 
 - `-max-exceeded-minutes`: total minutes the simulated CPU may spend above
-  its target.
+  its target (the target in effect at that minute, including
+  `timeBasedOverrides`).
 - `-instance-config regional|multi-region|none` (default `regional`): applies
   the Google-recommended high-priority CPU maximum (65% for regional, 45% per
   region for multi-region instance configurations) to both the configured
-  target and the simulated p99.
+  target and the simulated p99. The configured target includes the
+  `highPriority` target of every entry in `timeBasedOverrides`.
 - `-pu-change-guideline base|strict|none` (default `base`): applies the
   recommended compute-capacity change limits (at most 2x/half per operation,
   at least 10 minutes between operations). `base` requires candidates to be
@@ -127,7 +140,8 @@ combinations that behave identically on the recording fold into it as
   adopting it.
 - The min PU assessment answers the two directions separately: whether the
   minimum can go lower (time pinned at the minimum and the workload's p95
-  requirement while pinned) and whether raising it
+  requirement while pinned, computed against the target in effect at each
+  minute) and whether raising it
   would reduce the time above target (the share of above-target minutes
   observed while the instance sits at the minimum).
 - `low confidence` counts the minutes whose recorded CPU exceeds

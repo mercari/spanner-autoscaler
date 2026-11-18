@@ -87,26 +87,6 @@ func (c *commonFlags) cost(puHours float64) float64 {
 	return puHours / 1000 * c.nodeHourPrice
 }
 
-// configTargets re-reads the manifest for the CPU targets so the HTML report
-// can draw them as reference lines.
-func configTargets(configPath string) (targetHigh, targetTotal int, err error) {
-	data, err := os.ReadFile(configPath) //nolint:gosec // G304: the path comes from a CLI flag
-	if err != nil {
-		return 0, 0, err
-	}
-	sa, _, err := simulator.LoadManifests(data)
-	if err != nil {
-		return 0, 0, fmt.Errorf("%s: %w", configPath, err)
-	}
-	if t := sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority; t != nil {
-		targetHigh = *t
-	}
-	if t := sa.Spec.ScaleConfig.TargetCPUUtilization.Total; t != nil {
-		targetTotal = *t
-	}
-	return targetHigh, targetTotal, nil
-}
-
 func runSimulate(args []string) error {
 	fs := flag.NewFlagSet("simulate", flag.ExitOnError)
 	var common commonFlags
@@ -145,15 +125,11 @@ func runSimulate(args []string) error {
 	}
 
 	if *htmlPath != "" {
-		targetHigh, targetTotal, err := configTargets(*configPath)
-		if err != nil {
-			return err
-		}
 		f, err := os.Create(*htmlPath)
 		if err != nil {
 			return err
 		}
-		if err := writeSimulateHTML(f, result, targetHigh, targetTotal); err != nil {
+		if err := writeSimulateHTML(f, result); err != nil {
 			_ = f.Close()
 			return err
 		}

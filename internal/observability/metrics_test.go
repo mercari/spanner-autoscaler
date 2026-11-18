@@ -208,7 +208,7 @@ func TestRecordState(t *testing.T) {
 		},
 	}
 
-	RecordState(sa)
+	RecordState(sa, sa.Spec.ScaleConfig.TargetCPUUtilization)
 
 	check := func(g *prometheus.GaugeVec, want float64, extra ...string) {
 		t.Helper()
@@ -258,7 +258,7 @@ func TestRecordState_OmitsUnsetCPUMetric(t *testing.T) {
 		},
 	}
 
-	RecordState(sa)
+	RecordState(sa, sa.Spec.ScaleConfig.TargetCPUUtilization)
 
 	// total type was never emitted, so no series should exist for it.
 	if got := testutil.ToFloat64(cpuUtilization.WithLabelValues(
@@ -356,7 +356,7 @@ func TestMetricsHTTPExposition(t *testing.T) {
 			InstanceState:                     spannerv1beta1.InstanceStateReady,
 		},
 	}
-	RecordState(sa)
+	RecordState(sa, sa.Spec.ScaleConfig.TargetCPUUtilization)
 	RecordScaleEvent(l, 2000, 3000, DriverCPUHighPriority)
 	RecordScaleSkipped(l, SkipReasonScaleUpInterval)
 	RecordScheduleActivation(l)
@@ -448,5 +448,54 @@ func TestResultFor(t *testing.T) {
 	}
 	if got := resultFor(errors.New("x")); got != resultError {
 		t.Errorf("resultFor(err) = %q, want %q", got, resultError)
+	}
+}
+
+func TestRecordTimeBasedOverride(t *testing.T) {
+	l := labelsFor("override")
+	teardown(t, l)
+
+	series := func() int { return testutil.CollectAndCount(timeBasedOverrideActive) }
+	before := series()
+
+	RecordTimeBasedOverride(l, "night")
+	if got := testutil.ToFloat64(timeBasedOverrideActive.WithLabelValues(l.withExtra("night")...)); got != 1 {
+		t.Errorf("night = %v; want 1", got)
+	}
+
+	// Switching twice without a persisted status in between must not leave
+	// the intermediate override behind.
+	RecordTimeBasedOverride(l, "morning")
+	RecordTimeBasedOverride(l, "daytime")
+	if got := series() - before; got != 1 {
+		t.Errorf("series after switching = %d; want 1 (only daytime)", got)
+	}
+	if got := testutil.ToFloat64(timeBasedOverrideActive.WithLabelValues(l.withExtra("daytime")...)); got != 1 {
+		t.Errorf("daytime = %v; want 1", got)
+	}
+
+	RecordTimeBasedOverride(l, "")
+	if got := series() - before; got != 0 {
+		t.Errorf("series after leaving every override = %d; want 0", got)
+	}
+}
+
+func TestRecordState_UsesEffectiveTarget(t *testing.T) {
+	l := labelsFor("effective-target")
+	teardown(t, l)
+
+	sa := &spannerv1beta1.SpannerAutoscaler{
+		ObjectMeta: metav1.ObjectMeta{Namespace: l.Namespace, Name: l.Name},
+		Spec: spannerv1beta1.SpannerAutoscalerSpec{
+			TargetInstance: spannerv1beta1.TargetInstance{ProjectID: l.ProjectID, InstanceID: l.InstanceID},
+			ScaleConfig: spannerv1beta1.ScaleConfig{
+				TargetCPUUtilization: spannerv1beta1.TargetCPUUtilization{HighPriority: new(50)},
+			},
+		},
+	}
+	RecordState(sa, spannerv1beta1.TargetCPUUtilization{HighPriority: new(65)})
+
+	if got := testutil.ToFloat64(cpuUtilizationTarget.WithLabelValues(l.withExtra(cpuTypeHighPriority)...)); got != 65 {
+		t.Errorf("target = %v; want 65 (the override)", got)
 	}
 }
