@@ -137,8 +137,6 @@ type Summary struct {
 type aggregator struct {
 	flags            spannerv1beta1.CPUMetricFlags
 	lowConfidenceCPU float64
-	targetHigh       int
-	targetTotal      int
 	specMinPU        int
 
 	dataPoints    int
@@ -157,20 +155,31 @@ type aggregator struct {
 	requiredPUWhilePinned      []float64
 }
 
-func newAggregator(flags spannerv1beta1.CPUMetricFlags, lowConfidenceCPU float64, targetHigh, targetTotal, specMinPU int) *aggregator {
+func newAggregator(flags spannerv1beta1.CPUMetricFlags, lowConfidenceCPU float64, specMinPU int) *aggregator {
 	return &aggregator{
 		flags:            flags,
 		lowConfidenceCPU: lowConfidenceCPU,
-		targetHigh:       targetHigh,
-		targetTotal:      targetTotal,
 		specMinPU:        specMinPU,
 	}
 }
 
+// cpuTargets returns the CPU utilization targets of a scale config, with 0
+// for a metric that is not set.
+func cpuTargets(sc spannerv1beta1.ScaleConfig) (targetHigh, targetTotal int) {
+	if t := sc.TargetCPUUtilization.HighPriority; t != nil {
+		targetHigh = *t
+	}
+	if t := sc.TargetCPUUtilization.Total; t != nil {
+		targetTotal = *t
+	}
+	return targetHigh, targetTotal
+}
+
 // observe records one decided tick. puBefore is the PU in effect while the
 // tick's CPU was observed (pre-decision); sp.SimPU is the post-decision PU
-// held until the next tick.
-func (a *aggregator) observe(p Point, sp SimPoint, effectiveMinPU, puBefore int, dt time.Duration) {
+// held until the next tick. targetHigh and targetTotal are the targets in
+// effect for this tick, after time-based overrides are applied.
+func (a *aggregator) observe(p Point, sp SimPoint, targetHigh, targetTotal, effectiveMinPU, puBefore int, dt time.Duration) {
 	a.observeCommon(p, sp.SimPU, dt)
 
 	minutes := dt.Minutes()
@@ -178,13 +187,13 @@ func (a *aggregator) observe(p Point, sp SimPoint, effectiveMinPU, puBefore int,
 	exceeded := false
 	if a.flags&spannerv1beta1.CPUMetricFlagHighPriority != 0 && sp.SimHighCPU != nil {
 		a.simHighValues = append(a.simHighValues, *sp.SimHighCPU)
-		if *sp.SimHighCPU > float64(a.targetHigh) {
+		if *sp.SimHighCPU > float64(targetHigh) {
 			exceeded = true
 		}
 	}
 	if a.flags&spannerv1beta1.CPUMetricFlagTotal != 0 && sp.SimTotalCPU != nil {
 		a.simTotalValues = append(a.simTotalValues, *sp.SimTotalCPU)
-		if *sp.SimTotalCPU > float64(a.targetTotal) {
+		if *sp.SimTotalCPU > float64(targetTotal) {
 			exceeded = true
 		}
 	}
@@ -197,7 +206,7 @@ func (a *aggregator) observe(p Point, sp SimPoint, effectiveMinPU, puBefore int,
 
 	if sp.SimPU <= effectiveMinPU {
 		a.minPinnedMinutes += minutes
-		if req := requiredPU(a.flags, a.targetHigh, a.targetTotal, p); req > 0 {
+		if req := requiredPU(a.flags, targetHigh, targetTotal, p); req > 0 {
 			a.requiredPUWhilePinned = append(a.requiredPUWhilePinned, float64(req))
 		}
 	}
