@@ -206,7 +206,7 @@ _Appears in:_
 | Field | Description |
 | --- | --- |
 | `Exceed` | MaxPUPolicyExceed raises both ends of the autoscaling range, allowing<br />the instance to scale beyond `spec.scaleConfig.processingUnits.max`<br />(current behavior; default).<br /> |
-| `Cap` | MaxPUPolicyCap raises only the lower bound of the autoscaling range.<br />`spec.scaleConfig.processingUnits.max` remains the hard ceiling.<br /> |
+| `Cap` | MaxPUPolicyCap raises only the lower bound of the autoscaling range.<br />The schedule never raises the max above `spec.scaleConfig.processingUnits.max`.<br /> |
 
 
 #### ScaleConfig

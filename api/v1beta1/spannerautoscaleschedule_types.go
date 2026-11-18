@@ -43,7 +43,7 @@ const (
 	MaxPUPolicyExceed MaxPUPolicy = "Exceed"
 
 	// MaxPUPolicyCap raises only the lower bound of the autoscaling range.
-	// `spec.scaleConfig.processingUnits.max` remains the hard ceiling.
+	// The schedule never raises the max above `spec.scaleConfig.processingUnits.max`.
 	MaxPUPolicyCap MaxPUPolicy = "Cap"
 )
 

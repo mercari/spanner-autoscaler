@@ -62,9 +62,12 @@ spec:
 ```
 
 - `Exceed` (default): raises both ends of the range, so the instance may scale beyond `spec.processingUnits.max`. This is the original behavior and remains the default for backward compatibility. Schedules created before this field existed may have an empty value; the controller treats empty/unset as `Exceed` everywhere for backward compatibility.
-- `Cap`: raises only the lower bound; `spec.processingUnits.max` remains the hard ceiling. If `min + additionalProcessingUnits` exceeds `max`, the lower bound is clamped down to `max` (the effective range never inverts), the trimmed contribution is logged, and a `ScheduleCappedAtMax` event is emitted on the `SpannerAutoscaler`.
+- `Cap`: raises only the lower bound; the schedule never raises the max above `spec.processingUnits.max`. If `min + additionalProcessingUnits` exceeds `max`, the lower bound is clamped down to `max` (the effective range never inverts), the trimmed contribution is logged, and a `ScheduleCappedAtMax` event is emitted on the `SpannerAutoscaler`.
 
-When the max drops below the current processing units, because an `Exceed` schedule ended or `spec.processingUnits.max` was lowered, the controller scales down to it in `scaledownStepSize` steps. `scaledownInterval` and the scale-down time restrictions apply as for any other scale down, so until the steps reach the max, the instance runs above it.
+When the current processing units are above the max, the controller scales down to it in `scaledownStepSize` steps. This happens when `spec.processingUnits.max` is lowered, an `Exceed` schedule ends, a `SpannerManualScaling` with a target above the max ends, or the instance was resized outside the controller. `scaledownInterval` and the scale-down time restrictions apply as for any other scale down, so until the steps reach the max, the instance runs above it. With a small step, a long interval or wide `scaledownNotAllowedTimes`, this can take hours or days.
+
+- Each step is an ordinary scale down: it emits the usual `Updated` event and counts in `spanner_autoscaler_scale_events_total` under the CPU metric's `driver`. To see or alert while the instance is above its max, compare `spanner_autoscaler_current_processing_units` with `spanner_autoscaler_effective_max_processing_units` (see the example PromQL below).
+- To reach the max sooner, raise `scaledownStepSize` for the transition, or use a `SpannerManualScaling` to set the processing units directly.
 
 > **Note:** When multiple schedules are active simultaneously (i.e. their windows overlap), the `additionalProcessingUnits` from all active schedules are **summed**: every active schedule contributes to `desiredMinPUs`, while only schedules with `maxPUPolicy: Exceed` (or unset) contribute to `desiredMaxPUs`. For example, if schedule A adds +1,000 PU and schedule B adds +5,000 PU and both are active at the same time, `desiredMinPUs = spec.processingUnits.min + 6,000`.
 
@@ -540,7 +543,7 @@ The endpoint can be scraped by Prometheus (`ServiceMonitor` / `PodMonitor`), the
 
 | Name | Type | Extra labels | Description |
 |---|---|---|---|
-| `spanner_autoscaler_scale_events_total` | Counter | `direction=up\|down`, `driver=cpu_high_priority\|cpu_total\|schedule` | Successful processing-units updates. The `driver` label is a best-effort attribution to the metric (or schedule floor) that drove the decision. |
+| `spanner_autoscaler_scale_events_total` | Counter | `direction=up\|down`, `driver=cpu_high_priority\|cpu_total\|schedule\|manual_immediate\|manual_ramp` | Successful processing-units updates. The `driver` label is a best-effort attribution to the metric (or schedule floor) that drove the decision. A step down toward a max below the current processing units is attributed to the CPU metric. |
 | `spanner_autoscaler_scale_skipped_total` | Counter | `reason` | Reconciles where scaling was skipped. Reasons: `same`, `scale_up_interval`, `scale_down_interval`, `scale_down_window`, `instance_not_ready`, `cpu_not_ready`. |
 | `spanner_autoscaler_scale_pu_delta` | Histogram | `direction=up\|down` | Absolute processing-units change per scale event. Buckets: 100, 200, 500, 1000, 2000, 5000, 10000, 20000. |
 
@@ -578,6 +581,9 @@ sum by (driver) (rate(spanner_autoscaler_scale_events_total{direction="up"}[1h])
 
 # Cloud Monitoring fetch p99 latency.
 histogram_quantile(0.99, sum by (le) (rate(spanner_autoscaler_metrics_fetch_duration_seconds_bucket[5m])))
+
+# Autoscalers running above their effective max (stepping down to a lowered max).
+spanner_autoscaler_current_processing_units > spanner_autoscaler_effective_max_processing_units
 
 # Autoscalers pinned at their effective max for 5+ minutes.
 max_over_time(
