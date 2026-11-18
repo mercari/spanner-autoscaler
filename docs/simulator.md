@@ -77,8 +77,9 @@ $ ./bin/simulator help
    For a manifest with `timeBasedOverrides`, the candidates change the base
    values only and the overrides are replayed as written; searching
    `-scaledown-allowed-times` is rejected because it cannot be combined with
-   the overrides. Minutes above the target are counted against the base
-   target, not an overridden one.
+   the overrides. Minutes above the target are counted against the target
+   in effect at each minute, so an override that raises the target also
+   raises the threshold for those minutes.
 
    A candidate is recommended only when it satisfies every constraint and
    costs less than the current configuration's own replay; otherwise the
@@ -101,7 +102,8 @@ $ ./bin/simulator help
 PU-hours, cheapest first:
 
 - `-max-exceeded-minutes`: total minutes the simulated CPU may spend above
-  its target.
+  its target (the target in effect at that minute, including
+  `timeBasedOverrides`).
 - `-instance-config regional|multi-region|none` (default `regional`): applies
   the Google-recommended high-priority CPU maximum (65% for regional, 45% per
   region for multi-region instance configurations) to both the configured
@@ -133,7 +135,8 @@ combinations that behave identically on the recording fold into it as
   adopting it.
 - The min PU assessment answers the two directions separately: whether the
   minimum can go lower (time pinned at the minimum and the workload's p95
-  requirement while pinned) and whether raising it
+  requirement while pinned, computed against the target in effect at each
+  minute) and whether raising it
   would reduce the time above target (the share of above-target minutes
   observed while the instance sits at the minimum).
 - `low confidence` counts the minutes whose recorded CPU exceeds
