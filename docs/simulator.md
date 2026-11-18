@@ -60,7 +60,11 @@ $ ./bin/simulator help
    also keeps the configuration's current value in the running:
 
    - `-min-pu`: percentiles (p50–p99) of the PU the recorded workload
-     actually required to stay on its CPU targets.
+     actually required to stay on its CPU targets. With
+     `timeBasedOverrides`, each point uses the target in effect at that
+     minute, periods where an override sets `processingUnits.min` are
+     skipped (the base min does not apply there), and the candidates are
+     capped by the `max` of every override that sets only `max`.
    - `-scaledown-step-size`: 5%, 10%, 15%, and 20%. Larger steps shed
      capacity too fast to recommend for an instance that serves steady
      traffic; list them explicitly to search them.
@@ -107,7 +111,8 @@ PU-hours, cheapest first:
 - `-instance-config regional|multi-region|none` (default `regional`): applies
   the Google-recommended high-priority CPU maximum (65% for regional, 45% per
   region for multi-region instance configurations) to both the configured
-  target and the simulated p99.
+  target and the simulated p99. The configured target includes the
+  `highPriority` target of every entry in `timeBasedOverrides`.
 - `-pu-change-guideline base|strict|none` (default `base`): applies the
   recommended compute-capacity change limits (at most 2x/half per operation,
   at least 10 minutes between operations). `base` requires candidates to be

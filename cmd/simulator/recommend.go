@@ -99,7 +99,11 @@ func runRecommend(args []string) error {
 	if *auto {
 		space.FillGuidelineStepCandidates(sa, common.scaleUpInterval, common.scaleDownInterval)
 		if len(space.MinPUs) == 0 {
-			space.MinPUs = simulator.MinPUCandidates(sa, points)
+			minPUs, err := simulator.MinPUCandidates(sa, points)
+			if err != nil {
+				return fmt.Errorf("auto-generating -min-pu candidates: %w", err)
+			}
+			space.MinPUs = minPUs
 			_, _ = fmt.Fprintf(os.Stderr, "auto-generated -min-pu candidates from the workload's required-PU percentiles: %v\n", space.MinPUs)
 		}
 	}

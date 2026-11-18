@@ -522,6 +522,16 @@ func infeasibleReasons(sa *spannerv1beta1.SpannerAutoscaler, s Summary, constrai
 		if t := sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority; t != nil && *t > limit {
 			reasons = append(reasons, fmt.Sprintf("high-priority CPU target %d%% > recommended %d%%", *t, limit))
 		}
+		// An override's target is in effect during its periods, so it can hold
+		// utilization above the ceiling just as the base target can.
+		for _, o := range sa.Spec.ScaleConfig.TimeBasedOverrides {
+			if o.TargetCPUUtilization == nil {
+				continue
+			}
+			if t := o.TargetCPUUtilization.HighPriority; t != nil && *t > limit {
+				reasons = append(reasons, fmt.Sprintf("high-priority CPU target %d%% of timeBasedOverrides %q > recommended %d%%", *t, o.Name, limit))
+			}
+		}
 		if s.SimHighPriorityCPU != nil && s.SimHighPriorityCPU.P99 > float64(limit) {
 			reasons = append(reasons, fmt.Sprintf("p99 high-priority CPU %.1f%% > recommended %d%%", s.SimHighPriorityCPU.P99, limit))
 		}
@@ -551,29 +561,52 @@ var minPUCandidatePercentiles = []float64{50, 75, 90, 95, 99}
 // minimum — deduplicated, sorted, and clamped to the configured maximum. The
 // candidates are heuristic starting points; Recommend still evaluates each
 // one against the full recording and the constraints.
-func MinPUCandidates(sa *spannerv1beta1.SpannerAutoscaler, points []Point) []int {
-	flags := sa.Spec.ScaleConfig.TargetCPUUtilization.ActiveMetricFlags()
-	var targetHigh, targetTotal int
-	if t := sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority; t != nil {
-		targetHigh = *t
-	}
-	if t := sa.Spec.ScaleConfig.TargetCPUUtilization.Total; t != nil {
-		targetTotal = *t
+//
+// With timeBasedOverrides, each point uses the targets in effect at its time,
+// and points during an override that replaces processingUnits.min are
+// skipped: the base minimum, which is what the candidates replace, does not
+// apply there. Candidates are also clamped to the max of every override that
+// sets processingUnits.max but keeps the base min, since a larger min would
+// exceed that max while the override is in effect.
+//
+// It returns an error when the overrides cannot be resolved at some point,
+// as Run does, instead of deriving candidates from a config the replay
+// would reject.
+func MinPUCandidates(sa *spannerv1beta1.SpannerAutoscaler, points []Point) ([]int, error) {
+	sc := sa.Spec.ScaleConfig
+	flags := sc.TargetCPUUtilization.ActiveMetricFlags()
+	overridesMin := make(map[string]bool, len(sc.TimeBasedOverrides))
+	maxPU := sc.ProcessingUnits.Max
+	for _, o := range sc.TimeBasedOverrides {
+		setsMin := o.ProcessingUnits != nil && o.ProcessingUnits.Min != nil
+		overridesMin[o.Name] = setsMin
+		if !setsMin && o.ProcessingUnits != nil && o.ProcessingUnits.Max != nil {
+			if m := *o.ProcessingUnits.Max; maxPU <= 0 || m < maxPU {
+				maxPU = m
+			}
+		}
 	}
 
 	required := make([]float64, 0, len(points))
 	for _, p := range points {
+		resolved, err := scaling.ResolveScaleConfig(sc, p.Time)
+		if err != nil {
+			return nil, fmt.Errorf("invalid time-based override configuration at %s: %w", p.Time.Format(time.RFC3339), err)
+		}
+		if overridesMin[resolved.OverrideName] {
+			continue
+		}
+		targetHigh, targetTotal := cpuTargets(resolved.ScaleConfig)
 		if req := requiredPU(flags, targetHigh, targetTotal, p); req > 0 {
 			required = append(required, float64(req))
 		}
 	}
 	if len(required) == 0 {
-		return nil
+		return nil, nil
 	}
 	slices.Sort(required)
 
-	maxPU := sa.Spec.ScaleConfig.ProcessingUnits.Max
-	candidates := []int{sa.Spec.ScaleConfig.ProcessingUnits.Min}
+	candidates := []int{sc.ProcessingUnits.Min}
 	for _, q := range minPUCandidatePercentiles {
 		// Nearest-rank percentile returns an element of required, and
 		// requiredPU already rounds to valid PU values.
@@ -584,7 +617,7 @@ func MinPUCandidates(sa *spannerv1beta1.SpannerAutoscaler, points []Point) []int
 		candidates = append(candidates, c)
 	}
 	slices.Sort(candidates)
-	return slices.Compact(candidates)
+	return slices.Compact(candidates), nil
 }
 
 // FillGuidelineStepCandidates populates the scale-down step-size and the
