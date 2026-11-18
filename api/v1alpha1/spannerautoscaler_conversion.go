@@ -139,6 +139,15 @@ func (dst *SpannerAutoscaler) ConvertFrom(srcRaw conversion.Hub) error {
 			dst.Annotations = map[string]string{}
 		}
 		dst.Annotations[scaleConfigAnnotation] = string(raw)
+	} else if _, ok := src.Annotations[scaleConfigAnnotation]; ok {
+		// A stale copy (for example applied through v1beta1 from an exported
+		// v1alpha1 manifest) would otherwise be restored over the current
+		// scale config by the next v1alpha1 update.
+		dst.Annotations = maps.Clone(src.Annotations)
+		delete(dst.Annotations, scaleConfigAnnotation)
+		if len(dst.Annotations) == 0 {
+			dst.Annotations = nil
+		}
 	}
 
 	// Copy the resource status
