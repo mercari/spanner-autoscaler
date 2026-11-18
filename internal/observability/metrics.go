@@ -212,7 +212,7 @@ var (
 var (
 	scaleEventsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "spanner_autoscaler_scale_events_total",
-		Help: "Number of processing-units updates, labeled by direction (up|down) and driver (cpu_high_priority|cpu_total|schedule).",
+		Help: "Number of processing-units updates, labeled by direction (up|down) and driver (cpu_high_priority|cpu_total|schedule|manual_immediate|manual_ramp).",
 	}, append(identityLabels, directionLabel, driverLabel))
 
 	scaleSkippedTotal = prometheus.NewCounterVec(prometheus.CounterOpts{

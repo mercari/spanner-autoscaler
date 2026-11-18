@@ -75,3 +75,40 @@ func TestDesiredPUFromCPUStepsDownToMax(t *testing.T) {
 		})
 	}
 }
+
+func TestDesiredProcessingUnitsDualModeStepsDownToMax(t *testing.T) {
+	high, total := 50, 70
+	newSA := func(currentPU, maxPU, highCPU, totalCPU int) spannerv1beta1.SpannerAutoscaler {
+		return spannerv1beta1.SpannerAutoscaler{
+			Spec: spannerv1beta1.SpannerAutoscalerSpec{ScaleConfig: spannerv1beta1.ScaleConfig{
+				ProcessingUnits:      spannerv1beta1.ScaleConfigPUs{Min: 1000, Max: maxPU},
+				TargetCPUUtilization: spannerv1beta1.TargetCPUUtilization{HighPriority: &high, Total: &total},
+				ScaledownStepSize:    intstr.FromString("10%"),
+			}},
+			Status: spannerv1beta1.SpannerAutoscalerStatus{
+				CurrentProcessingUnits:            currentPU,
+				CurrentCPUMetricType:              spannerv1beta1.CPUMetricTypeBoth,
+				CurrentHighPriorityCPUUtilization: highCPU,
+				CurrentTotalCPUUtilization:        totalCPU,
+			},
+		}
+	}
+
+	tests := []struct {
+		name string
+		sa   spannerv1beta1.SpannerAutoscaler
+		want int
+	}{
+		{name: "both metrics low", sa: newSA(30000, 20000, 10, 10), want: 27000},
+		{name: "high-priority CPU above target", sa: newSA(30000, 20000, 90, 10), want: 27000},
+		{name: "total CPU above target", sa: newSA(30000, 20000, 10, 95), want: 27000},
+		{name: "last step reaches the max", sa: newSA(21000, 20000, 90, 95), want: 20000},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := DesiredProcessingUnits(tt.sa); got != tt.want {
+				t.Errorf("DesiredProcessingUnits() = %d; want %d", got, tt.want)
+			}
+		})
+	}
+}
