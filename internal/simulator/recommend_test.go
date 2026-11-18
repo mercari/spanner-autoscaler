@@ -25,6 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 
 	spannerv1beta1 "github.com/mercari/spanner-autoscaler/api/v1beta1"
+	"github.com/mercari/spanner-autoscaler/internal/scaling"
 )
 
 func TestRecommendRanksCheapestFeasibleFirst(t *testing.T) {
@@ -259,7 +260,7 @@ func TestMinPUCandidates(t *testing.T) {
 	points = append(points, constantWorkloadPoints(start.Add(time.Hour), 60, 20000, 2800)...)
 
 	sa := newAutoscaler(20000, 30000, 40)
-	got := MinPUCandidates(sa, points)
+	got := mustMinPUCandidates(t, sa, points)
 
 	// p50 lands on the quiet level (2000), p75..p99 on the busy level (8000),
 	// plus the current minimum — deduplicated and sorted.
@@ -270,11 +271,11 @@ func TestMinPUCandidates(t *testing.T) {
 
 	// Percentile candidates above the configured maximum are clamped to it.
 	sa = newAutoscaler(3000, 5000, 40)
-	if got, want := MinPUCandidates(sa, points), []int{2000, 3000, 5000}; !slices.Equal(got, want) {
+	if got, want := mustMinPUCandidates(t, sa, points), []int{2000, 3000, 5000}; !slices.Equal(got, want) {
 		t.Errorf("MinPUCandidates with max 5000 = %v; want %v", got, want)
 	}
 
-	if got := MinPUCandidates(newAutoscaler(1000, 2000, 40), nil); got != nil {
+	if got := mustMinPUCandidates(t, newAutoscaler(1000, 2000, 40), nil); got != nil {
 		t.Errorf("MinPUCandidates with no points = %v; want nil", got)
 	}
 }
@@ -657,7 +658,7 @@ func TestMinPUCandidatesWithTimeBasedOverrides(t *testing.T) {
 	sa.Spec.ScaleConfig.TimeBasedOverrides = []spannerv1beta1.TimeBasedOverride{
 		{Name: "busy", Times: []string{"* 1 * * *"}, ProcessingUnits: &spannerv1beta1.TimeBasedOverridePUs{Min: new(9000)}},
 	}
-	if got, want := MinPUCandidates(sa, points), []int{2000, 20000}; !slices.Equal(got, want) {
+	if got, want := mustMinPUCandidates(t, sa, points), []int{2000, 20000}; !slices.Equal(got, want) {
 		t.Errorf("MinPUCandidates with a min override = %v; want %v", got, want)
 	}
 
@@ -667,7 +668,57 @@ func TestMinPUCandidatesWithTimeBasedOverrides(t *testing.T) {
 	sa.Spec.ScaleConfig.TimeBasedOverrides = []spannerv1beta1.TimeBasedOverride{
 		{Name: "busy", Times: []string{"* 1 * * *"}, TargetCPUUtilization: &spannerv1beta1.TargetCPUUtilization{HighPriority: new(80)}},
 	}
-	if got, want := MinPUCandidates(sa, points), []int{2000, 4000, 20000}; !slices.Equal(got, want) {
+	if got, want := mustMinPUCandidates(t, sa, points), []int{2000, 4000, 20000}; !slices.Equal(got, want) {
 		t.Errorf("MinPUCandidates with a target override = %v; want %v", got, want)
 	}
+}
+
+func TestMinPUCandidatesClampedToMaxOnlyOverride(t *testing.T) {
+	// Same workload as TestMinPUCandidates. An override that sets only max
+	// keeps the base min, so a min candidate above that max would make the
+	// override's min > max and the replay fail. Candidates are clamped to it.
+	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	points := constantWorkloadPoints(start, 60, 3000, 400)
+	points = append(points, constantWorkloadPoints(start.Add(time.Hour), 60, 3000, 2800)...)
+
+	sa := newAutoscaler(1000, 30000, 40)
+	sa.Spec.ScaleConfig.TimeBasedOverrides = []spannerv1beta1.TimeBasedOverride{
+		{Name: "night", Times: []string{"* 3 * * *"}, ProcessingUnits: &spannerv1beta1.TimeBasedOverridePUs{Max: new(5000)}},
+	}
+	got := mustMinPUCandidates(t, sa, points)
+	if want := []int{1000, 2000, 5000}; !slices.Equal(got, want) {
+		t.Fatalf("MinPUCandidates with a max-only override = %v; want %v", got, want)
+	}
+
+	// Every candidate must replay without a resolve error.
+	for _, c := range got {
+		cand := sa.DeepCopy()
+		cand.Spec.ScaleConfig.ProcessingUnits.Min = c
+		at := time.Date(2026, 9, 1, 3, 0, 0, 0, time.UTC)
+		if _, err := scaling.ResolveScaleConfig(cand.Spec.ScaleConfig, at); err != nil {
+			t.Errorf("candidate min %d does not resolve during the override: %v", c, err)
+		}
+	}
+}
+
+func TestMinPUCandidatesInvalidOverride(t *testing.T) {
+	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	points := constantWorkloadPoints(start, 60, 20000, 400)
+
+	sa := newAutoscaler(20000, 30000, 40)
+	sa.Spec.ScaleConfig.TimeBasedOverrides = []spannerv1beta1.TimeBasedOverride{
+		{Name: "broken", Times: []string{"not a cron"}, ScaledownPolicy: spannerv1beta1.ScaledownPolicyDeny},
+	}
+	if got, err := MinPUCandidates(sa, points); err == nil {
+		t.Errorf("MinPUCandidates with an invalid override = %v, nil; want an error", got)
+	}
+}
+
+func mustMinPUCandidates(t *testing.T, sa *spannerv1beta1.SpannerAutoscaler, points []Point) []int {
+	t.Helper()
+	got, err := MinPUCandidates(sa, points)
+	if err != nil {
+		t.Fatalf("MinPUCandidates: %v", err)
+	}
+	return got
 }
