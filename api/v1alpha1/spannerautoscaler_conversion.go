@@ -16,10 +16,13 @@ import (
 
 var log = ctrllog.Log.WithName("spannerautoscaler-v1alpha1.converter")
 
-// timeBasedOverridesAnnotation keeps spec.scaleConfig.timeBasedOverrides of
-// v1beta1 across a round trip through v1alpha1, which has no such field.
-// Dropping them would silently lift the scale-down restrictions they hold.
-const timeBasedOverridesAnnotation = "spanner.mercari.com/v1beta1-time-based-overrides"
+// scaleConfigAnnotation keeps spec.scaleConfig of v1beta1 across a round trip
+// through v1alpha1 when it has timeBasedOverrides. v1alpha1 has no such field,
+// and dropping them would silently lift the scale-down restrictions they hold.
+// Keeping only the overrides is not enough: v1alpha1 also drops base fields
+// such as targetCPUUtilization.total that the overrides may refer to, so the
+// restored overrides would no longer be valid against the restored base.
+const scaleConfigAnnotation = "spanner.mercari.com/v1beta1-scale-config"
 
 func (src *SpannerAutoscaler) ConvertTo(dstRaw conversion.Hub) error {
 	log.V(2).Info("begin conversion from v1alpha1 to v1beta1", "src", src)
@@ -54,38 +57,19 @@ func (src *SpannerAutoscaler) ConvertTo(dstRaw conversion.Hub) error {
 
 	dst.Spec.Authentication = auth
 
-	scaleConfig := v1beta1.ScaleConfig{}
-	if src.Spec.MinNodes != nil && *src.Spec.MinNodes >= 1 && src.Spec.MaxNodes != nil && *src.Spec.MaxNodes >= 1 {
-		scaleConfig.ComputeType = v1beta1.ComputeTypeNode
-		scaleConfig.Nodes = v1beta1.ScaleConfigNodes{
-			Min: int(*src.Spec.MinNodes),
-			Max: int(*src.Spec.MaxNodes),
-		}
-	}
-	if src.Spec.MinProcessingUnits != nil && *src.Spec.MinProcessingUnits >= 100 && src.Spec.MaxProcessingUnits != nil && *src.Spec.MaxProcessingUnits >= 100 {
-		scaleConfig.ComputeType = v1beta1.ComputeTypePU
-		scaleConfig.ProcessingUnits = v1beta1.ScaleConfigPUs{
-			Min: int(*src.Spec.MinProcessingUnits),
-			Max: int(*src.Spec.MaxProcessingUnits),
-		}
-	}
-	if src.Spec.MaxScaleDownNodes != nil {
-		scaleConfig.ScaledownStepSize = intstr.FromInt(int(*src.Spec.MaxScaleDownNodes) * 1000)
-	}
-	hp := int(*src.Spec.TargetCPUUtilization.HighPriority)
-	scaleConfig.TargetCPUUtilization = v1beta1.TargetCPUUtilization{
-		HighPriority: &hp,
-	}
+	scaleConfig := scaleConfigFromV1alpha1(&src.Spec)
 
 	// Copy the resource metadata
 	dst.ObjectMeta = src.ObjectMeta
 
-	if raw, ok := src.Annotations[timeBasedOverridesAnnotation]; ok {
-		if err := json.Unmarshal([]byte(raw), &scaleConfig.TimeBasedOverrides); err != nil {
-			return fmt.Errorf("decoding annotation %s: %w", timeBasedOverridesAnnotation, err)
+	if raw, ok := src.Annotations[scaleConfigAnnotation]; ok {
+		var stored v1beta1.ScaleConfig
+		if err := json.Unmarshal([]byte(raw), &stored); err != nil {
+			return fmt.Errorf("decoding annotation %s: %w", scaleConfigAnnotation, err)
 		}
+		scaleConfig = restoreScaleConfig(stored, scaleConfig)
 		dst.Annotations = maps.Clone(src.Annotations)
-		delete(dst.Annotations, timeBasedOverridesAnnotation)
+		delete(dst.Annotations, scaleConfigAnnotation)
 		if len(dst.Annotations) == 0 {
 			dst.Annotations = nil
 		}
@@ -140,40 +124,30 @@ func (dst *SpannerAutoscaler) ConvertFrom(srcRaw conversion.Hub) error {
 		}
 	}
 
-	switch src.Spec.ScaleConfig.ComputeType {
-	case v1beta1.ComputeTypeNode:
-		dst.Spec.MinNodes = ptr.To[int32](int32(src.Spec.ScaleConfig.Nodes.Min))
-		dst.Spec.MaxNodes = ptr.To[int32](int32(src.Spec.ScaleConfig.Nodes.Max))
-
-	case v1beta1.ComputeTypePU:
-		dst.Spec.MinProcessingUnits = ptr.To[int32](int32(src.Spec.ScaleConfig.ProcessingUnits.Min))
-		dst.Spec.MaxProcessingUnits = ptr.To[int32](int32(src.Spec.ScaleConfig.ProcessingUnits.Max))
-	}
-
-	if src.Spec.ScaleConfig.ScaledownStepSize.Type == intstr.Int {
-		dst.Spec.MaxScaleDownNodes = ptr.To[int32](src.Spec.ScaleConfig.ScaledownStepSize.IntVal / 1000)
-	} else {
-		dst.Spec.MaxScaleDownNodes = ptr.To[int32](2) // From the default scaledownStepSize value
-	}
-	if src.Spec.ScaleConfig.TargetCPUUtilization.HighPriority != nil {
-		dst.Spec.TargetCPUUtilization = TargetCPUUtilization{
-			HighPriority: ptr.To[int32](int32(*src.Spec.ScaleConfig.TargetCPUUtilization.HighPriority)),
-		}
-	}
+	setV1alpha1ScaleFields(&dst.Spec, src.Spec.ScaleConfig)
 
 	// Copy the resource metadata
 	dst.ObjectMeta = src.ObjectMeta
 
-	if overrides := src.Spec.ScaleConfig.TimeBasedOverrides; len(overrides) > 0 {
-		raw, err := json.Marshal(overrides)
+	if len(src.Spec.ScaleConfig.TimeBasedOverrides) > 0 {
+		raw, err := json.Marshal(src.Spec.ScaleConfig)
 		if err != nil {
-			return fmt.Errorf("encoding annotation %s: %w", timeBasedOverridesAnnotation, err)
+			return fmt.Errorf("encoding annotation %s: %w", scaleConfigAnnotation, err)
 		}
 		dst.Annotations = maps.Clone(src.Annotations)
 		if dst.Annotations == nil {
 			dst.Annotations = map[string]string{}
 		}
-		dst.Annotations[timeBasedOverridesAnnotation] = string(raw)
+		dst.Annotations[scaleConfigAnnotation] = string(raw)
+	} else if _, ok := src.Annotations[scaleConfigAnnotation]; ok {
+		// A stale copy (for example applied through v1beta1 from an exported
+		// v1alpha1 manifest) would otherwise be restored over the current
+		// scale config by the next v1alpha1 update.
+		dst.Annotations = maps.Clone(src.Annotations)
+		delete(dst.Annotations, scaleConfigAnnotation)
+		if len(dst.Annotations) == 0 {
+			dst.Annotations = nil
+		}
 	}
 
 	// Copy the resource status
@@ -188,4 +162,84 @@ func (dst *SpannerAutoscaler) ConvertFrom(srcRaw conversion.Hub) error {
 	log.V(2).Info("finished conversion from v1beta1 to v1alpha1", "src", src, "dst", dst)
 
 	return nil
+}
+
+// scaleConfigFromV1alpha1 builds the v1beta1 scale config from the fields that
+// v1alpha1 has. Everything else is left at its zero value.
+func scaleConfigFromV1alpha1(spec *SpannerAutoscalerSpec) v1beta1.ScaleConfig {
+	scaleConfig := v1beta1.ScaleConfig{}
+	if spec.MinNodes != nil && *spec.MinNodes >= 1 && spec.MaxNodes != nil && *spec.MaxNodes >= 1 {
+		scaleConfig.ComputeType = v1beta1.ComputeTypeNode
+		scaleConfig.Nodes = v1beta1.ScaleConfigNodes{
+			Min: int(*spec.MinNodes),
+			Max: int(*spec.MaxNodes),
+		}
+	}
+	if spec.MinProcessingUnits != nil && *spec.MinProcessingUnits >= 100 && spec.MaxProcessingUnits != nil && *spec.MaxProcessingUnits >= 100 {
+		scaleConfig.ComputeType = v1beta1.ComputeTypePU
+		scaleConfig.ProcessingUnits = v1beta1.ScaleConfigPUs{
+			Min: int(*spec.MinProcessingUnits),
+			Max: int(*spec.MaxProcessingUnits),
+		}
+	}
+	if spec.MaxScaleDownNodes != nil {
+		scaleConfig.ScaledownStepSize = intstr.FromInt(int(*spec.MaxScaleDownNodes) * 1000)
+	}
+	if spec.TargetCPUUtilization.HighPriority != nil {
+		hp := int(*spec.TargetCPUUtilization.HighPriority)
+		scaleConfig.TargetCPUUtilization = v1beta1.TargetCPUUtilization{
+			HighPriority: &hp,
+		}
+	}
+	return scaleConfig
+}
+
+// setV1alpha1ScaleFields sets the v1alpha1 fields that represent scaleConfig.
+//
+//nolint:gosec
+func setV1alpha1ScaleFields(spec *SpannerAutoscalerSpec, scaleConfig v1beta1.ScaleConfig) {
+	switch scaleConfig.ComputeType {
+	case v1beta1.ComputeTypeNode:
+		spec.MinNodes = ptr.To[int32](int32(scaleConfig.Nodes.Min))
+		spec.MaxNodes = ptr.To[int32](int32(scaleConfig.Nodes.Max))
+
+	case v1beta1.ComputeTypePU:
+		spec.MinProcessingUnits = ptr.To[int32](int32(scaleConfig.ProcessingUnits.Min))
+		spec.MaxProcessingUnits = ptr.To[int32](int32(scaleConfig.ProcessingUnits.Max))
+	}
+
+	if scaleConfig.ScaledownStepSize.Type == intstr.Int {
+		spec.MaxScaleDownNodes = ptr.To[int32](scaleConfig.ScaledownStepSize.IntVal / 1000)
+	} else {
+		spec.MaxScaleDownNodes = ptr.To[int32](2) // From the default scaledownStepSize value
+	}
+	if scaleConfig.TargetCPUUtilization.HighPriority != nil {
+		spec.TargetCPUUtilization = TargetCPUUtilization{
+			HighPriority: ptr.To[int32](int32(*scaleConfig.TargetCPUUtilization.HighPriority)),
+		}
+	}
+}
+
+// restoreScaleConfig returns the scale config stored in the annotation, with
+// the fields a v1alpha1 client changed taken from current. A field counts as
+// changed when current differs from what stored becomes after a round trip
+// through v1alpha1; otherwise stored keeps the value v1alpha1 cannot hold.
+func restoreScaleConfig(stored, current v1beta1.ScaleConfig) v1beta1.ScaleConfig {
+	var spec SpannerAutoscalerSpec
+	setV1alpha1ScaleFields(&spec, stored)
+	unchanged := scaleConfigFromV1alpha1(&spec)
+
+	restored := stored
+	if current.ComputeType != unchanged.ComputeType || current.Nodes != unchanged.Nodes || current.ProcessingUnits != unchanged.ProcessingUnits {
+		restored.ComputeType = current.ComputeType
+		restored.Nodes = current.Nodes
+		restored.ProcessingUnits = current.ProcessingUnits
+	}
+	if current.ScaledownStepSize != unchanged.ScaledownStepSize {
+		restored.ScaledownStepSize = current.ScaledownStepSize
+	}
+	if !ptr.Equal(current.TargetCPUUtilization.HighPriority, unchanged.TargetCPUUtilization.HighPriority) {
+		restored.TargetCPUUtilization.HighPriority = current.TargetCPUUtilization.HighPriority
+	}
+	return restored
 }
