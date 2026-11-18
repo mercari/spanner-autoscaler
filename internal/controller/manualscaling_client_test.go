@@ -754,7 +754,7 @@ func TestDispatchManualScaling_StatusConflictRequeues(t *testing.T) {
 	syncer := &stubSyncer{}
 
 	statusChanged := false
-	res, handled, err := r.dispatchManualScaling(context.Background(), logr.Discard(), sa, syncer, &statusChanged, nil)
+	res, handled, err := r.dispatchManualScaling(context.Background(), logr.Discard(), sa, syncer, &statusChanged, func() {})
 	if err != nil {
 		t.Fatalf("conflict should be swallowed; got err %v", err)
 	}
@@ -842,6 +842,46 @@ func TestDispatchManualScaling_OnPersistedNotCalledOnConflict(t *testing.T) {
 	}
 }
 
+// TestDispatchManualScaling_OnPersistedAfterErrorPathWrite ensures that when
+// the manual scaling itself fails, the status write on the error path still
+// triggers the queued side effects. That write persists the new
+// CurrentTimeBasedOverride, so the next reconcile sees no change and would
+// never emit TimeBasedOverrideChanged.
+func TestDispatchManualScaling_OnPersistedAfterErrorPathWrite(t *testing.T) {
+	scheme := manualScalingTestScheme(t)
+	now := time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
+	ms := activeMS("ms-up", 5000, now.Add(-time.Minute))
+	sa := &spannerv1beta1.SpannerAutoscaler{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ns1", Name: "sa-target"},
+		Status: spannerv1beta1.SpannerAutoscalerStatus{
+			CurrentProcessingUnits:   1000,
+			CurrentTimeBasedOverride: "daytime",
+		},
+	}
+	cl := fakeclient.NewClientBuilder().WithScheme(scheme).WithObjects(sa, ms).
+		WithStatusSubresource(&spannerv1beta1.SpannerAutoscaler{}, &spannerv1beta1.SpannerManualScaling{}).Build()
+	r, _ := newReconcilerForApply(t, cl, now, false)
+
+	sa.Status.CurrentTimeBasedOverride = "night"
+	statusChanged := true
+	called := 0
+	_, _, err := r.dispatchManualScaling(context.Background(), logr.Discard(), sa,
+		&stubSyncer{err: errors.New("spanner blew up")}, &statusChanged, func() { called++ })
+	if err == nil {
+		t.Fatal("expected the syncer error to be returned")
+	}
+	got := &spannerv1beta1.SpannerAutoscaler{}
+	if err := cl.Get(context.Background(), ctrlclient.ObjectKeyFromObject(sa), got); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Status.CurrentTimeBasedOverride != "night" {
+		t.Fatalf("persisted CurrentTimeBasedOverride = %q, want %q", got.Status.CurrentTimeBasedOverride, "night")
+	}
+	if called != 1 {
+		t.Errorf("onPersisted called %d times after the error-path write, want 1", called)
+	}
+}
+
 // TestDispatchManualScaling_StatusWriteFailsEmitsEvent covers the
 // non-conflict status-write failure: the failure must be returned as an
 // error and a FailedUpdateStatus event must be recorded so operators can
@@ -871,7 +911,7 @@ func TestDispatchManualScaling_StatusWriteFailsEmitsEvent(t *testing.T) {
 	syncer := &stubSyncer{}
 
 	statusChanged := false
-	_, _, err := r.dispatchManualScaling(context.Background(), logr.Discard(), sa, syncer, &statusChanged, nil)
+	_, _, err := r.dispatchManualScaling(context.Background(), logr.Discard(), sa, syncer, &statusChanged, func() {})
 	if err == nil || !strings.Contains(err.Error(), "simulated API outage") {
 		t.Fatalf("expected the status-write error to bubble up; got %v", err)
 	}
@@ -891,7 +931,7 @@ func TestDispatchManualScaling_NoActiveFallsThrough(t *testing.T) {
 	r, _ := newReconcilerForApply(t, cl, now, false)
 
 	statusChanged := false
-	res, handled, err := r.dispatchManualScaling(context.Background(), logr.Discard(), sa, &stubSyncer{}, &statusChanged, nil)
+	res, handled, err := r.dispatchManualScaling(context.Background(), logr.Discard(), sa, &stubSyncer{}, &statusChanged, func() {})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

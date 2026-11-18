@@ -200,6 +200,29 @@ var _ = Describe("SpannerAutoscaler controller", func() {
 		})
 
 		It("should update the time-based override in status while the instance is not ready", func() {
+			// This context is Ordered and shares one object, so put back the
+			// instance state and the overrides for specs added after this one.
+			before := &spannerv1beta1.SpannerAutoscaler{}
+			Expect(k8sClient.Get(ctx, namespacedName, before)).To(Succeed())
+			DeferCleanup(func() {
+				Eventually(func() error {
+					got := &spannerv1beta1.SpannerAutoscaler{}
+					if err := k8sClient.Get(ctx, namespacedName, got); err != nil {
+						return err
+					}
+					got.Spec.ScaleConfig.TimeBasedOverrides = before.Spec.ScaleConfig.TimeBasedOverrides
+					return k8sClient.Update(ctx, got)
+				}).Should(Succeed())
+				Eventually(func() error {
+					got := &spannerv1beta1.SpannerAutoscaler{}
+					if err := k8sClient.Get(ctx, namespacedName, got); err != nil {
+						return err
+					}
+					got.Status.InstanceState = before.Status.InstanceState
+					return k8sClient.Status().Update(ctx, got)
+				}).Should(Succeed())
+			})
+
 			Eventually(func() error {
 				got := &spannerv1beta1.SpannerAutoscaler{}
 				if err := k8sClient.Get(ctx, namespacedName, got); err != nil {
