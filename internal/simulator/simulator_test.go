@@ -198,6 +198,48 @@ func TestRunTimeBasedOverrides(t *testing.T) {
 	}
 }
 
+// TestRunSummaryUsesOverrideTarget checks that the summary judges each tick
+// against the target in effect, not the base target: CPU that is within an
+// override's target must not count as exceeded.
+func TestRunSummaryUsesOverrideTarget(t *testing.T) {
+	// min == max pins the instance at 1000 PU, so workload 650 runs at 65%
+	// CPU throughout: above the base target 50, below the override target 70.
+	sa := newAutoscaler(1000, 1000, 50)
+	sa.Spec.ScaleConfig.TimeBasedOverrides = []spannerv1beta1.TimeBasedOverride{
+		{
+			Name:                 "relaxed",
+			Times:                []string{"* 12 * * *"},
+			TargetCPUUtilization: &spannerv1beta1.TargetCPUUtilization{HighPriority: new(70)},
+		},
+	}
+	start := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+
+	t.Run("target exceeded only outside the override", func(t *testing.T) {
+		// 12:00-12:59 under the override, 13:00-13:59 under the base config.
+		result, err := Run(Config{Autoscaler: sa}, constantWorkloadPoints(start, 120, 1000, 650))
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if got := result.Summary.TargetExceededMinutes; got != 60 {
+			t.Errorf("TargetExceededMinutes = %.0f; want 60 (only the base-config hour)", got)
+		}
+	})
+
+	t.Run("required PU uses the override target", func(t *testing.T) {
+		result, err := Run(Config{Autoscaler: sa}, constantWorkloadPoints(start, 60, 1000, 650))
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if got := result.Summary.TargetExceededMinutes; got != 0 {
+			t.Errorf("TargetExceededMinutes = %.0f; want 0", got)
+		}
+		// 650 / 70% = 929 → 1000; the base target would give 650 / 50% → 2000.
+		if got := result.Summary.RequiredPUAtMinP95; got != 1000 {
+			t.Errorf("RequiredPUAtMinP95 = %d; want 1000", got)
+		}
+	})
+}
+
 func TestRunInvalidTimeBasedOverridesFails(t *testing.T) {
 	sa := newAutoscaler(1000, 10000, 40)
 	sa.Spec.ScaleConfig.TimeBasedOverrides = []spannerv1beta1.TimeBasedOverride{
