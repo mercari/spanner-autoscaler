@@ -610,3 +610,64 @@ func TestRecommendWithTimeBasedOverrides(t *testing.T) {
 		}
 	}
 }
+
+func TestRecommendHighPriorityCPUGuidelineOnOverrideTarget(t *testing.T) {
+	// The base target is within the regional 65% ceiling, but the override
+	// raises it to 85% during its period, so the config can hold utilization
+	// above the ceiling and must be infeasible.
+	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	points := constantWorkloadPoints(start, 60, 1000, 50)
+
+	sa := newAutoscaler(1000, 10000, 50)
+	high := 85
+	sa.Spec.ScaleConfig.TimeBasedOverrides = []spannerv1beta1.TimeBasedOverride{
+		{Name: "night", Times: []string{"* 1-6 * * *"}, TargetCPUUtilization: &spannerv1beta1.TargetCPUUtilization{HighPriority: &high}},
+	}
+
+	candidates, err := Recommend(Config{Autoscaler: sa}, SearchSpace{}, Constraints{
+		MaxHighPriorityCPU: RecommendedHighPriorityCPURegional,
+	}, points)
+	if err != nil {
+		t.Fatalf("Recommend: %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("got %d candidates; want 1", len(candidates))
+	}
+	if candidates[0].Error != "" {
+		t.Fatalf("candidate failed: %s", candidates[0].Error)
+	}
+	if candidates[0].Feasible {
+		t.Errorf("candidate with override target 85%% must be infeasible under the regional 65%% guideline")
+	}
+	if reasons := strings.Join(candidates[0].InfeasibleReasons, ";"); !strings.Contains(reasons, `"night"`) || !strings.Contains(reasons, "recommended 65") {
+		t.Errorf("InfeasibleReasons = %q; want a reason naming override \"night\" and the recommended 65%% ceiling", reasons)
+	}
+}
+
+func TestMinPUCandidatesWithTimeBasedOverrides(t *testing.T) {
+	// Same workload as TestMinPUCandidates: 00:xx needs 2000 PU at target 40
+	// and 01:xx needs 8000 PU.
+	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	points := constantWorkloadPoints(start, 60, 20000, 400)
+	points = append(points, constantWorkloadPoints(start.Add(time.Hour), 60, 20000, 2800)...)
+
+	// An override that replaces the min during 01:xx: the base min does not
+	// apply there, so only the quiet hour drives the candidates.
+	sa := newAutoscaler(20000, 30000, 40)
+	sa.Spec.ScaleConfig.TimeBasedOverrides = []spannerv1beta1.TimeBasedOverride{
+		{Name: "busy", Times: []string{"* 1 * * *"}, ProcessingUnits: &spannerv1beta1.TimeBasedOverridePUs{Min: new(9000)}},
+	}
+	if got, want := MinPUCandidates(sa, points), []int{2000, 20000}; !slices.Equal(got, want) {
+		t.Errorf("MinPUCandidates with a min override = %v; want %v", got, want)
+	}
+
+	// An override that only raises the target during 01:xx to 80: that hour
+	// needs half the PU (workload 2800 at 80 → 3500, rounded up to 4000).
+	sa = newAutoscaler(20000, 30000, 40)
+	sa.Spec.ScaleConfig.TimeBasedOverrides = []spannerv1beta1.TimeBasedOverride{
+		{Name: "busy", Times: []string{"* 1 * * *"}, TargetCPUUtilization: &spannerv1beta1.TargetCPUUtilization{HighPriority: new(80)}},
+	}
+	if got, want := MinPUCandidates(sa, points), []int{2000, 4000, 20000}; !slices.Equal(got, want) {
+		t.Errorf("MinPUCandidates with a target override = %v; want %v", got, want)
+	}
+}

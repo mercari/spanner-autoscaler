@@ -522,6 +522,16 @@ func infeasibleReasons(sa *spannerv1beta1.SpannerAutoscaler, s Summary, constrai
 		if t := sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority; t != nil && *t > limit {
 			reasons = append(reasons, fmt.Sprintf("high-priority CPU target %d%% > recommended %d%%", *t, limit))
 		}
+		// An override's target is in effect during its periods, so it can hold
+		// utilization above the ceiling just as the base target can.
+		for _, o := range sa.Spec.ScaleConfig.TimeBasedOverrides {
+			if o.TargetCPUUtilization == nil {
+				continue
+			}
+			if t := o.TargetCPUUtilization.HighPriority; t != nil && *t > limit {
+				reasons = append(reasons, fmt.Sprintf("high-priority CPU target %d%% of timeBasedOverrides %q > recommended %d%%", *t, o.Name, limit))
+			}
+		}
 		if s.SimHighPriorityCPU != nil && s.SimHighPriorityCPU.P99 > float64(limit) {
 			reasons = append(reasons, fmt.Sprintf("p99 high-priority CPU %.1f%% > recommended %d%%", s.SimHighPriorityCPU.P99, limit))
 		}
@@ -551,18 +561,34 @@ var minPUCandidatePercentiles = []float64{50, 75, 90, 95, 99}
 // minimum — deduplicated, sorted, and clamped to the configured maximum. The
 // candidates are heuristic starting points; Recommend still evaluates each
 // one against the full recording and the constraints.
+//
+// With timeBasedOverrides, each point uses the targets in effect at its time,
+// and points during an override that replaces processingUnits.min are
+// skipped: the base minimum, which is what the candidates replace, does not
+// apply there.
 func MinPUCandidates(sa *spannerv1beta1.SpannerAutoscaler, points []Point) []int {
-	flags := sa.Spec.ScaleConfig.TargetCPUUtilization.ActiveMetricFlags()
-	var targetHigh, targetTotal int
-	if t := sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority; t != nil {
-		targetHigh = *t
-	}
-	if t := sa.Spec.ScaleConfig.TargetCPUUtilization.Total; t != nil {
-		targetTotal = *t
+	sc := sa.Spec.ScaleConfig
+	flags := sc.TargetCPUUtilization.ActiveMetricFlags()
+	overridesMin := make(map[string]bool, len(sc.TimeBasedOverrides))
+	for _, o := range sc.TimeBasedOverrides {
+		overridesMin[o.Name] = o.ProcessingUnits != nil && o.ProcessingUnits.Min != nil
 	}
 
 	required := make([]float64, 0, len(points))
 	for _, p := range points {
+		// On error the resolved config is the base one, which is what the
+		// controller falls back to as well.
+		resolved, _ := scaling.ResolveScaleConfig(sc, p.Time)
+		if overridesMin[resolved.OverrideName] {
+			continue
+		}
+		var targetHigh, targetTotal int
+		if t := resolved.ScaleConfig.TargetCPUUtilization.HighPriority; t != nil {
+			targetHigh = *t
+		}
+		if t := resolved.ScaleConfig.TargetCPUUtilization.Total; t != nil {
+			targetTotal = *t
+		}
 		if req := requiredPU(flags, targetHigh, targetTotal, p); req > 0 {
 			required = append(required, float64(req))
 		}
