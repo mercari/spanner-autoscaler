@@ -596,13 +596,7 @@ func MinPUCandidates(sa *spannerv1beta1.SpannerAutoscaler, points []Point) ([]in
 		if overridesMin[resolved.OverrideName] {
 			continue
 		}
-		var targetHigh, targetTotal int
-		if t := resolved.ScaleConfig.TargetCPUUtilization.HighPriority; t != nil {
-			targetHigh = *t
-		}
-		if t := resolved.ScaleConfig.TargetCPUUtilization.Total; t != nil {
-			targetTotal = *t
-		}
+		targetHigh, targetTotal := cpuTargets(resolved.ScaleConfig)
 		if req := requiredPU(flags, targetHigh, targetTotal, p); req > 0 {
 			required = append(required, float64(req))
 		}
