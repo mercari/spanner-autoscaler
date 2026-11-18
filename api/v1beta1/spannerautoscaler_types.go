@@ -173,7 +173,8 @@ type ScaleConfigPUs struct {
 	// +kubebuilder:validation:MultipleOf=100
 	Min int `json:"min"`
 
-	// Maximum number of Processing Units for the autoscaling range
+	// Maximum number of Processing Units for the autoscaling range.
+	// When lowered below the current processing units, the instance scales down to it in scaledownStepSize steps.
 	// +kubebuilder:validation:MultipleOf=100
 	Max int `json:"max"`
 }

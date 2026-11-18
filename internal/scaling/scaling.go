@@ -91,6 +91,13 @@ func DesiredProcessingUnits(sa spannerv1beta1.SpannerAutoscaler) int {
 // DesiredPUFromCPU calculates the desired PU from a single CPU metric,
 // applying step size limits and min/max clamping. Used in dual CPU scaling mode
 // to compute desired PU for each metric independently.
+//
+// The result is within the effective min/max range except while the current
+// PU is above the max (a lowered spec.processingUnits.max, the end of an
+// Exceed schedule, the end of a SpannerManualScaling above the max, or an
+// out-of-band resize): then the scale-down step limit wins, and the result is
+// the larger of the max and current - scaledownStepSize, so it can still be
+// above the max. Callers must not assume result <= max.
 func DesiredPUFromCPU(currentCPU, targetCPU int, sa spannerv1beta1.SpannerAutoscaler) int {
 	if targetCPU == 0 {
 		return sa.Status.CurrentProcessingUnits
@@ -121,10 +128,7 @@ func DesiredPUFromCPU(currentCPU, targetCPU int, sa spannerv1beta1.SpannerAutosc
 	sdStepSize := ResolveStepSize(&sa.Spec.ScaleConfig.ScaledownStepSize, sa.Status.CurrentProcessingUnits, StepDirectionScaledown)
 	suStepSize := ResolveStepSize(&sa.Spec.ScaleConfig.ScaleupStepSize, sa.Status.CurrentProcessingUnits, StepDirectionScaleup)
 
-	// in case of scaling down, check that we don't scale down beyond the ScaledownStepSize
-	if scaledDownPU := sa.Status.CurrentProcessingUnits - sdStepSize; desiredPU < scaledDownPU {
-		desiredPU = scaledDownPU
-	}
+	// The scale-down step limit is applied once, after the min/max clamp below.
 	// in case of scaling up, check that we don't scale up beyond the ScaleupStepSize
 	if scaledUpPU := sa.Status.CurrentProcessingUnits + suStepSize; suStepSize != 0 && scaledUpPU < desiredPU {
 		desiredPU = scaledUpPU
@@ -148,6 +152,17 @@ func DesiredPUFromCPU(currentCPU, targetCPU int, sa spannerv1beta1.SpannerAutosc
 	}
 	if desiredPU > maxPU {
 		desiredPU = maxPU
+	}
+
+	// In case of scaling down, don't scale down beyond the ScaledownStepSize.
+	// This runs after the clamp so that a max below the current PU is also
+	// approached in scale-down steps: lowering it (editing the spec, the end
+	// of an Exceed schedule) does not remove all the excess capacity in one
+	// operation. The result stays above the max until the steps reach it.
+	// Applying the limit only here is equivalent to also applying it before
+	// the clamp, because the clamp is monotonic.
+	if scaledDownPU := sa.Status.CurrentProcessingUnits - sdStepSize; desiredPU < scaledDownPU {
+		desiredPU = scaledDownPU
 	}
 
 	return desiredPU

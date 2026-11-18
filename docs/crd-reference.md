@@ -206,7 +206,7 @@ _Appears in:_
 | Field | Description |
 | --- | --- |
 | `Exceed` | MaxPUPolicyExceed raises both ends of the autoscaling range, allowing<br />the instance to scale beyond `spec.scaleConfig.processingUnits.max`<br />(current behavior; default).<br /> |
-| `Cap` | MaxPUPolicyCap raises only the lower bound of the autoscaling range.<br />`spec.scaleConfig.processingUnits.max` remains the hard ceiling.<br /> |
+| `Cap` | MaxPUPolicyCap raises only the lower bound of the autoscaling range.<br />The schedule never raises the max above `spec.scaleConfig.processingUnits.max`.<br /> |
 
 
 #### ScaleConfig
@@ -265,7 +265,7 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `min` _integer_ | Minimum number of Processing Units for the autoscaling range |  | MultipleOf: 100 <br /> |
-| `max` _integer_ | Maximum number of Processing Units for the autoscaling range |  | MultipleOf: 100 <br /> |
+| `max` _integer_ | Maximum number of Processing Units for the autoscaling range.<br />When lowered below the current processing units, the instance scales down to it in scaledownStepSize steps. |  | MultipleOf: 100 <br /> |
 
 
 #### Schedule
