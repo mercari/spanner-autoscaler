@@ -456,25 +456,37 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 		statusChanged = true
 	}
 
+	// Set before the early returns below so status, the Override printer
+	// column and the TimeBasedOverrideChanged event follow the same override
+	// as the metrics recorded by resolveTimeBasedOverride, also while the
+	// instance is not ready or a SpannerManualScaling is active.
+	previousOverride := sa.Status.CurrentTimeBasedOverride
+	sa.Status.CurrentTimeBasedOverride = resolved.OverrideName
+	statusChanged = statusChanged || previousOverride != resolved.OverrideName
+
+	// emitStatusSideEffects reports changes queued in this reconcile. It must
+	// run only after sa.Status has been persisted: a failed write would report
+	// the same changes again on the next reconcile.
+	emitStatusSideEffects := func() {
+		emitScheduleDeactivations(log, &sa, droppedActiveSchedules)
+		r.emitTimeBasedOverrideChange(log, &sa, previousOverride)
+	}
+
 	if sa.Status.InstanceState != spanner.StateReady {
 		log.Info("instance state is not ready")
 		observability.RecordScaleSkipped(observability.LabelsForAutoscaler(&sa), observability.SkipReasonInstanceNotReady)
-		return ctrlreconcile.Result{}, nil
+		return r.persistSkippedStatus(ctx, log, &sa, statusChanged, emitStatusSideEffects)
 	}
 
 	if sa.Status.CurrentProcessingUnits == 0 {
 		log.Info("current processing units have not fetched yet")
 		observability.RecordScaleSkipped(observability.LabelsForAutoscaler(&sa), observability.SkipReasonCPUNotReady)
-		return ctrlreconcile.Result{}, nil
+		return r.persistSkippedStatus(ctx, log, &sa, statusChanged, emitStatusSideEffects)
 	}
 
-	if result, handled, err := r.dispatchManualScaling(ctx, log, &sa, syncer, &statusChanged, droppedActiveSchedules); handled || err != nil {
+	if result, handled, err := r.dispatchManualScaling(ctx, log, &sa, syncer, &statusChanged, emitStatusSideEffects); handled || err != nil {
 		return result, err
 	}
-
-	previousOverride := sa.Status.CurrentTimeBasedOverride
-	sa.Status.CurrentTimeBasedOverride = resolved.OverrideName
-	statusChanged = statusChanged || previousOverride != resolved.OverrideName
 
 	if minPU, maxPU, updated, capped := calcDesiredPURange(scaling.WithScaleConfig(sa, resolved.ScaleConfig)); updated {
 		sa.Status.DesiredMinPUs = minPU
@@ -592,20 +604,37 @@ func (r *SpannerAutoscalerReconciler) Reconcile(ctx context.Context, req ctrlrec
 			return ctrlreconcile.Result{}, err
 		}
 
-		// Emit prune side effects only after the status update has been
-		// persisted. Doing so inside pruneActiveSchedules would re-fire on
-		// every reconcile until the status write eventually succeeds, since
-		// CurrentlyActiveSchedules still contains the orphan entries until
-		// then. The same emission also runs from the manual-scaling success
-		// path inside dispatchManualScaling, so schedules orphaned in the
-		// same reconcile as an active manual override are still reported.
-		emitScheduleDeactivations(log, &sa, droppedActiveSchedules)
-
-		// Emitted after the write for the same reason: a failed write would
-		// report the same change again on the next reconcile.
-		r.emitTimeBasedOverrideChange(log, &sa, previousOverride)
+		// Emit prune and override side effects only after the status update
+		// has been persisted. Doing so inside pruneActiveSchedules would
+		// re-fire on every reconcile until the status write eventually
+		// succeeds, since CurrentlyActiveSchedules still contains the orphan
+		// entries until then. The same emission also runs from the early
+		// returns above and the manual-scaling success path inside
+		// dispatchManualScaling.
+		emitStatusSideEffects()
 	}
 
+	return ctrlreconcile.Result{}, nil
+}
+
+// persistSkippedStatus writes sa.Status on a reconcile that skips scaling, so
+// that changes made before the skip (pruned schedules, the time-based
+// override in effect) are not held back until scaling resumes. onPersisted
+// runs only after a successful write.
+func (r *SpannerAutoscalerReconciler) persistSkippedStatus(ctx context.Context, log logr.Logger, sa *spannerv1beta1.SpannerAutoscaler, statusChanged bool, onPersisted func()) (ctrlreconcile.Result, error) {
+	if !statusChanged {
+		return ctrlreconcile.Result{}, nil
+	}
+	if err := r.ctrlClient.Status().Update(ctx, sa); err != nil {
+		if apierrors.IsConflict(err) {
+			// Benign: the syncer also writes status; retry with the latest version.
+			return ctrlreconcile.Result{RequeueAfter: conflictRequeueDelay}, nil
+		}
+		r.recorder.Event(sa, corev1.EventTypeWarning, "FailedUpdateStatus", err.Error())
+		log.Error(err, "Failed to update SpannerAutoscaler status")
+		return ctrlreconcile.Result{}, err
+	}
+	onPersisted()
 	return ctrlreconcile.Result{}, nil
 }
 

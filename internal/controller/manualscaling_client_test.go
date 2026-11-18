@@ -766,6 +766,82 @@ func TestDispatchManualScaling_StatusConflictRequeues(t *testing.T) {
 	}
 }
 
+// TestDispatchManualScaling_OnPersistedAfterWrite ensures the caller's queued
+// side effects (schedule deactivations, TimeBasedOverrideChanged) run on the
+// manual-scaling success path, and only once the status write has succeeded,
+// so status.currentTimeBasedOverride and its event are not held back while a
+// SpannerManualScaling is active.
+func TestDispatchManualScaling_OnPersistedAfterWrite(t *testing.T) {
+	scheme := manualScalingTestScheme(t)
+	now := time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
+	ms := activeMS("ms-up", 5000, now.Add(-time.Minute))
+	sa := &spannerv1beta1.SpannerAutoscaler{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ns1", Name: "sa-target"},
+		Status: spannerv1beta1.SpannerAutoscalerStatus{
+			CurrentProcessingUnits:   1000,
+			CurrentTimeBasedOverride: "daytime",
+		},
+	}
+	cl := fakeclient.NewClientBuilder().WithScheme(scheme).WithObjects(sa, ms).
+		WithStatusSubresource(&spannerv1beta1.SpannerAutoscaler{}, &spannerv1beta1.SpannerManualScaling{}).Build()
+	r, _ := newReconcilerForApply(t, cl, now, false)
+
+	// What Reconcile does before dispatching: the override changed this reconcile.
+	sa.Status.CurrentTimeBasedOverride = "night"
+	statusChanged := true
+	called := 0
+	_, handled, err := r.dispatchManualScaling(context.Background(), logr.Discard(), sa, &stubSyncer{}, &statusChanged, func() { called++ })
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !handled {
+		t.Fatal("handled should be true while a manual scaling is active")
+	}
+	if called != 1 {
+		t.Errorf("onPersisted called %d times, want 1", called)
+	}
+	got := &spannerv1beta1.SpannerAutoscaler{}
+	if err := cl.Get(context.Background(), ctrlclient.ObjectKeyFromObject(sa), got); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Status.CurrentTimeBasedOverride != "night" {
+		t.Errorf("persisted CurrentTimeBasedOverride = %q, want %q", got.Status.CurrentTimeBasedOverride, "night")
+	}
+}
+
+// TestDispatchManualScaling_OnPersistedNotCalledOnConflict ensures the side
+// effects are not emitted when the status write did not land.
+func TestDispatchManualScaling_OnPersistedNotCalledOnConflict(t *testing.T) {
+	scheme := manualScalingTestScheme(t)
+	now := time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
+	ms := activeMS("ms-up", 5000, now.Add(-time.Minute))
+	sa := &spannerv1beta1.SpannerAutoscaler{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ns1", Name: "sa-target"},
+		Status:     spannerv1beta1.SpannerAutoscalerStatus{CurrentProcessingUnits: 1000},
+	}
+	base := fakeclient.NewClientBuilder().WithScheme(scheme).WithObjects(sa, ms).Build()
+	cl := interceptor.NewClient(base, interceptor.Funcs{
+		SubResourceUpdate: func(ctx context.Context, c ctrlclient.Client, sub string, obj ctrlclient.Object, opts ...ctrlclient.SubResourceUpdateOption) error {
+			if _, ok := obj.(*spannerv1beta1.SpannerAutoscaler); ok && sub == "status" {
+				return apierrors.NewConflict(
+					schema.GroupResource{Group: "spanner.mercari.com", Resource: "spannerautoscalers"},
+					obj.GetName(), errors.New("stale"))
+			}
+			return c.SubResource(sub).Update(ctx, obj, opts...)
+		},
+	})
+	r, _ := newReconcilerForApply(t, cl, now, false)
+
+	statusChanged := true
+	called := 0
+	if _, _, err := r.dispatchManualScaling(context.Background(), logr.Discard(), sa, &stubSyncer{}, &statusChanged, func() { called++ }); err != nil {
+		t.Fatalf("conflict should be swallowed; got err %v", err)
+	}
+	if called != 0 {
+		t.Errorf("onPersisted called %d times on conflict, want 0", called)
+	}
+}
+
 // TestDispatchManualScaling_StatusWriteFailsEmitsEvent covers the
 // non-conflict status-write failure: the failure must be returned as an
 // error and a FailedUpdateStatus event must be recorded so operators can

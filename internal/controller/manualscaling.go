@@ -43,9 +43,9 @@ const conflictRequeueDelay = time.Second
 // dispatchManualScaling runs the manual-scaling reconcile and converts its
 // (handled, requeueAfter, err) return into the ctrlreconcile.Result shape
 // the caller returns. On the success path it persists sa.Status, maps
-// status-update conflicts to a benign requeue, and emits the per-entry
-// schedule-deactivation events that the caller queued before invoking this
-// function. handled=true tells the caller to short-circuit Reconcile;
+// status-update conflicts to a benign requeue, and calls onPersisted (when
+// non-nil) after the write so the caller can emit the side effects it queued
+// before invoking this function (schedule deactivations, override changes). handled=true tells the caller to short-circuit Reconcile;
 // handled=false means there was no active override and Reconcile should
 // fall through to the CPU autoscale path (which emits the deactivations
 // itself).
@@ -55,7 +55,7 @@ func (r *SpannerAutoscalerReconciler) dispatchManualScaling(
 	sa *spannerv1beta1.SpannerAutoscaler,
 	syncer syncerpkg.Syncer,
 	statusChanged *bool,
-	droppedActiveSchedules []spannerv1beta1.ActiveSchedule,
+	onPersisted func(),
 ) (ctrlreconcile.Result, bool, error) {
 	handled, requeueAfter, err := r.reconcileManualScaling(ctx, log, sa, syncer, r.clock.Now(), statusChanged)
 	if err != nil {
@@ -80,10 +80,11 @@ func (r *SpannerAutoscalerReconciler) dispatchManualScaling(
 			log.Error(uerr, "manual scaling: failed to update spanner autoscaler status")
 			return ctrlreconcile.Result{}, true, uerr
 		}
-		// Status persisted — emit schedule deactivations that were pruned in
-		// the same reconcile (analog of the trailing block in Reconcile's CPU
-		// path).
-		emitScheduleDeactivations(log, sa, droppedActiveSchedules)
+		// Status persisted — emit the side effects queued in the same
+		// reconcile (analog of the trailing block in Reconcile's CPU path).
+		if onPersisted != nil {
+			onPersisted()
+		}
 	}
 	return ctrlreconcile.Result{RequeueAfter: requeueAfter}, true, nil
 }
