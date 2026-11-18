@@ -166,14 +166,7 @@ func Run(cfg Config, points []Point) (*Result, error) {
 	// exactly at the first timestamp still activates.
 	prevTick := points[0].Time.Add(-time.Minute)
 
-	var targetHigh, targetTotal int
-	if t := sa.Spec.ScaleConfig.TargetCPUUtilization.HighPriority; t != nil {
-		targetHigh = *t
-	}
-	if t := sa.Spec.ScaleConfig.TargetCPUUtilization.Total; t != nil {
-		targetTotal = *t
-	}
-	agg := newAggregator(flags, lowConfidenceCPU, targetHigh, targetTotal, sa.Spec.ScaleConfig.ProcessingUnits.Min)
+	agg := newAggregator(flags, lowConfidenceCPU, sa.Spec.ScaleConfig.ProcessingUnits.Min)
 
 	for i, p := range points {
 		now := p.Time
@@ -252,7 +245,11 @@ func Run(cfg Config, points []Point) (*Result, error) {
 
 		sp.SimPU = simPU
 		result.Points = append(result.Points, sp)
-		agg.observe(p, sp, minPU, puBefore, dt)
+		// Judge the tick against the targets the decision above used, not
+		// the base ones, so CPU within an override's target is not counted
+		// as exceeded.
+		targetHigh, targetTotal := cpuTargets(resolved.ScaleConfig)
+		agg.observe(p, sp, targetHigh, targetTotal, minPU, puBefore, dt)
 	}
 
 	result.Summary = agg.summary(points[0].Time, points[len(points)-1].Time, result.Events)

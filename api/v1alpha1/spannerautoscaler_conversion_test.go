@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/mercari/spanner-autoscaler/api/v1beta1"
+	"github.com/mercari/spanner-autoscaler/internal/scaling"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -365,19 +366,128 @@ var _ = Describe("timeBasedOverrides round trip", func() {
 
 		alpha := &SpannerAutoscaler{}
 		Expect(alpha.ConvertFrom(src)).To(Succeed())
-		Expect(alpha.Annotations).To(HaveKey(timeBasedOverridesAnnotation))
+		Expect(alpha.Annotations).To(HaveKey(scaleConfigAnnotation))
 		Expect(src.Annotations).To(Equal(map[string]string{"keep": "me"}), "the source annotations must not be modified")
 
 		back := &v1beta1.SpannerAutoscaler{}
 		Expect(alpha.ConvertTo(back)).To(Succeed())
 		Expect(back.Spec.ScaleConfig.TimeBasedOverrides).To(Equal(overrides))
 		Expect(back.Annotations).To(Equal(map[string]string{"keep": "me"}))
-		Expect(alpha.Annotations).To(HaveKey(timeBasedOverridesAnnotation), "the v1alpha1 object must not be modified")
+		Expect(alpha.Annotations).To(HaveKey(scaleConfigAnnotation), "the v1alpha1 object must not be modified")
+	})
+
+	Describe("base scale config that v1alpha1 cannot hold", func() {
+		newSrc := func() *v1beta1.SpannerAutoscaler {
+			return &v1beta1.SpannerAutoscaler{
+				ObjectMeta: metav1.ObjectMeta{Name: "n", Namespace: "ns"},
+				Spec: v1beta1.SpannerAutoscalerSpec{
+					TargetInstance: v1beta1.TargetInstance{ProjectID: "p", InstanceID: "i"},
+					ScaleConfig: v1beta1.ScaleConfig{
+						ComputeType:          v1beta1.ComputeTypePU,
+						ProcessingUnits:      v1beta1.ScaleConfigPUs{Min: 12000, Max: 80000},
+						ScaledownStepSize:    intstr.FromString("10%"),
+						ScaleupStepSize:      intstr.FromInt(4000),
+						ScaledownInterval:    &metav1.Duration{Duration: 30 * time.Minute},
+						TargetCPUUtilization: v1beta1.TargetCPUUtilization{HighPriority: new(50), Total: new(80)},
+						TimeBasedOverrides: []v1beta1.TimeBasedOverride{{
+							Name:                 "night",
+							Times:                []string{"* * * * *"},
+							TargetCPUUtilization: &v1beta1.TargetCPUUtilization{Total: new(90)},
+						}},
+					},
+				},
+			}
+		}
+
+		It("should restore the base fields so the overrides stay valid", func() {
+			src := newSrc()
+			alpha := &SpannerAutoscaler{}
+			Expect(alpha.ConvertFrom(src)).To(Succeed())
+
+			back := &v1beta1.SpannerAutoscaler{}
+			Expect(alpha.ConvertTo(back)).To(Succeed())
+			Expect(back.Spec.ScaleConfig).To(Equal(src.Spec.ScaleConfig))
+			_, err := scaling.ResolveScaleConfig(back.Spec.ScaleConfig, time.Now())
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		It("should take the fields a v1alpha1 client changed and keep the rest", func() {
+			src := newSrc()
+			alpha := &SpannerAutoscaler{}
+			Expect(alpha.ConvertFrom(src)).To(Succeed())
+			alpha.Spec.MaxProcessingUnits = new(int32(90000))
+			alpha.Spec.TargetCPUUtilization.HighPriority = new(int32(60))
+
+			back := &v1beta1.SpannerAutoscaler{}
+			Expect(alpha.ConvertTo(back)).To(Succeed())
+			want := src.Spec.ScaleConfig
+			want.ProcessingUnits.Max = 90000
+			want.TargetCPUUtilization.HighPriority = new(60)
+			Expect(back.Spec.ScaleConfig).To(Equal(want))
+		})
+
+		// Overrides are in processing units for both compute types: the
+		// defaulter derives processingUnits from nodes, and the webhook and
+		// ResolveScaleConfig work on processingUnits. A compute-type switch
+		// therefore keeps the overrides meaningful.
+		It("should keep the overrides valid when a v1alpha1 client switches to nodes", func() {
+			src := newSrc()
+			src.Spec.ScaleConfig.TimeBasedOverrides[0].ProcessingUnits = &v1beta1.TimeBasedOverridePUs{Max: new(50000)}
+			alpha := &SpannerAutoscaler{}
+			Expect(alpha.ConvertFrom(src)).To(Succeed())
+			alpha.Spec.MinProcessingUnits = nil
+			alpha.Spec.MaxProcessingUnits = nil
+			alpha.Spec.MinNodes = new(int32(12))
+			alpha.Spec.MaxNodes = new(int32(80))
+
+			back := &v1beta1.SpannerAutoscaler{}
+			Expect(alpha.ConvertTo(back)).To(Succeed())
+			sc := back.Spec.ScaleConfig
+			Expect(sc.ComputeType).To(Equal(v1beta1.ComputeTypeNode))
+			Expect(sc.Nodes).To(Equal(v1beta1.ScaleConfigNodes{Min: 12, Max: 80}))
+			Expect(sc.TimeBasedOverrides).To(Equal(src.Spec.ScaleConfig.TimeBasedOverrides))
+
+			// What the defaulting webhook does for computeType node.
+			sc.ProcessingUnits = v1beta1.ScaleConfigPUs{Min: sc.Nodes.Min * 1000, Max: sc.Nodes.Max * 1000}
+			resolved, err := scaling.ResolveScaleConfig(sc, time.Now())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resolved.ScaleConfig.ProcessingUnits).To(Equal(v1beta1.ScaleConfigPUs{Min: 12000, Max: 50000}))
+		})
+	})
+
+	It("should drop a stale annotation when the v1beta1 object has no overrides", func() {
+		annotations := map[string]string{
+			scaleConfigAnnotation: `{"processingUnits":{"min":8000,"max":80000},"scaledownStepSize":"30%",` +
+				`"targetCPUUtilization":{"highPriority":70},` +
+				`"timeBasedOverrides":[{"name":"others","times":["* * * * *"],"scaledownPolicy":"Deny"}]}`,
+			"keep": "me",
+		}
+
+		src := &v1beta1.SpannerAutoscaler{
+			ObjectMeta: metav1.ObjectMeta{Name: "n", Namespace: "ns", Annotations: annotations},
+			Spec: v1beta1.SpannerAutoscalerSpec{
+				TargetInstance: v1beta1.TargetInstance{ProjectID: "p", InstanceID: "i"},
+				ScaleConfig: v1beta1.ScaleConfig{
+					ComputeType:          v1beta1.ComputeTypePU,
+					ProcessingUnits:      v1beta1.ScaleConfigPUs{Min: 1000, Max: 5000},
+					ScaledownStepSize:    intstr.FromInt(2000),
+					TargetCPUUtilization: v1beta1.TargetCPUUtilization{HighPriority: new(50)},
+				},
+			},
+		}
+		alpha := &SpannerAutoscaler{}
+		Expect(alpha.ConvertFrom(src)).To(Succeed())
+		Expect(alpha.Annotations).To(Equal(map[string]string{"keep": "me"}))
+		Expect(src.Annotations).To(HaveKey(scaleConfigAnnotation), "the v1beta1 object must not be modified")
+
+		back := &v1beta1.SpannerAutoscaler{}
+		Expect(alpha.ConvertTo(back)).To(Succeed())
+		Expect(back.Spec.ScaleConfig).To(Equal(src.Spec.ScaleConfig))
 	})
 
 	It("should fail on a broken annotation instead of dropping the overrides", func() {
 		alpha := &SpannerAutoscaler{
-			ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{timeBasedOverridesAnnotation: "{"}},
+			ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{scaleConfigAnnotation: "{"}},
 			Spec: SpannerAutoscalerSpec{
 				ScaleTargetRef:       ScaleTargetRef{ProjectID: new("p"), InstanceID: new("i")},
 				TargetCPUUtilization: TargetCPUUtilization{HighPriority: new(int32(50))},
