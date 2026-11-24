@@ -27,6 +27,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0 ## Required for goreleaser - https://goreleaser.com/ci/actions/#usage
+          persist-credentials: false
 
       - name: Extract Current Tag
         run: |
