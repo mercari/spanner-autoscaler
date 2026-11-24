@@ -15,30 +15,32 @@ jobs:
       new_version: ${{ steps.bump-semver.outputs.new_version }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        ## Keeps the job token in the clone: action-push-tag below pushes
+        ## the new tag with it.
+        uses: actions/checkout@v7.0.1
 
       - name: Get Merged Pull Request
-        uses: actions-ecosystem/action-get-merged-pull-request@v1
+        uses: actions-ecosystem/action-get-merged-pull-request@v1.0.1
         id: get-merged-pull-request
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Filter 'release' Labels on PR
-        uses: actions-ecosystem/action-release-label@v1
+        uses: actions-ecosystem/action-release-label@v1.2.0
         id: bump-label
         if: ${{ steps.get-merged-pull-request.outputs.title != null }}
         with:
           labels: ${{ steps.get-merged-pull-request.outputs.labels }}
 
       - name: Get Latest Tag
-        uses: actions-ecosystem/action-get-latest-tag@v1
+        uses: actions-ecosystem/action-get-latest-tag@v1.6.0
         id: get-latest-tag
         if: ${{ steps.bump-label.outputs.level != null }}
         with:
           semver_only: true
 
       - name: Bump Semantic Version
-        uses: actions-ecosystem/action-bump-semver@v1
+        uses: actions-ecosystem/action-bump-semver@v1.0.0
         id: bump-semver
         if: ${{ steps.bump-label.outputs.level != null }}
         with:
@@ -46,14 +48,14 @@ jobs:
           level: ${{ steps.bump-label.outputs.level }}
 
       - name: Push New Tag
-        uses: actions-ecosystem/action-push-tag@v1
+        uses: actions-ecosystem/action-push-tag@v1.0.0
         if: ${{ steps.bump-semver.outputs.new_version != null }}
         with:
           tag: ${{ steps.bump-semver.outputs.new_version }}
           message: "${{ steps.bump-semver.outputs.new_version }}: PR #${{ steps.get-merged-pull-request.outputs.number }} ${{ steps.get-merged-pull-request.outputs.title }}"
 
       - name: Comment on Pull Request
-        uses: actions-ecosystem/action-create-comment@v1
+        uses: actions-ecosystem/action-create-comment@v1.0.2
         if: ${{ steps.bump-semver.outputs.new_version != null }}
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -66,6 +68,9 @@ jobs:
   release:
     needs: bump-tag
     if: ${{ needs.bump-tag.outputs.new_version != null }}
+    permissions: ## what the create-release job of release.yml asks for
+      contents: write
+      pull-requests: write
     uses: mercari/spanner-autoscaler/.github/workflows/release.yml@master
     secrets:
       DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
