@@ -24,7 +24,7 @@ jobs:
       pull-requests: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0 ## Required for goreleaser - https://goreleaser.com/ci/actions/#usage
           persist-credentials: false
@@ -41,7 +41,7 @@ jobs:
           CURRENT_TAG: ${{ inputs.version }}
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@v7.1.0
         with:
           go-version-file: go.mod
 
@@ -53,13 +53,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Login to DockerHub
-        uses: docker/login-action@v4
+        uses: docker/login-action@v4.8.0
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
       - name: Build and Push Docker Image
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@v7.4.0
         with:
           push: true
           tags: |
@@ -67,13 +67,13 @@ jobs:
             mercari/spanner-autoscaler:${{ steps.current-tag.outputs.tag }}
 
       - name: Get Merged Pull Request
-        uses: actions-ecosystem/action-get-merged-pull-request@v1
+        uses: actions-ecosystem/action-get-merged-pull-request@v1.0.1
         id: get-merged-pull-request
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Comment on Pull Request
-        uses: actions-ecosystem/action-create-comment@v1
+        uses: actions-ecosystem/action-create-comment@v1.0.2
         if: ${{ steps.get-merged-pull-request.outputs.number != null }}
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
