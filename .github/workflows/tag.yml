@@ -66,6 +66,9 @@ jobs:
   release:
     needs: bump-tag
     if: ${{ needs.bump-tag.outputs.new_version != null }}
+    permissions: ## what the create-release job of release.yml asks for
+      contents: write
+      pull-requests: write
     uses: mercari/spanner-autoscaler/.github/workflows/release.yml@master
     secrets:
       DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
